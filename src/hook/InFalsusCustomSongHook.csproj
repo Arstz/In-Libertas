@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>InFalsusCustomSongHook</AssemblyName>
+    <RootNamespace>InFalsusCustomSongHook</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <NoWarn>$(NoWarn);CS0649;CS0169</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GameDir Condition="'$(GameDir)' == ''">E:\SteamLibrary\steamapps\common\In Falsus</GameDir>
+    <MlDir>$(GameDir)\MelonLoader\net6</MlDir>
+    <Il2CppDir Condition="'$(Il2CppDir)' == ''">$(GameDir)\MelonLoader\Il2CppAssemblies</Il2CppDir>
+    <StagedAddressablesDir Condition="'$(StagedAddressablesDir)' == ''">$(Il2CppDir)</StagedAddressablesDir>
+    <BridgeRuntime Condition="'$(BridgeRuntime)' == ''">$(MlDir)\Il2CppInterop.Runtime.dll</BridgeRuntime>
+    <NativeResolverBridge Condition="'$(NativeResolverBridge)' == ''">$(MSBuildProjectDirectory)\..\..\build\Mods\InFalsusNativeJacketResolverBridge.dll</NativeResolverBridge>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="MelonLoader"><HintPath>$(MlDir)\MelonLoader.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(MlDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(BridgeRuntime)</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2Cppmscorlib"><HintPath>$(Il2CppDir)\Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppGame"><HintPath>$(Il2CppDir)\Il2CppGame.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppGame.Data"><HintPath>$(Il2CppDir)\Il2CppGame.Data.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppGame.Common"><HintPath>$(Il2CppDir)\Il2CppGame.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppGame.UI.Common"><HintPath>$(Il2CppDir)\Il2CppGame.UI.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppGame.Input"><HintPath>$(Il2CppDir)\Il2CppGame.Input.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppGame.Audio"><HintPath>$(Il2CppDir)\Il2CppGame.Audio.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppFMODUnity"><HintPath>$(Il2CppDir)\Il2CppFMODUnity.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(Il2CppDir)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(Il2CppDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule"><HintPath>$(Il2CppDir)\UnityEngine.UnityWebRequestModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UnityWebRequestTextureModule"><HintPath>$(Il2CppDir)\UnityEngine.UnityWebRequestTextureModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UnityWebRequestWWWModule"><HintPath>$(Il2CppDir)\UnityEngine.UnityWebRequestWWWModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AssetBundleModule"><HintPath>$(Il2CppDir)\UnityEngine.AssetBundleModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.Addressables"><HintPath>$(StagedAddressablesDir)\Unity.Addressables.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.ResourceManager"><HintPath>$(StagedAddressablesDir)\Unity.ResourceManager.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <Target Name="CopyToGameMods" AfterTargets="Build" Condition="'$(Deploy)' == 'true' and Exists('$(GameDir)\MelonLoader')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\Mods" />
+    <Copy SourceFiles="$(NativeResolverBridge)" DestinationFolder="$(GameDir)\Mods" Condition="Exists('$(NativeResolverBridge)')" />
+    <Message Importance="high" Text="[InFalsusCustomSongHook] copied $(TargetFileName) to Mods" />
+  </Target>
+</Project>
