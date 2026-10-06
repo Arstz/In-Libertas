@@ -6,7 +6,7 @@ A GUI editor for .spc charts and a hook for the game In Falsus by lowiro. This r
 
 - Install [Melon Loader](https://github.com/LavaGang/MelonLoader/releases) into your game directory, either directly or with GUI.
 - Run the game with Melon Loader installed, let it generate the configs necessary.
-- Download [latest release](include actual link later) or build yourself both hook and the editor.
+- Download [latest release](https://github.com/Arstz/In-Libertas/releases/) or build yourself both hook and the editor.
 - Copy dlls provided into Mods folder created by Melon Loader in the game folder.
 - Create a `CustomCharts` folder inside your game folder and put chart folders there, they should appear ingame on your next launch if done correctly.
 
