@@ -1,6 +1,6 @@
 # In Libertas editor manual
 
-Please read this guide in full before using the editor, this would answer many of your questions before you encounter them down the line, I tried to keep it as concise as possible.
+Please read this guide in full before using the editor, this would answer many of your questions before you encounter them down the line, I tried to keep it as concise as possible. Keybinds provided are default, rebind them from the `Settings->Keybinds` if needed. 
 
 ## Main workflow
 
@@ -16,7 +16,7 @@ Contains Place `1`, Select `F` and Move `V` tools, as well as a logarithmic volu
 
 ### Flat View
 
-This is where you edit, place and remove your hitObjects (Note, Hold, Zone, Flick). A waveform is available on the left with the actual conveyor grid scrolling upwards when playback is enabled `Space` on the right, a red playhead shows your current position on the conveyor. The grid is defined by divisors, you can increase/decrease them by pressing `Up/Down` arrowkeys, or `Mousewheel + Control`. To scroll the conveyor by 1 divider use `Mousewheel` or `Left/Right` arrowkeys. Adjust the zoom of the conveyor with `+/-` or `Mousewheel + Alt`. A titlebar also has a `Sky/Ground/Both` filter, also can be cycled with `Tab`, filter determines which hitObjects are visible and can be interacted with.
+This is where you edit, place and remove your hitObjects (Note, Hold, Zone, Flick). A waveform is available on the left with the actual conveyor grid scrolling upwards when playback is enabled `Space` on the right, a red playhead shows your current position on the conveyor. The grid is defined by divisors, you can increase/decrease them by pressing `Up/Down` arrowkeys, or `Mousewheel + Control`. To scroll the conveyor by 1 divider use `Mousewheel` or `Left/Right` arrowkeys. Adjust the zoom of the conveyor with `+/-` or `Mousewheel + Alt`. A titlebar also has a `Sky/Ground/Both` filter, also can be cycled with `Tab`, filter determines which hitObjects are visible and can be interacted with. Playback speed can be adjusted with `[` to increase and `]` to decrease.
 
 ### Events
 

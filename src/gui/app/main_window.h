@@ -28,6 +28,7 @@ namespace infalsus::gui {
 
 class EditorState;
 class FlatView;
+class KeyBindingRouter;
 class MetadataWidget;
 class PropertiesPanel;
 class TimelineWidget;
@@ -49,6 +50,8 @@ protected:
 private:
     void buildInterface();
     void buildToolBar();
+    void registerNavigationKeybinds();
+    void openSettings();
     void updateVolumeSliderPlacement();
     void buildWorkspace();
     void arrangeSplitters();
@@ -86,6 +89,7 @@ private:
     [[nodiscard]] QString audioPathForFolder(const QString& folderPath) const;
 
     EditorState* m_state = nullptr;
+    KeyBindingRouter* m_keyBindings = nullptr;
     PlaybackController* m_playback = nullptr;
     QAudioDecoder* m_timingDecoder = nullptr;
     ConveyorView* m_viewer = nullptr;

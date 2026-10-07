@@ -1,4 +1,6 @@
 #include "gui/app/main_window.h"
+#include "gui/app/settings_dialog.h"
+#include "gui/key_bindings.h"
 
 #include "core/chart_project.h"
 #include "core/audio_exporter.h"
@@ -34,11 +36,9 @@
 #include <QtMultimedia/QAudioDecoder>
 #include <QtGui/QActionGroup>
 #include <QtGui/QKeyEvent>
-#include <QtGui/QKeySequence>
 #include <QtGui/QImage>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
-#include <QtWidgets/QAbstractSpinBox>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QFileDialog>
@@ -114,20 +114,6 @@ constexpr int kRecentProjectLimit = 10;
     constexpr qreal kMinimumDecibels = -60.0;
     const qreal decibels = kMinimumDecibels * (1.0 - normalized);
     return std::pow(qreal(10.0), decibels / 20.0);
-}
-
-[[nodiscard]] bool isTextEntryWidget(const QObject* object) {
-    // A spin box gives focus to its internal line edit, but check both the
-    // child and its parents so app-level shortcut handling never steals input
-    // from a numeric editor.
-    for (const QObject* current = object; current != nullptr; current = current->parent()) {
-        if (qobject_cast<const QLineEdit*>(current) != nullptr
-            || qobject_cast<const QAbstractSpinBox*>(current) != nullptr) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 [[nodiscard]] bool isSkyHitObject(const ChartNote& hitObject) {
@@ -329,6 +315,7 @@ struct ImportedSpcIdentity {
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
     m_state = new EditorState(this);
+    m_keyBindings = new KeyBindingRouter(this);
     m_playback = new PlaybackController(this);
     m_timingDecoder = new QAudioDecoder(this);
     connect(m_timingDecoder, &QAudioDecoder::bufferReady, this, [this] {
@@ -350,6 +337,8 @@ MainWindow::MainWindow(QWidget* parent)
     buildInterface();
     buildWorkspace();
     buildToolBar();
+    registerNavigationKeybinds();
+    SettingsDialog::restoreKeybinds(m_keyBindings);
     restoreLayout();
     qApp->installEventFilter(this);
 }
@@ -382,124 +371,6 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             adjustFlatZoom(wheelSteps(*wheelEvent));
             return true;
         }
-    }
-
-    if (event->type() != QEvent::KeyPress) {
-        return QMainWindow::eventFilter(watched, event);
-    }
-    const auto* keyEvent = static_cast<QKeyEvent*>(event);
-
-    // Editor shortcuts are global only while the user is not entering text.
-    // In particular, this preserves ordinary letters, Ctrl+C/V, Delete,
-    // arrows, and Space for metadata and property line edits.
-    if (isTextEntryWidget(QApplication::focusWidget())) {
-        return QMainWindow::eventFilter(watched, event);
-    }
-    // The event list owns Shift/Ctrl for range and toggle selection. Let its
-    // view receive those key transitions and its ordinary edit shortcuts.
-    if (m_timing != nullptr && (QApplication::focusWidget() == m_timing
-        || m_timing->isAncestorOf(QApplication::focusWidget()))
-        && (keyEvent->key() == Qt::Key_Shift || keyEvent->key() == Qt::Key_Control)) {
-        return QMainWindow::eventFilter(watched, event);
-    }
-
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && (keyEvent->modifiers() & Qt::ShiftModifier)
-        && keyEvent->key() == Qt::Key_A) {
-        m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_A) {
-        selectAllVisibleHitObjects();
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_S) {
-        saveProject();
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_C) {
-        m_state->copySelectedHitObjects();
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_X) {
-        m_state->cutSelectedHitObjects();
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_V) {
-        m_state->pasteCopiedHitObjects();
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_H) {
-        m_state->mirrorSelectedHitObjects();
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_J) {
-        m_state->flipSelectedHitObjectsVertically();
-        return true;
-    }
-    if ((keyEvent->modifiers() & Qt::ControlModifier) && (keyEvent->modifiers() & Qt::ShiftModifier)
-        && keyEvent->key() == Qt::Key_E) {
-        m_state->resnapAllHitObjects();
-        return true;
-    }
-    switch (keyEvent->key()) {
-    case Qt::Key_1:
-        m_state->setTool(EditorTool::Place);
-        return true;
-    case Qt::Key_F:
-        m_state->setTool(EditorTool::Select);
-        return true;
-    case Qt::Key_V:
-        m_state->setTool(EditorTool::Move);
-        return true;
-    case Qt::Key_Delete:
-        m_state->removeSelection();
-        return true;
-    case Qt::Key_Plus:
-    case Qt::Key_Equal:
-        adjustFlatZoom(1.0);
-        return true;
-    case Qt::Key_Minus:
-    case Qt::Key_Underscore:
-        adjustFlatZoom(-1.0);
-        return true;
-    case Qt::Key_Space:
-        togglePlayback();
-        return true;
-    case Qt::Key_BracketLeft:
-        m_playback->increasePlaybackRate();
-        return true;
-    case Qt::Key_BracketRight:
-        m_playback->decreasePlaybackRate();
-        return true;
-    case Qt::Key_Left:
-        m_state->seekByDivisor(-1);
-        return true;
-    case Qt::Key_Right:
-        m_state->seekByDivisor(1);
-        return true;
-    case Qt::Key_Up:
-        m_state->increaseDivisor();
-        return true;
-    case Qt::Key_Down:
-        m_state->decreaseDivisor();
-        return true;
-    case Qt::Key_Tab:
-        m_flatModeSelector->setCurrentIndex((m_flatModeSelector->currentIndex() + 1) % m_flatModeSelector->count());
-        return true;
-    case Qt::Key_Z:
-        if (keyEvent->modifiers() & Qt::ControlModifier) {
-            m_state->undo();
-            return true;
-        }
-        break;
-    case Qt::Key_Y:
-        if (keyEvent->modifiers() & Qt::ControlModifier) {
-            m_state->redo();
-            return true;
-        }
-        break;
-    default:
-        return QMainWindow::eventFilter(watched, event);
     }
 
     return QMainWindow::eventFilter(watched, event);
@@ -611,6 +482,7 @@ void MainWindow::buildInterface() {
     auto* fileMenu = menuBar()->addMenu(QStringLiteral("File"));
     auto* editMenu = menuBar()->addMenu(QStringLiteral("Edit"));
     auto* windowMenu = menuBar()->addMenu(QStringLiteral("Window"));
+    auto* settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
     auto* newProjectAction = fileMenu->addAction(QStringLiteral("New project..."));
     auto* openProjectAction = fileMenu->addAction(QStringLiteral("Open project..."));
     m_recentProjectMenu = fileMenu->addMenu(QStringLiteral("Open recent project"));
@@ -618,29 +490,35 @@ void MainWindow::buildInterface() {
     auto* saveProjectAction = fileMenu->addAction(QStringLiteral("Save project"));
     auto* saveProjectAsAction = fileMenu->addAction(QStringLiteral("Save project as..."));
     auto* exportProjectAction = fileMenu->addAction(QStringLiteral("Export project..."));
-    const auto addEditAction = [editMenu](const QString& text, const QKeySequence& shortcut) {
+    const auto addEditAction = [this, editMenu](const QString& text, const KeyCommand command) {
         QAction* action = editMenu->addAction(text);
-        action->setShortcut(shortcut);
-        // Global key handling deliberately yields to text fields. Keep menu
-        // shortcuts visible without allowing QAction to bypass that rule.
-        action->setShortcutContext(Qt::WidgetShortcut);
+        m_keyBindings->registerAction(command, action);
+
         return action;
     };
-    auto* undoAction = addEditAction(QStringLiteral("Undo"), QKeySequence::Undo);
-    auto* redoAction = addEditAction(QStringLiteral("Redo"), QKeySequence::Redo);
+    auto* undoAction = addEditAction(QStringLiteral("Undo"), KeyCommand::Undo);
+    auto* redoAction = addEditAction(QStringLiteral("Redo"), KeyCommand::Redo);
     editMenu->addSeparator();
-    auto* cutAction = addEditAction(QStringLiteral("Cut"), QKeySequence::Cut);
-    auto* copyAction = addEditAction(QStringLiteral("Copy"), QKeySequence::Copy);
-    auto* pasteAction = addEditAction(QStringLiteral("Paste"), QKeySequence::Paste);
-    auto* deleteAction = addEditAction(QStringLiteral("Delete selection"), QKeySequence::Delete);
+    auto* cutAction = addEditAction(QStringLiteral("Cut"), KeyCommand::Cut);
+    auto* copyAction = addEditAction(QStringLiteral("Copy"), KeyCommand::Copy);
+    auto* pasteAction = addEditAction(QStringLiteral("Paste"), KeyCommand::Paste);
+    auto* deleteAction = addEditAction(QStringLiteral("Delete selection"), KeyCommand::DeleteSelection);
     editMenu->addSeparator();
-    auto* selectAllAction = addEditAction(QStringLiteral("Select all visible"), QKeySequence::SelectAll);
-    auto* mirrorAction = addEditAction(QStringLiteral("Mirror selection"), QKeySequence(QStringLiteral("Ctrl+H")));
-    auto* verticalFlipAction = addEditAction(QStringLiteral("Flip selection vertically"), QKeySequence(QStringLiteral("Ctrl+J")));
-    auto* resnapAllAction = addEditAction(QStringLiteral("Resnap all hit objects"),
-        QKeySequence(QStringLiteral("Ctrl+Shift+E")));
-    auto* verifyAction = addEditAction(QStringLiteral("Refresh verification"), QKeySequence(QStringLiteral("Ctrl+Shift+A")));
+    auto* selectAllAction = addEditAction(QStringLiteral("Select all visible"), KeyCommand::SelectAll);
+    auto* mirrorAction = addEditAction(QStringLiteral("Mirror selection"), KeyCommand::MirrorSelection);
+    auto* verticalFlipAction = addEditAction(QStringLiteral("Flip selection vertically"), KeyCommand::FlipSelectionVertically);
+    auto* resnapAllAction = addEditAction(QStringLiteral("Resnap all hit objects"), KeyCommand::ResnapAll);
+    auto* verifyAction = addEditAction(QStringLiteral("Refresh verification"), KeyCommand::RefreshVerification);
     auto* resetLayoutAction = windowMenu->addAction(QStringLiteral("Reset layout"));
+    auto* settingsAction = settingsMenu->addAction(QStringLiteral("Settings..."));
+    m_keyBindings->registerAction(KeyCommand::NewProject, newProjectAction);
+    m_keyBindings->registerAction(KeyCommand::OpenProject, openProjectAction);
+    m_keyBindings->registerAction(KeyCommand::ImportSpc, importSpcAction);
+    m_keyBindings->registerAction(KeyCommand::SaveProject, saveProjectAction);
+    m_keyBindings->registerAction(KeyCommand::SaveProjectAs, saveProjectAsAction);
+    m_keyBindings->registerAction(KeyCommand::ExportProject, exportProjectAction);
+    m_keyBindings->registerAction(KeyCommand::ResetLayout, resetLayoutAction);
+    m_keyBindings->registerAction(KeyCommand::Settings, settingsAction);
     setWindowTitle(QStringLiteral("In Libertas"));
     resize(1540, 980);
 
@@ -664,6 +542,7 @@ void MainWindow::buildInterface() {
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
     });
     connect(resetLayoutAction, &QAction::triggered, this, &MainWindow::resetLayout);
+    connect(settingsAction, &QAction::triggered, this, &MainWindow::openSettings);
     connect(m_state, &EditorState::historyChanged, this, [undoAction, redoAction](const bool canUndo, const bool canRedo) {
         undoAction->setEnabled(canUndo);
         redoAction->setEnabled(canRedo);
@@ -826,6 +705,9 @@ void MainWindow::buildToolBar() {
     auto* placeAction = m_toolsToolbar->addAction(QStringLiteral("Place"));
     auto* selectAction = m_toolsToolbar->addAction(QStringLiteral("Select"));
     auto* moveAction = m_toolsToolbar->addAction(QStringLiteral("Move"));
+    m_keyBindings->registerAction(KeyCommand::PlaceTool, placeAction, false);
+    m_keyBindings->registerAction(KeyCommand::SelectTool, selectAction, false);
+    m_keyBindings->registerAction(KeyCommand::MoveTool, moveAction, false);
     m_toolsToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_toolsToolbar->setMovable(false);
     placeAction->setCheckable(true);
@@ -891,6 +773,33 @@ void MainWindow::buildToolBar() {
         QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
         settings.setValue(QStringLiteral("playback/volume"), volume);
     });
+}
+
+void MainWindow::registerNavigationKeybinds() {
+    const auto addAction = [this](const KeyCommand command, const auto& handler) {
+        auto* action = new QAction(this);
+        m_keyBindings->registerAction(command, action, false);
+        connect(action, &QAction::triggered, this, handler);
+    };
+    addAction(KeyCommand::ZoomIn, [this] { adjustFlatZoom(1.0); });
+    addAction(KeyCommand::ZoomInAlternate, [this] { adjustFlatZoom(1.0); });
+    addAction(KeyCommand::ZoomOut, [this] { adjustFlatZoom(-1.0); });
+    addAction(KeyCommand::ZoomOutAlternate, [this] { adjustFlatZoom(-1.0); });
+    addAction(KeyCommand::TogglePlayback, [this] { togglePlayback(); });
+    addAction(KeyCommand::IncreasePlaybackRate, [this] { m_playback->increasePlaybackRate(); });
+    addAction(KeyCommand::DecreasePlaybackRate, [this] { m_playback->decreasePlaybackRate(); });
+    addAction(KeyCommand::SeekBackward, [this] { m_state->seekByDivisor(-1); });
+    addAction(KeyCommand::SeekForward, [this] { m_state->seekByDivisor(1); });
+    addAction(KeyCommand::IncreaseDivisor, [this] { m_state->increaseDivisor(); });
+    addAction(KeyCommand::DecreaseDivisor, [this] { m_state->decreaseDivisor(); });
+    addAction(KeyCommand::CycleFlatMode, [this] {
+        m_flatModeSelector->setCurrentIndex((m_flatModeSelector->currentIndex() + 1) % m_flatModeSelector->count());
+    });
+}
+
+void MainWindow::openSettings() {
+    SettingsDialog dialog(m_keyBindings, this);
+    dialog.exec();
 }
 
 void MainWindow::updateVolumeSliderPlacement() {

@@ -24,9 +24,4 @@ In order to make custom charts launch the editor and follow [User Manual](docs/M
 - FFmpeg with the stable libvorbis encoder enabled (`vcpkg install "ffmpeg[vorbis]:x64-windows" --recurse`) for Ogg Vorbis export. No separate `ffmpeg.exe` or audiowaveform executable is needed.
 - An In Falsus installation with MelonLoader, so the hook project can reference its generated IL2CPP assemblies.
 
-Run `tools\build.ps1`. The editor and its runtime files are written to
-`build\In Libertas`; the managed hook and native jacket resolver bridge are
-written to `build\Mods`.
-
-Run `ctest --test-dir build -C Release --output-on-failure` after building to
-check media decoding, normalized jacket export, and Ogg Vorbis audio export.
+Run `tools\build.ps1`. The editor and its runtime files are written to `build\In Libertas`; the managed hook and native jacket resolver bridge are written to `build\Mods`.
