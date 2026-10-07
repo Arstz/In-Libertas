@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
@@ -48,6 +49,26 @@ internal static class CustomSongInstaller
     internal static string TemplateBaseName { get; private set; }
     internal static string TemplateChartKey { get; private set; }
     internal static bool IsComplete => _complete;
+
+    internal static void PrepareStartupMethods() {
+        PrepareStartupMethod(nameof(InstallLibrary), new[] {
+            typeof(SongData), typeof(PackData), typeof(DynamicStringMapping), typeof(CustomSongConfig)
+        });
+        PrepareStartupMethod(nameof(InstallLibrary), new[] { typeof(DataAccess), typeof(CustomSongConfig) });
+        PrepareStartupMethod(nameof(TryInstallBeforeSelectorCache), new[] { typeof(SongData) });
+        PrepareStartupMethod(nameof(ProbeForReadyData), Type.EmptyTypes);
+    }
+
+    private static void PrepareStartupMethod(string methodName, Type[] parameterTypes) {
+        MethodInfo method = typeof(CustomSongInstaller).GetMethod(methodName,
+            BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly,
+            binder: null, types: parameterTypes, modifiers: null)
+            ?? throw new MissingMethodException(typeof(CustomSongInstaller).FullName, methodName);
+
+        CustomSongMod.Log.Msg("[CustomSong] preparing installer method: " + method);
+        RuntimeHelpers.PrepareMethod(method.MethodHandle);
+        CustomSongMod.Log.Msg("[CustomSong] prepared installer method: " + method);
+    }
 
     internal static void Tick()
     {

@@ -20,6 +20,9 @@ qt_add_executable(InLibertas WIN32
     src/core/timing_analyzer.h
     src/core/timing_grid.h
     src/core/project_document.cpp
+    src/core/project_format.cpp
+    src/core/project_assets.cpp
+    src/core/project_export.cpp
     src/core/project_document.h
     src/core/chart_document.cpp
     src/core/chart_document.h
@@ -96,6 +99,7 @@ if(BUILD_TESTING)
         tests/core/media_assets_test.cpp
         src/core/media_assets.cpp
         src/core/audio_exporter.cpp
+        src/core/project_format.cpp
     )
     target_include_directories(media_assets_test PRIVATE src ${FFMPEG_INCLUDE_DIRS})
     target_link_libraries(media_assets_test PRIVATE
@@ -104,12 +108,34 @@ if(BUILD_TESTING)
     )
     add_dependencies(media_assets_test InLibertas)
     add_test(NAME media_assets COMMAND media_assets_test)
+    qt_add_executable(project_pipeline_test
+        tests/core/project_pipeline_test.cpp
+        src/core/project_assets.cpp
+        src/core/project_format.cpp
+        src/core/project_document.cpp
+        src/core/project_export.cpp
+        src/core/chart_project.cpp
+        src/core/chart_document.cpp
+        src/core/audio_exporter.cpp
+        src/core/media_assets.cpp
+    )
+    target_include_directories(project_pipeline_test PRIVATE src ${FFMPEG_INCLUDE_DIRS})
+    target_link_libraries(project_pipeline_test PRIVATE Qt6::Core Qt6::Gui Qt6::Multimedia FFmpeg::avcodec FFmpeg::avformat)
+    add_dependencies(project_pipeline_test InLibertas)
+    add_test(NAME project_pipeline COMMAND project_pipeline_test "${CMAKE_BINARY_DIR}/pipeline-fixtures")
+    set_tests_properties(project_pipeline PROPERTIES FIXTURES_SETUP project_assets)
+    find_program(DOTNET_EXECUTABLE dotnet REQUIRED)
+    add_test(NAME hook_project_pipeline COMMAND "${DOTNET_EXECUTABLE}" run
+        --project "${CMAKE_CURRENT_SOURCE_DIR}/tests/hook/project_pipeline_test.csproj"
+        --configuration Release -- "${CMAKE_BINARY_DIR}/pipeline-fixtures")
+    set_tests_properties(hook_project_pipeline PROPERTIES FIXTURES_REQUIRED project_assets)
     qt_add_executable(zone_groups_test
         tests/core/zone_groups_test.cpp
         src/core/zone_groups.cpp
         src/core/chart_document.cpp
         src/core/chart_project.cpp
         src/core/project_document.cpp
+        src/core/project_format.cpp
         src/gui/state/editor_state.cpp
         src/gui/state/editor_state.h
     )
@@ -117,6 +143,7 @@ if(BUILD_TESTING)
     target_link_libraries(zone_groups_test PRIVATE Qt6::Core)
     add_dependencies(zone_groups_test InLibertas)
     add_test(NAME zone_groups COMMAND zone_groups_test)
+    set_tests_properties(zone_groups PROPERTIES FIXTURES_REQUIRED project_assets)
     qt_add_executable(batch_properties_test
         tests/core/batch_properties_test.cpp
         src/core/chart_project.cpp

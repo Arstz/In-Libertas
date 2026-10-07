@@ -16,19 +16,19 @@
 #include "gui/widgets/verification_widget.h"
 #include "core/chart_document.h"
 #include "core/project_document.h"
+#include "core/project_assets.h"
+#include "core/project_format.h"
+#include "core/project_export.h"
 #include "gui/canvas/conveyor_view.h"
 #include "gui/state/playback_controller.h"
 
 #include <QtCore/QDir>
+#include <QtCore/QBuffer>
 #include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
 #include <QtCore/QFile>
-#include <QtCore/QJsonArray>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSettings>
-#include <QtCore/QSaveFile>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
@@ -121,11 +121,6 @@ constexpr int kRecentProjectLimit = 10;
     return hitObject.kind == NoteKind::Sky || hitObject.kind == NoteKind::Flick;
 }
 
-[[nodiscard]] bool isValidChartId(const QString& chartId) {
-    static const QRegularExpression kAllowedCharacters(QStringLiteral("^[A-Za-z0-9_-]+$"));
-    return kAllowedCharacters.match(chartId).hasMatch();
-}
-
 [[nodiscard]] QUrl inMemoryAudioHint(const QString& fileName) {
     const QString safeFileName = QFileInfo(fileName).fileName();
     return QUrl(QStringLiteral("memory://project/%1").arg(
@@ -179,10 +174,6 @@ struct ImportedSpcIdentity {
 }
 
 
-[[nodiscard]] QJsonValue optionalConfigValue(const QString& value) {
-    return value.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(value);
-}
-
 [[nodiscard]] QStringList exportWarningsFor(const ChartProject& project) {
     QStringList warnings;
     if (project.metadata.songName.trimmed().isEmpty()) {
@@ -211,46 +202,6 @@ struct ImportedSpcIdentity {
         }
     }
     return warnings;
-}
-
-[[nodiscard]] QJsonObject exportConfigFor(const ChartProject& project, const QString& chartId,
-    const QString& audioFileName) {
-    QJsonArray difficulties;
-    for (int index = 0; index < 4; ++index) {
-        const DifficultyChart& chart = project.difficulties.at(index);
-        if (chart.hitObjects.notes.isEmpty()) {
-            // The hook interprets array positions as the native difficulty
-            // slots. Keep an explicit null placeholder so a lone Forbidden
-            // chart remains slot 3 rather than becoming Minimal.
-            difficulties.append(QJsonValue(QJsonValue::Null));
-            continue;
-        }
-
-        difficulties.append(QJsonObject{
-            {QStringLiteral("externalChartId"), chartId + QString::number(index)},
-            {QStringLiteral("rating"), chart.metadata.rating},
-            {QStringLiteral("levelSectionIndicator"), QString::number(chart.metadata.rating)},
-        });
-    }
-    return {
-        {QStringLiteral("enabled"), true},
-        {QStringLiteral("templateSongId"), 2},
-        {QStringLiteral("chartId"), chartId},
-        {QStringLiteral("baseName"), chartId},
-        {QStringLiteral("audioFile"), audioFileName},
-        {QStringLiteral("jacketLargeFile"), QStringLiteral("jacketLarge.png")},
-        {QStringLiteral("jacketSmallFile"), QStringLiteral("jacketSmall.png")},
-        {QStringLiteral("enableLoosePngJackets"), true},
-        {QStringLiteral("songTitle"), project.metadata.songName},
-        {QStringLiteral("artist"), project.metadata.artistName},
-        {QStringLiteral("chartDesigner"), project.metadata.chartDesigner},
-        {QStringLiteral("jacketDesigner"), project.metadata.jacketDesigner},
-        {QStringLiteral("previewStartSeconds"), project.metadata.previewStartSeconds},
-        {QStringLiteral("previewEndSeconds"), project.metadata.previewEndSeconds},
-        {QStringLiteral("characterIdentifier"), optionalConfigValue(project.metadata.characterIdentifier)},
-        {QStringLiteral("gameplayBackground"), optionalConfigValue(project.metadata.gameplayBackground)},
-        {QStringLiteral("difficulties"), difficulties},
-    };
 }
 
 [[nodiscard]] ChartProject blankProject(const QString& songName) {
@@ -515,7 +466,7 @@ void MainWindow::buildInterface() {
     auto* selectAllAction = addEditAction(QStringLiteral("Select all visible"), KeyCommand::SelectAll);
     auto* mirrorAction = addEditAction(QStringLiteral("Mirror selection"), KeyCommand::MirrorSelection);
     auto* verticalFlipAction = addEditAction(QStringLiteral("Flip selection vertically"), KeyCommand::FlipSelectionVertically);
-    auto* groupingAction = addEditAction(QStringLiteral("Grouping"), KeyCommand::ToggleZoneGrouping);
+    auto* groupingAction = addEditAction(QStringLiteral("Group selection"), KeyCommand::ToggleZoneGrouping);
     auto* resnapAllAction = addEditAction(QStringLiteral("Resnap all hit objects"), KeyCommand::ResnapAll);
     auto* verifyAction = addEditAction(QStringLiteral("Refresh verification"), KeyCommand::RefreshVerification);
     auto* resetLayoutAction = windowMenu->addAction(QStringLiteral("Reset layout"));
@@ -928,19 +879,14 @@ void MainWindow::buildWorkspace() {
             QMessageBox::warning(this, QStringLiteral("Choose jacket"), error);
             return;
         }
-        if (!m_projectSongData.isEmpty()) {
-            QFile jacketFile(jacketPath);
-            if (!jacketFile.open(QIODevice::ReadOnly)) {
-                QMessageBox::warning(this, QStringLiteral("Choose jacket"),
-                    QStringLiteral("Could not read the selected jacket."));
-                return;
-            }
-            m_projectJacketData = jacketFile.readAll();
-            m_projectJacketImage = std::move(jacket);
-            m_project.jacketPath = QFileInfo(jacketPath).fileName();
-        } else {
-            m_project.jacketPath = jacketPath;
+        const QByteArray normalized = encodeJacketImage(jacket, &error);
+        if (normalized.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("Choose jacket"), error);
+            return;
         }
+        m_projectJacketData = normalized;
+        m_projectJacketImage = std::move(jacket);
+        m_project.jacketPath = QStringLiteral("jacket.png");
         m_metadata->setJacketAvailable(true);
         updateViewerSongCard();
         markProjectDirty();
@@ -1231,7 +1177,19 @@ void MainWindow::startInitialTimingAnalysis(const QString& audioPath) {
     }
 
     m_statusLabel->setText(QStringLiteral("New project created. Detecting initial BPM and offset…"));
-    m_timingDecoder->setSource(QUrl::fromLocalFile(audioPath));
+    if (m_timingAudioBuffer != nullptr) {
+        m_timingDecoder->setSourceDevice(nullptr);
+        delete m_timingAudioBuffer;
+        m_timingAudioBuffer = nullptr;
+    }
+    if (!m_projectSongData.isEmpty()) {
+        m_timingAudioBuffer = new QBuffer(this);
+        m_timingAudioBuffer->setData(m_projectSongData);
+        m_timingAudioBuffer->open(QIODevice::ReadOnly);
+        m_timingDecoder->setSourceDevice(m_timingAudioBuffer);
+    } else {
+        m_timingDecoder->setSource(QUrl::fromLocalFile(audioPath));
+    }
     m_timingDecoder->start();
 }
 
@@ -1406,13 +1364,16 @@ void MainWindow::createProject() {
         }
     }
     const QString songName = QFileInfo(songPath).completeBaseName();
-    m_projectSongData.clear();
-    m_projectJacketData.clear();
-    m_projectJacketImage = {};
+    QByteArray audio;
+    QByteArray jacket;
     ChartProject project = blankProject(songName);
     project.songPath = songPath;
     project.jacketPath = jacketPath;
+    if (!normalizeAssets(&project, &audio, &jacket)) {
+        return;
+    }
     m_project = std::move(project);
+    loadProjectAssets(m_project.songPath, audio, m_project.jacketPath, jacket);
     m_projectPath.clear();
     m_hasProject = true;
     m_loadedDifficulty = Difficulty::Minimal;
@@ -1430,8 +1391,8 @@ void MainWindow::createProject() {
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = true;
-    m_flatView->setAudioSource(songPath);
-    m_playback->setAudioSource(QUrl::fromLocalFile(songPath));
+    m_flatView->setAudioData(m_projectSongData, m_project.songPath);
+    m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
     updateViewerSongCard();
     startInitialTimingAnalysis(songPath);
 }
@@ -1465,11 +1426,34 @@ void MainWindow::loadProject(const QString& path) {
     }
 
     const QString projectPath = fileInfo.absoluteFilePath();
-    const ProjectDocument::LoadResult result = ProjectDocument::load(projectPath);
+    ProjectDocument::LoadResult result = ProjectDocument::load(projectPath);
     if (!result.succeeded()) {
         QMessageBox::warning(this, QStringLiteral("Open project"), result.error);
         return;
     }
+    QString backupPath;
+    if (result.sourceVersion == kLegacyProjectVersion) {
+        // Deprecated compatibility path; remove in a future project-format revision.
+        if (!normalizeAssets(&result.project, &result.songData, &result.jacketData)
+            || !requireChartId(&result.project)) {
+            return;
+        }
+        QString error;
+        if (!ProjectDocument::migrate(projectPath, result, &backupPath, &error)) {
+            QMessageBox::warning(this, QStringLiteral("Migrate project"), error);
+            return;
+        }
+        result.songFileName = result.project.songPath;
+        result.jacketFileName = result.project.jacketPath;
+    }
+    QImage validatedJacket;
+    QString assetError;
+    if (!readJacketImage(result.jacketData, &validatedJacket, &assetError)) {
+        QMessageBox::warning(this, QStringLiteral("Open project"), assetError);
+        return;
+    }
+    m_timingDecoder->stop();
+    m_timingAnalysisInProgress = false;
     m_project = result.project;
     loadProjectAssets(result.songFileName, result.songData, result.jacketFileName, result.jacketData);
     if (m_project.songPath.isEmpty()) {
@@ -1496,7 +1480,8 @@ void MainWindow::loadProject(const QString& path) {
     m_flatView->setAudioData(m_projectSongData, m_project.songPath);
     m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
     updateViewerSongCard();
-    m_statusLabel->setText(QStringLiteral("Opened %1").arg(fileInfo.fileName()));
+    m_statusLabel->setText(backupPath.isEmpty() ? QStringLiteral("Opened %1").arg(fileInfo.fileName())
+        : QStringLiteral("Migrated project; original backed up to %1").arg(backupPath));
     rememberRecentProject(projectPath);
 }
 
@@ -1542,27 +1527,39 @@ void MainWindow::refreshRecentProjectMenu() {
     settings.setValue(QStringLiteral("recent/projects"), existingProjects);
 }
 
-void MainWindow::saveProject() {
+bool MainWindow::saveProject() {
     if (!m_hasProject) {
         QMessageBox::information(this, QStringLiteral("Save project"), QStringLiteral("Create or open a project first."));
-        return;
+        return false;
     }
     if (m_projectPath.isEmpty()) {
         saveProjectAs();
-        return;
+        return !m_projectDirty;
     }
     storeLoadedDifficulty();
+    if (!requireChartId(&m_project)) {
+        return false;
+    }
+    if (m_projectSongData.isEmpty() || m_projectJacketData.isEmpty()) {
+        if (!normalizeAssets(&m_project, &m_projectSongData, &m_projectJacketData)) {
+            return false;
+        }
+        loadProjectAssets(m_project.songPath, m_projectSongData, m_project.jacketPath, m_projectJacketData);
+        m_flatView->setAudioData(m_projectSongData, m_project.songPath);
+        m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
+    }
+    m_metadata->setChartId(m_project.chartId);
     QString error;
-    const bool saved = m_projectSongData.isEmpty()
-        ? ProjectDocument::save(m_projectPath, m_project, &error)
-        : ProjectDocument::save(m_projectPath, m_project, m_projectSongData, m_projectJacketData, &error);
+    const bool saved = ProjectDocument::save(m_projectPath, m_project, m_projectSongData, m_projectJacketData, &error);
     if (!saved) {
         QMessageBox::warning(this, QStringLiteral("Save project"), error);
-        return;
+        return false;
     }
     m_projectDirty = false;
     rememberRecentProject(m_projectPath);
     m_statusLabel->setText(QStringLiteral("Saved %1").arg(QFileInfo(m_projectPath).fileName()));
+
+    return true;
 }
 
 void MainWindow::saveProjectAs() {
@@ -1579,8 +1576,51 @@ void MainWindow::saveProjectAs() {
     if (!path.endsWith(QStringLiteral(".10no"), Qt::CaseInsensitive)) {
         path.append(QStringLiteral(".10no"));
     }
+    const QString previousPath = m_projectPath;
     m_projectPath = path;
-    saveProject();
+    if (!saveProject()) {
+        m_projectPath = previousPath;
+    }
+}
+
+bool MainWindow::requireChartId(ChartProject* project) {
+    QString chartId = project->chartId;
+    while (!isValidProjectChartId(chartId)) {
+        bool accepted = false;
+        const QString value = QInputDialog::getText(this, QStringLiteral("Chart ID"),
+            QStringLiteral("Enter a Chart ID using letters, digits, '_' or '-'. Reserved filenames are not allowed."),
+            QLineEdit::Normal, chartId, &accepted).trimmed();
+        if (!accepted) {
+            return false;
+        }
+        chartId = value;
+    }
+    project->chartId = chartId;
+
+    return true;
+}
+
+bool MainWindow::normalizeAssets(ChartProject* project, QByteArray* audio, QByteArray* jacket) {
+    QProgressDialog progress(QStringLiteral("Preparing project media..."), QStringLiteral("Cancel"), 0, 100, this);
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    const NormalizedProjectAssets assets = normalizeProjectAssets(project->songPath, *audio, project->jacketPath, *jacket,
+        [&progress](const qint64 position, const qint64 duration) {
+            progress.setValue(duration > 0 ? static_cast<int>(std::clamp(100 * position / duration, qint64(0), qint64(99))) : 0);
+            return !progress.wasCanceled();
+        });
+    progress.close();
+    if (!assets.error.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Project media"), assets.error);
+        return false;
+    }
+    *audio = assets.songData;
+    *jacket = assets.jacketData;
+    project->songPath = QStringLiteral("audio.ogg");
+    project->jacketPath = QStringLiteral("jacket.png");
+
+    return true;
 }
 
 void MainWindow::exportProject() {
@@ -1589,34 +1629,19 @@ void MainWindow::exportProject() {
         return;
     }
     storeLoadedDifficulty();
-    if (m_project.songPath.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Export project"), QStringLiteral("The project has no song."));
+    ChartProject project = m_project;
+    QByteArray audio = m_projectSongData;
+    QByteArray jacket = m_projectJacketData;
+    QString error;
+    if (!requireChartId(&project)) {
         return;
     }
-    QImage jacket;
-    QString error;
-    if (!readProjectJacket(&jacket, &error)) {
+    error = projectExportError(project);
+    if (!error.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("Export project"), error);
         return;
     }
-    bool hasHitObjects = false;
-    for (const DifficultyChart& chart : m_project.difficulties) {
-        if (!chart.hitObjects.notes.isEmpty()) {
-            hasHitObjects = true;
-            break;
-        }
-    }
-    if (!hasHitObjects) {
-        QMessageBox::warning(this, QStringLiteral("Export project"),
-            QStringLiteral("Add at least one game object to a difficulty before exporting."));
-        return;
-    }
-    if (m_project.metadata.previewStartSeconds >= m_project.metadata.previewEndSeconds) {
-        QMessageBox::warning(this, QStringLiteral("Export project"),
-            QStringLiteral("Preview start time must be earlier than preview end time."));
-        return;
-    }
-    const QStringList exportWarnings = exportWarningsFor(m_project);
+    const QStringList exportWarnings = exportWarningsFor(project);
     if (!exportWarnings.isEmpty()) {
         const QString message = QStringLiteral("The project has the following export warnings:\n\n%1\n\nContinue exporting?")
             .arg(exportWarnings.join(QStringLiteral("\n")));
@@ -1625,26 +1650,11 @@ void MainWindow::exportProject() {
             return;
         }
     }
-
-    QString chartId = m_project.chartId.trimmed();
-    if (chartId.isEmpty()) {
-        bool accepted = false;
-        chartId = QInputDialog::getText(this, QStringLiteral("Chart ID"),
-            QStringLiteral("Chart ID"), QLineEdit::Normal, {}, &accepted).trimmed();
-        if (!accepted) {
-            return;
-        }
-    }
-    if (!isValidChartId(chartId)) {
-        QMessageBox::warning(this, QStringLiteral("Export project"),
-            QStringLiteral("Chart ID must contain only letters, digits, '_' or '-'."));
-        return;
-    }
     const QString parentPath = QFileDialog::getExistingDirectory(this, QStringLiteral("Export project to"));
     if (parentPath.isEmpty()) {
         return;
     }
-    const QString outputPath = QDir(parentPath).filePath(chartId);
+    const QString outputPath = QDir(parentPath).filePath(project.chartId);
     const QDir outputDirectory(outputPath);
     if (outputDirectory.exists() && !outputDirectory.entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty()
         && QMessageBox::question(this, QStringLiteral("Export project"),
@@ -1652,56 +1662,22 @@ void MainWindow::exportProject() {
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
         return;
     }
-    if (!QDir().mkpath(outputPath)) {
-        QMessageBox::warning(this, QStringLiteral("Export project"), QStringLiteral("Could not create the export folder."));
+    if ((audio.isEmpty() || jacket.isEmpty()) && !normalizeAssets(&project, &audio, &jacket)) {
         return;
     }
-
-    const QString audioFileName = QStringLiteral("audio.ogg");
-    const QString audioOutputPath = outputDirectory.filePath(audioFileName);
-    QProgressDialog progress(QStringLiteral("Exporting Ogg Vorbis audio..."), QStringLiteral("Cancel"), 0, 100, this);
-    progress.setWindowModality(Qt::ApplicationModal);
-    progress.setMinimumDuration(0);
-    progress.setAutoClose(false);
-    progress.setAutoReset(false);
-    const bool audioExported = exportOggAudio(m_project.songPath, m_projectSongData, audioOutputPath, &error,
-        [&progress](qint64 position, qint64 duration) {
-        progress.setValue(duration > 0 ? static_cast<int>(std::clamp(100 * position / duration, qint64(0), qint64(99))) : 0);
-        return !progress.wasCanceled();
-    });
-    progress.close();
-    if (!audioExported
-        || !writeJacketImage(jacket, outputDirectory.filePath(QStringLiteral("jacketLarge.png")), &error)
-        || !writeJacketImage(jacket, outputDirectory.filePath(QStringLiteral("jacketSmall.png")), &error)) {
-        if (error.isEmpty()) {
-            error = QStringLiteral("Could not write the jacket PNG files.");
-        }
+    if (!writeProjectExport(outputPath, project, audio, jacket, &error)) {
         QMessageBox::warning(this, QStringLiteral("Export project"), error);
         return;
     }
-
-    for (int index = 0; index < 4; ++index) {
-        DifficultyChart& chart = m_project.difficulties.at(index);
-        if (chart.hitObjects.notes.isEmpty()) {
-            continue;
-        }
-        const QString chartStem = chartId + QString::number(index);
-        if (!ChartDocument::save(outputDirectory.filePath(chartStem + QStringLiteral(".spc")),
-                chart.hitObjects, chart.timingPoints, chart.laneEvents, chart.speedEvents, &error)) {
-            QMessageBox::warning(this, QStringLiteral("Export project"), error);
-            return;
-        }
+    const bool mediaChanged = audio != m_projectSongData || jacket != m_projectJacketData;
+    m_project = std::move(project);
+    if (mediaChanged) {
+        loadProjectAssets(m_project.songPath, audio, m_project.jacketPath, jacket);
+        m_flatView->setAudioData(m_projectSongData, m_project.songPath);
+        m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
+        updateViewerSongCard();
     }
-    const QByteArray configData = QJsonDocument(exportConfigFor(m_project, chartId, audioFileName)).toJson(QJsonDocument::Indented);
-    QSaveFile configFile(outputDirectory.filePath(QStringLiteral("config.json")));
-    if (!configFile.open(QIODevice::WriteOnly)
-        || configFile.write(configData) != configData.size()
-        || !configFile.commit()) {
-        QMessageBox::warning(this, QStringLiteral("Export project"), QStringLiteral("Could not write config.json."));
-        return;
-    }
-    m_project.chartId = chartId;
-    m_metadata->setChartId(chartId);
+    m_metadata->setChartId(m_project.chartId);
     markProjectDirty();
     m_statusLabel->setText(QStringLiteral("Exported project to %1").arg(outputPath));
 }

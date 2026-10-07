@@ -1,13 +1,17 @@
 #include "core/project_document.h"
+#include "core/project_format.h"
 
 #include <QtCore/QDataStream>
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QSaveFile>
+#include <QtCore/QUuid>
 
+#include <algorithm>
 #include <limits>
 
 namespace infalsus {
@@ -15,7 +19,6 @@ namespace infalsus {
 namespace {
 
 constexpr char kProjectMagic[] = "10NO";
-constexpr quint16 kProjectVersion = 2;
 
 [[nodiscard]] QJsonObject noteToJson(const ChartNote& note) {
     return {
@@ -186,12 +189,12 @@ constexpr quint16 kProjectVersion = 2;
     };
 }
 
-[[nodiscard]] bool projectFromJson(const QJsonObject& object, ChartProject* project, QString* error) {
+[[nodiscard]] bool projectFromJson(const QJsonObject& object, const quint16 version, ChartProject* project, QString* error) {
     if (object.value(QStringLiteral("format")).toString() != QStringLiteral("in_libertas_project")) {
         *error = QStringLiteral("The project manifest has an unknown format.");
         return false;
     }
-    if (object.value(QStringLiteral("version")).toInt() != kProjectVersion) {
+    if (object.value(QStringLiteral("version")).toInt() != version) {
         *error = QStringLiteral("The project manifest version is unsupported.");
         return false;
     }
@@ -229,11 +232,19 @@ bool ProjectDocument::LoadResult::succeeded() const {
 
 bool ProjectDocument::save(const QString& filePath, const ChartProject& project,
     const QByteArray& songData, const QByteArray& jacketData, QString* error) {
-    if (songData.isEmpty()) {
-        *error = QStringLiteral("Could not read the project song.");
+    if (!isValidProjectChartId(project.chartId) || project.songPath != QStringLiteral("audio.ogg")
+        || project.jacketPath != QStringLiteral("jacket.png")) {
+        *error = QStringLiteral("A project requires a valid Chart ID and normalized assets before saving.");
+        return false;
+    }
+    if (!validateProjectMedia(songData, jacketData, error)) {
         return false;
     }
     const QByteArray manifest = QJsonDocument(projectToJson(project)).toJson(QJsonDocument::Compact);
+    if (manifest.size() > kMaximumProjectManifestBytes) {
+        *error = QStringLiteral("The project manifest is too large.");
+        return false;
+    }
     QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly)) {
         *error = QStringLiteral("Could not open the project for writing.");
@@ -279,6 +290,7 @@ ProjectDocument::LoadResult ProjectDocument::load(const QString& filePath) {
     if (!file.open(QIODevice::ReadOnly)) {
         return {.error = QStringLiteral("Could not open the project.")};
     }
+    const QByteArray header = file.peek(26);
     QDataStream stream(&file);
     stream.setByteOrder(QDataStream::LittleEndian);
     char magic[4]{};
@@ -290,8 +302,11 @@ ProjectDocument::LoadResult ProjectDocument::load(const QString& filePath) {
         return {.error = QStringLiteral("The file is not a .10no project.")};
     }
     stream >> version >> manifestSize >> songSize >> jacketSize;
-    constexpr quint64 kMaximumManifestSize = 32ULL * 1024ULL * 1024ULL;
-    if (version != kProjectVersion || manifestSize > kMaximumManifestSize
+    const quint64 remainingBytes = static_cast<quint64>(std::max<qint64>(0, file.size() - file.pos()));
+    // Deprecated compatibility path; remove in a future project-format revision.
+    if ((version != kProjectVersion && version != kLegacyProjectVersion) || manifestSize > kMaximumProjectManifestBytes
+        || manifestSize > remainingBytes || songSize > remainingBytes - manifestSize
+        || jacketSize != remainingBytes - manifestSize - songSize || stream.status() != QDataStream::Ok
         || songSize > static_cast<quint64>(std::numeric_limits<qsizetype>::max())
         || jacketSize > static_cast<quint64>(std::numeric_limits<qsizetype>::max())) {
         return {.error = QStringLiteral("The .10no project header is invalid.")};
@@ -310,15 +325,64 @@ ProjectDocument::LoadResult ProjectDocument::load(const QString& filePath) {
         return {.error = QStringLiteral("The .10no project manifest is invalid.")};
     }
     LoadResult result;
-    if (!projectFromJson(document.object(), &result.project, &result.error)) {
+    QCryptographicHash sourceHash(QCryptographicHash::Sha256);
+    sourceHash.addData(header);
+    sourceHash.addData(manifest);
+    sourceHash.addData(songData);
+    sourceHash.addData(jacketData);
+    result.sourceSha256 = sourceHash.result();
+    result.sourceVersion = version;
+    if (!projectFromJson(document.object(), version, &result.project, &result.error)) {
         return result;
     }
     result.songFileName = result.project.songPath;
     result.jacketFileName = result.project.jacketPath;
     result.songData = std::move(songData);
     result.jacketData = std::move(jacketData);
+    if (version == kProjectVersion && (!isValidProjectChartId(result.project.chartId)
+        || result.songFileName != QStringLiteral("audio.ogg") || result.jacketFileName != QStringLiteral("jacket.png")
+        || !validateProjectMedia(result.songData, result.jacketData, &result.error))) {
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral("The version-3 project identity or asset names are invalid.");
+        }
+    }
 
     return result;
+}
+
+bool ProjectDocument::migrate(const QString& filePath, const LoadResult& normalized, QString* backupPath, QString* error) {
+    QFile original(filePath);
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    error->clear();
+    if (normalized.sourceVersion != kLegacyProjectVersion || normalized.sourceSha256.isEmpty()
+        || !original.open(QIODevice::ReadOnly) || !hash.addData(&original) || hash.result() != normalized.sourceSha256) {
+        *error = QStringLiteral("The legacy project changed during migration. Open it again before migrating.");
+        return false;
+    }
+    original.close();
+    if (!isValidProjectChartId(normalized.project.chartId)
+        || normalized.project.songPath != QStringLiteral("audio.ogg")
+        || normalized.project.jacketPath != QStringLiteral("jacket.png")
+        || !validateProjectMedia(normalized.songData, normalized.jacketData, error)) {
+        if (error->isEmpty()) {
+            *error = QStringLiteral("Migration requires a valid Chart ID and normalized assets.");
+        }
+        return false;
+    }
+    const QString backup = filePath + QStringLiteral(".v2-%1.bak").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    if (!QFile::copy(filePath, backup)) {
+        *error = QStringLiteral("Could not back up the legacy project. The original was not changed.");
+        return false;
+    }
+    *backupPath = backup;
+    QFile savedOriginal(backup);
+    hash.reset();
+    if (!savedOriginal.open(QIODevice::ReadOnly) || !hash.addData(&savedOriginal) || hash.result() != normalized.sourceSha256) {
+        *error = QStringLiteral("The legacy project changed while backing up. The backup was retained.");
+        return false;
+    }
+
+    return save(filePath, normalized.project, normalized.songData, normalized.jacketData, error);
 }
 
 } // namespace infalsus

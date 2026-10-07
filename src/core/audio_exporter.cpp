@@ -1,4 +1,5 @@
 #include "core/audio_exporter.h"
+#include "core/project_format.h"
 
 #include <QtCore/QBuffer>
 #include <QtCore/QEventLoop>
@@ -40,7 +41,7 @@ constexpr int kAudioCopyChunkSize = 1024 * 1024;
     return header.mid(packetOffset, kVorbisSignatureSize) == QByteArray("\x01vorbis", kVorbisSignatureSize);
 }
 
-[[nodiscard]] bool copyVorbisAudio(QIODevice& source, QSaveFile& destination, QString* error,
+[[nodiscard]] bool copyVorbisAudio(QIODevice& source, QIODevice& destination, QString* error,
     const AudioExportProgress& progress) {
     while (!source.atEnd()) {
         if (progress && !progress(source.pos(), source.size())) {
@@ -53,15 +54,10 @@ constexpr int kAudioCopyChunkSize = 1024 * 1024;
             return false;
         }
     }
-    if (!destination.commit()) {
-        *error = QStringLiteral("Could not finish writing the Ogg Vorbis audio.");
-        return false;
-    }
-
     return true;
 }
 
-[[nodiscard]] bool transcodeAudio(QIODevice& source, QSaveFile& destination, QString* error,
+[[nodiscard]] bool transcodeAudio(QIODevice& source, QIODevice& destination, QString* error,
     const AudioExportProgress& progress) {
     QMediaFormat format(QMediaFormat::Ogg);
     format.setAudioCodec(QMediaFormat::AudioCodec::Vorbis);
@@ -193,7 +189,7 @@ constexpr int kAudioCopyChunkSize = 1024 * 1024;
     if (!error->isEmpty()) {
         return false;
     }
-    if (destination.size() == 0 || !destination.commit()) {
+    if (destination.size() == 0) {
         *error = QStringLiteral("Could not finish writing the Ogg Vorbis audio.");
         return false;
     }
@@ -253,11 +249,12 @@ bool validateAudioSource(const QString& path, QString* error) {
     return validateAudio(path, nullptr, error);
 }
 
-bool exportOggAudio(const QString& sourcePath, const QByteArray& sourceData,
-    const QString& destinationPath, QString* error, const AudioExportProgress& progress) {
+namespace {
+
+[[nodiscard]] bool writeOggAudio(const QString& sourcePath, const QByteArray& sourceData,
+    QIODevice& destination, QString* error, const AudioExportProgress& progress) {
     QFile file(sourcePath);
     QBuffer buffer;
-    QSaveFile destination(destinationPath);
     QIODevice* source = sourceData.isEmpty() ? static_cast<QIODevice*>(&file) : &buffer;
     error->clear();
     buffer.setData(sourceData);
@@ -269,12 +266,8 @@ bool exportOggAudio(const QString& sourcePath, const QByteArray& sourceData,
         *error = QStringLiteral("Could not read the project song: %1").arg(source->errorString());
         return false;
     }
-    if (!destination.open(QIODevice::WriteOnly)) {
-        *error = QStringLiteral("Could not write the exported song: %1").arg(destination.errorString());
-        return false;
-    }
     const QByteArray header = source->peek(kOggProbeSize);
-    if (isOggVorbis(header)) {
+    if (isOggVorbis(header) && isProjectVorbisAudio(source->peek(source->size()))) {
         if (!validateAudio({}, source, error)) {
             return false;
         }
@@ -286,6 +279,39 @@ bool exportOggAudio(const QString& sourcePath, const QByteArray& sourceData,
     }
 
     return transcodeAudio(*source, destination, error, progress);
+}
+
+} // namespace
+
+QByteArray encodeOggAudio(const QString& sourcePath, const QByteArray& sourceData,
+    QString* error, const AudioExportProgress& progress) {
+    QByteArray bytes;
+    QBuffer destination(&bytes);
+    destination.open(QIODevice::WriteOnly);
+    if (!writeOggAudio(sourcePath, sourceData, destination, error, progress)) {
+        return {};
+    }
+
+    return bytes;
+}
+
+bool exportOggAudio(const QString& sourcePath, const QByteArray& sourceData,
+    const QString& destinationPath, QString* error, const AudioExportProgress& progress) {
+    QSaveFile destination(destinationPath);
+    error->clear();
+    if (!destination.open(QIODevice::WriteOnly)) {
+        *error = QStringLiteral("Could not write the exported song: %1").arg(destination.errorString());
+        return false;
+    }
+    if (!writeOggAudio(sourcePath, sourceData, destination, error, progress)) {
+        return false;
+    }
+    if (!destination.commit()) {
+        *error = QStringLiteral("Could not finish writing the Ogg Vorbis audio.");
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace infalsus

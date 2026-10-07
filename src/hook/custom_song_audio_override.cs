@@ -1,297 +1,361 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using HarmonyLib;
+using Il2CppInterop.Runtime;
 using Il2Cpp_J;
 using Il2CppFMOD;
 
 namespace InFalsusCustomSongHook;
 
-/// <summary>
-/// Lets the normal audio manager create a _Cg using the template request, then
-/// replaces that _Cg's source and (when already allocated) its paused channel
-/// with an external-WAV Sound created from the same running FMOD System. This
-/// deliberately calls createSound; it does not Harmony-patch that generated
-/// wrapper, which stalls game startup.
-/// </summary>
 [HarmonyPatch(typeof(_zf), nameof(_zf._RFA))]
-internal static class CustomSongAudioOverride
-{
-    // Normal game streaming uses this exact FMOD MODE value for the categories
-    // used by song preview and gameplay.
-    // The game mode above includes FMOD_NONBLOCKING (0x00010000). A custom
-    // controller needs its paused channel before the transition emits its
-    // one-shot unpause signal, so open only the external WAV synchronously.
+internal static class CustomSongAudioOverride {
     private const int kExternalStreamMode = 167772296;
-    // GameAssembly's shared _Cg factory stores its FMOD_CHANNEL* at +0x10 and
-    // raw FMOD_SOUND* at +0x20. The paused flag it passes to System::playSound
-    // is at +0x4c. Preserving these controller-owned fields lets the game
-    // release/unpause the replacement at its normal transition point.
+    private const int kCreateSoundInfoSize = 224;
+    private const long kPreviewTimeoutMilliseconds = 30000;
     private const int kNativeChannelOffset = 0x10;
+    private const int kNativeChannelUserDataOffset = 0x18;
     private const int kNativeSoundOffset = 0x20;
+    private const int kNativeChannelCategoryOffset = 0x48;
     private const int kNativePausedOffset = 0x4c;
-    private const int kNativeSelectorCallbackOffset = 0x40;
-    private const int kNativeConfiguredOffset = 0x58;
+    private const int kNativePreviewLoopOffset = 0x4d;
+    private const int kNativePreviewFadeOffset = 0x4e;
     private const int kNativePreviewStartOffset = 0x30;
     private const int kNativePreviewEndOffset = 0x38;
     private const int kNativeSkipPreviewSeekOffset = 0x54;
-    private const int kFmodLoopOff = 1;
-    private const int kFmodLoopNormal = 2;
-    private const uint kFmodTimeUnitMs = 1;
-    private static readonly object Gate = new();
-    private static readonly List<PendingController> Pending = new();
-    // Harmony's generated IL2CPP trampoline invokes our prefix reliably, but
-    // does not preserve a value-type __state argument for this native method.
-    // Keep the route record on the originating thread instead.  A stack makes
-    // this correct even if the native audio factory nests an _RFA call.
-    [ThreadStatic] private static Stack<RouteState> _routes;
-    private static SoundGetSystemObjectDelegate _getSystemObject;
-    private static SystemPlaySoundDelegate _playSound;
-    private static ChannelGetChannelGroupDelegate _getChannelGroup;
-    private static ChannelSetLoopCountDelegate _setLoopCount;
-    private static ChannelSetModeDelegate _setMode;
-    private static ChannelSetLoopPointsDelegate _setLoopPoints;
-    private static ChannelSetPositionDelegate _setPosition;
-    private static ChannelStopDelegate _stopChannel;
+    private const int kNativeDisposedOffset = 0xa0;
+    private const int kNativeDisposingOffset = 0xa1;
+    private const float kInitialChannelVolume = 1.0f;
+    private static readonly object m_gate = new();
+    private static readonly List<PendingController> m_pending = new();
+    private static readonly List<OwnedSound> m_ownedSounds = new();
+    [ThreadStatic] private static Stack<RouteState> m_routes;
+    private static string m_latestPreviewBaseName;
+    private static long m_previewGeneration;
+    private static SoundGetSystemObjectDelegate m_getSystemObject;
+    private static ChannelGetCurrentSoundDelegate m_getCurrentSound;
+    private static ChannelStopDelegate m_stopChannel;
+    private static ChannelIsPlayingDelegate m_isPlaying;
+    private static SoundGetOpenStateDelegate m_getOpenState;
+    private static SoundReleaseDelegate m_releaseSound;
 
     [HarmonyPrefix]
-    private static void Prefix(ref string __0, bool __6)
-    {
+    private static void Prefix(ref string __0, ref Il2CppSystem.Action<_Cg> __2, ref bool __3, bool __6) {
         RouteState route = new();
-        (_routes ??= new Stack<RouteState>()).Push(route);
-
         CustomSongConfig config = CustomSongInstaller.FindActiveSongByBaseName(__0);
-        if (config is null || config.IsCarrierChartOverride)
-            return;
+        bool isSelection = __3 && __6;
+        bool isRootRequest = m_routes is null || m_routes.Count == 0;
+
+        (m_routes ??= new Stack<RouteState>()).Push(route);
+        lock (m_gate) {
+            if (isSelection && isRootRequest) {
+                ++m_previewGeneration;
+                m_latestPreviewBaseName = __0;
+                CustomSongMod.Log.Msg($"[CustomSong] audio preview request: {__0}; generation={m_previewGeneration}");
+            }
+            route.Generation = m_previewGeneration;
+            if (!isRootRequest && __6)
+                CustomSongMod.Log.Msg($"[CustomSong] nested audio factory route: {__0}; loop={__3}; fade={__6}; generation={route.Generation}");
+        }
+        if (config is null || config.IsCarrierChartOverride) return;
 
         string templateBaseName = CustomSongInstaller.GetTemplateBaseName(config);
         if (string.IsNullOrWhiteSpace(templateBaseName)) return;
 
-        __0 = templateBaseName;
-        route.IsCustom = true;
         route.Config = config;
-        // _RFA's seventh argument distinguishes the two native call sites:
-        // song-select preview passes true; GameScene gameplay passes false.
-        route.IsSelection = __6;
+        route.IsSelection = isSelection;
+        if (isSelection) {
+            route.SelectorCallback = __2;
+            route.FactoryCallback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<_Cg>>(
+                new Action<_Cg>(controller => {
+                    lock (m_gate) route.NativeReady = true;
+                }));
+            __2 = route.FactoryCallback;
+            __3 = false;
+        }
+        __0 = templateBaseName;
     }
 
     [HarmonyPostfix]
-    private static void Postfix(_Cg __result)
-    {
-        if (_routes is null || _routes.Count == 0) return;
+    private static void Postfix(_Cg __result) {
+        if (m_routes is null || m_routes.Count == 0) return;
 
-        RouteState route = _routes.Pop();
-        if (!route.IsCustom) return;
-        if (__result is null)
-        {
+        RouteState route = m_routes.Pop();
+        if (route.Config is null) return;
+        if (__result is null) {
             CustomSongMod.Log.Warning("[CustomSong] custom audio factory returned a null controller.");
             return;
         }
 
-        lock (Gate)
-        {
-            foreach (PendingController pending in Pending)
-            {
-                if (pending.Controller.Pointer == __result.Pointer) return;
-            }
-            Pending.Add(new PendingController(__result, route.IsSelection, route.Config));
-        }
-    }
-
-    internal static void Tick()
-    {
-        lock (Gate)
-        {
-            for (int index = Pending.Count - 1; index >= 0; index--)
-            {
-                PendingController pending = Pending[index];
-                _Cg cg = pending.Controller;
-                if (cg is null || cg.Pointer == IntPtr.Zero)
-                {
-                    Pending.RemoveAt(index);
-                    continue;
-                }
-                if (GetNativeSound(cg) == IntPtr.Zero) continue;
-
-                try
-                {
-                    ReplaceSound(cg, pending.IsSelection, pending.Config);
-                }
-                catch (Exception exception)
-                {
-                    CustomSongMod.Log.Error("[CustomSong] external WAV replacement failed: " + exception);
-                }
-                Pending.RemoveAt(index);
+        lock (m_gate) {
+            PendingController pending = new(__result, route);
+            m_pending.Add(pending);
+            if (!route.IsSelection) return;
+            try {
+                OpenPreview(pending);
+            } catch (Exception exception) {
+                FailPending(pending, exception);
+                m_pending.Remove(pending);
             }
         }
     }
 
-    private static void ReplaceSound(_Cg cg, bool isSelection, CustomSongConfig config)
-    {
-        IntPtr templateSound = GetNativeSound(cg);
-        Il2CppFMOD.System fmodSystem = GetSystem(templateSound);
-        CREATESOUNDEXINFO exInfo = default;
-        exInfo.cbsize = 224;
-        exInfo.ignoresetfilesystem = 1;
-        RESULT result = fmodSystem.createSound(
-            config.AudioPath,
-            (MODE)kExternalStreamMode,
-            ref exInfo,
-            out Sound externalSound);
+    internal static void Tick() {
+        lock (m_gate) {
+            for (int index = m_pending.Count - 1; index >= 0; --index) {
+                PendingController pending = m_pending[index];
+                try {
+                    if (IsRetired(pending.Controller)) {
+                        if (pending.Route.IsSelection)
+                            CustomSongMod.Log.Msg($"[CustomSong] audio preview retired before ready: {pending.Route.Config.ChartId}; generation={pending.Route.Generation}");
+                        m_pending.RemoveAt(index);
+                        continue;
+                    }
+                    if (pending.Route.IsSelection && pending.Route.Generation != m_previewGeneration) {
+                        RetireController(pending.Controller);
+                        CustomSongMod.Log.Msg($"[CustomSong] superseded audio preview: {pending.Route.Config.ChartId}; generation={pending.Route.Generation}; activeGeneration={m_previewGeneration}; activeSong={m_latestPreviewBaseName}");
+                        m_pending.RemoveAt(index);
+                        continue;
+                    }
+                    if (GetNativeSound(pending.Controller) == IntPtr.Zero) continue;
+                    if (pending.Route.IsSelection) {
+                        if (!AdvancePreview(pending)) continue;
+                    } else {
+                        ReplaceGameplaySound(pending);
+                    }
+                    m_pending.RemoveAt(index);
+                } catch (Exception exception) {
+                    FailPending(pending, exception);
+                    m_pending.RemoveAt(index);
+                }
+            }
+            ReleaseRetiredSounds();
+        }
+    }
 
+    private static void OpenPreview(PendingController pending) {
+        _Cg controller = pending.Controller;
+        IntPtr templateSound = GetNativeSound(controller);
+        if (IsRetired(controller) || templateSound == IntPtr.Zero) return;
+
+        pending.OriginalChannel = GetNativeChannel(controller);
+        pending.Sound = OpenSound(controller, pending.Route, templateSound, true);
+        SetNativeSound(controller, pending.Sound.Handle);
+        CustomSongMod.Log.Msg($"[CustomSong] audio preview loading: {pending.Route.Config.ChartId}; generation={pending.Route.Generation}");
+    }
+
+    private static bool AdvancePreview(PendingController pending) {
+        _Cg controller = pending.Controller;
+        if (pending.Elapsed.ElapsedMilliseconds >= kPreviewTimeoutMilliseconds)
+            throw new TimeoutException("external audio preview did not become ready");
+        if (pending.Sound is null) OpenPreview(pending);
+        if (pending.Sound is null) return false;
+        if (!IsSoundReady(pending.Sound.Handle) || !pending.Route.NativeReady) return false;
+
+        if (!pending.SeekIssued) {
+            IntPtr channel = pending.OriginalChannel == IntPtr.Zero
+                ? GetNativeChannel(controller) : ReplaceChannel(controller, pending.Sound, pending.OriginalChannel);
+            m_getCurrentSound ??= ResolveExport<ChannelGetCurrentSoundDelegate>("FMOD5_Channel_GetCurrentSound");
+            int currentSoundStatus = m_getCurrentSound(channel, out IntPtr channelSound);
+            if (currentSoundStatus != 0 || channelSound != pending.Sound.Handle)
+                throw new InvalidOperationException("preview channel does not own the external sound");
+
+            pending.Sound.Channel = channel;
+            ConfigurePreview(controller, channel);
+            pending.SeekIssued = true;
+
+            return false;
+        }
+
+        Marshal.WriteByte(IntPtr.Add(controller.Pointer, kNativePreviewLoopOffset), 1);
+        pending.Route.SelectorCallback?.Invoke(controller);
+        CustomSongMod.Log.Msg($"[CustomSong] audio preview ready: {pending.Route.Config.ChartId}; generation={pending.Route.Generation}; elapsed={pending.Elapsed.ElapsedMilliseconds} ms");
+
+        return true;
+    }
+
+    private static void ReplaceGameplaySound(PendingController pending) {
+        _Cg controller = pending.Controller;
+        OwnedSound sound = OpenSound(controller, pending.Route, GetNativeSound(controller), false);
+        IntPtr originalChannel = GetNativeChannel(controller);
+
+        SetNativeSound(controller, sound.Handle);
+        ReplaceChannel(controller, sound, originalChannel);
+    }
+
+    private static OwnedSound OpenSound(_Cg controller, RouteState route, IntPtr templateSound, bool nonblocking) {
+        Il2CppFMOD.System system = GetSystem(templateSound);
+        CREATESOUNDEXINFO info = default;
+        MODE mode = (MODE)kExternalStreamMode;
+
+        info.cbsize = kCreateSoundInfoSize;
+        info.ignoresetfilesystem = 1;
+        if (nonblocking) mode |= MODE.NONBLOCKING;
+        RESULT result = system.createSound(route.Config.AudioPath, mode, ref info, out Sound externalSound);
         if ((int)result != 0 || externalSound.handle == IntPtr.Zero)
             throw new InvalidOperationException($"FMOD createSound returned {result}; handle={externalSound.handle}");
 
-        // A zero flag means the factory deferred its normal configure/callback
-        // pass, which will consume the replacement on its own.  A set flag
-        // means a cached template completed that pass before our postfix; the
-        // replacement needs the exact same native pass replayed below.
-        bool wasConfigured = Marshal.ReadByte(IntPtr.Add(cg.Pointer, kNativeConfiguredOffset)) != 0;
-        IntPtr originalChannel = GetNativeChannel(cg);
-        SetNativeSound(cg, externalSound.handle);
+        OwnedSound ownedSound = new(controller, route, externalSound.handle);
+        m_ownedSounds.Add(ownedSound);
 
-        // A deferred factory result has no channel when the gameplay cutscene
-        // sends its one-shot unpause signal. Prime the external channel now in
-        // the exact paused state the factory requested and publish it through
-        // _Cg + 0x10. The normal game controller then owns that channel.
-        _playSound ??= ResolveExport<SystemPlaySoundDelegate>("FMOD5_System_PlaySound");
-        _getChannelGroup ??= ResolveExport<ChannelGetChannelGroupDelegate>("FMOD5_Channel_GetChannelGroup");
-        _setLoopCount ??= ResolveExport<ChannelSetLoopCountDelegate>("FMOD5_Channel_SetLoopCount");
-        _setMode ??= ResolveExport<ChannelSetModeDelegate>("FMOD5_Channel_SetMode");
-        _stopChannel ??= ResolveExport<ChannelStopDelegate>("FMOD5_Channel_Stop");
-
-        IntPtr channelGroup = IntPtr.Zero;
-        if (originalChannel != IntPtr.Zero)
-        {
-            int groupStatus = _getChannelGroup(originalChannel, out channelGroup);
-            if (groupStatus != 0 || channelGroup == IntPtr.Zero)
-                throw new InvalidOperationException($"FMOD Channel::getChannelGroup returned {groupStatus}; channel={originalChannel}");
-        }
-
-        int paused = Marshal.ReadByte(IntPtr.Add(cg.Pointer, kNativePausedOffset)) != 0 ? 1 : 0;
-        int playStatus = _playSound(fmodSystem.handle, externalSound.handle, channelGroup, paused, out IntPtr replacementChannel);
-        if (playStatus != 0 || replacementChannel == IntPtr.Zero)
-            throw new InvalidOperationException($"FMOD System::playSound returned {playStatus}; channel={replacementChannel}");
-
-        int modeStatus = _setMode(replacementChannel, kFmodLoopOff);
-        int loopStatus = _setLoopCount(replacementChannel, 0);
-        if (modeStatus != 0 || loopStatus != 0)
-            throw new InvalidOperationException($"FMOD one-shot setup failed: SetMode={modeStatus}; SetLoopCount={loopStatus}");
-
-        SetNativeChannel(cg, replacementChannel);
-        if (originalChannel != IntPtr.Zero)
-        {
-            int stopStatus = _stopChannel(originalChannel);
-            if (stopStatus != 0)
-                throw new InvalidOperationException($"FMOD Channel::stop returned {stopStatus}; channel={originalChannel}");
-        }
-
-        if (isSelection && wasConfigured)
-            ReplayCompletedSelectionSetup(cg, replacementChannel);
+        return ownedSound;
     }
 
-    private static void ReplayCompletedSelectionSetup(_Cg cg, IntPtr replacementChannel)
-    {
-        IntPtr callbackPointer = Marshal.ReadIntPtr(IntPtr.Add(cg.Pointer, kNativeSelectorCallbackOffset));
-        if (callbackPointer == IntPtr.Zero)
-            throw new InvalidOperationException("cached selection controller has no native continuation");
+    private static IntPtr ReplaceChannel(_Cg controller, OwnedSound sound, IntPtr originalChannel) {
+        Sound externalSound = new() { handle = sound.Handle };
+        _IF._jF category = (_IF._jF)Marshal.ReadInt32(IntPtr.Add(controller.Pointer, kNativeChannelCategoryOffset));
+        IntPtr userData = Marshal.ReadIntPtr(IntPtr.Add(controller.Pointer, kNativeChannelUserDataOffset));
+        bool paused = Marshal.ReadByte(IntPtr.Add(controller.Pointer, kNativePausedOffset)) != 0;
 
-        // 0x18044A6A0 normally performs this exact FMOD setup before calling
-        // the selector continuation. It cannot safely be re-entered after its
-        // immediate branch has retired its queue bookkeeping, so reproduce
-        // just its documented channel operations against the replacement.
+        Channel replacementChannel = _IF._oGA(category, externalSound, paused, kInitialChannelVolume, userData);
+        if (replacementChannel.handle == IntPtr.Zero)
+            throw new InvalidOperationException("game audio factory returned a null channel");
+
+        sound.Channel = replacementChannel.handle;
+        SetNativeChannel(controller, replacementChannel.handle);
+        if (originalChannel != IntPtr.Zero) {
+            m_stopChannel ??= ResolveExport<ChannelStopDelegate>("FMOD5_Channel_Stop");
+            m_stopChannel(originalChannel);
+        }
+
+        return replacementChannel.handle;
+    }
+
+    private static void ConfigurePreview(_Cg controller, IntPtr channel) {
+        Channel previewChannel = new() { handle = channel };
+        bool fade = Marshal.ReadByte(IntPtr.Add(controller.Pointer, kNativePreviewFadeOffset)) != 0;
+        bool skipSeek = Marshal.ReadByte(IntPtr.Add(controller.Pointer, kNativeSkipPreviewSeekOffset)) != 0;
         double startSeconds = BitConverter.Int64BitsToDouble(
-            Marshal.ReadInt64(IntPtr.Add(cg.Pointer, kNativePreviewStartOffset)));
+            Marshal.ReadInt64(IntPtr.Add(controller.Pointer, kNativePreviewStartOffset)));
         double endSeconds = BitConverter.Int64BitsToDouble(
-            Marshal.ReadInt64(IntPtr.Add(cg.Pointer, kNativePreviewEndOffset)));
-        uint startMs = SecondsToMilliseconds(startSeconds);
-        uint endMs = SecondsToMilliseconds(endSeconds);
+            Marshal.ReadInt64(IntPtr.Add(controller.Pointer, kNativePreviewEndOffset)));
 
-        _setLoopPoints ??= ResolveExport<ChannelSetLoopPointsDelegate>("FMOD5_Channel_SetLoopPoints");
-        _setPosition ??= ResolveExport<ChannelSetPositionDelegate>("FMOD5_Channel_SetPosition");
-        int loopCountStatus = _setLoopCount(replacementChannel, -1);
-        int loopPointsStatus = _setLoopPoints(
-            replacementChannel, startMs, kFmodTimeUnitMs, endMs, kFmodTimeUnitMs);
-        int loopModeStatus = _setMode(replacementChannel, kFmodLoopNormal);
-        if (loopCountStatus != 0 || loopPointsStatus != 0 || loopModeStatus != 0)
-            throw new InvalidOperationException(
-                $"native preview channel setup failed: count={loopCountStatus}; points={loopPointsStatus}; mode={loopModeStatus}");
-
-        if (Marshal.ReadByte(IntPtr.Add(cg.Pointer, kNativeSkipPreviewSeekOffset)) == 0)
-        {
-            int seekStatus = _setPosition(replacementChannel, startMs, kFmodTimeUnitMs);
-            if (seekStatus != 0)
-                throw new InvalidOperationException($"native preview seek failed: status={seekStatus}; startMs={startMs}");
-        }
-
-        new Il2CppSystem.Action<_Cg>(callbackPointer).Invoke(cg);
+        _IF._RGA(previewChannel, startSeconds, endSeconds, fade);
+        if (!skipSeek) _IF._sGA(previewChannel, startSeconds);
     }
 
-    private static uint SecondsToMilliseconds(double seconds)
-    {
-        if (double.IsNaN(seconds) || seconds <= 0.0) return 0;
-        if (double.IsInfinity(seconds) || seconds >= uint.MaxValue / 1000.0) return uint.MaxValue;
-        return (uint)(seconds * 1000.0);
+    private static bool IsSoundReady(IntPtr sound) {
+        m_getOpenState ??= ResolveExport<SoundGetOpenStateDelegate>("FMOD5_Sound_GetOpenState");
+        int status = m_getOpenState(sound, out OPENSTATE state, out _, out _, out _);
+        if (status == (int)RESULT.ERR_NOTREADY) return false;
+        CheckResult(status, "Sound::getOpenState");
+        if (state == OPENSTATE.ERROR) throw new InvalidOperationException("external audio stream failed to open");
+
+        return state == OPENSTATE.READY || state == OPENSTATE.PLAYING;
     }
 
-    private static IntPtr GetNativeSound(_Cg cg)
-    {
-        return Marshal.ReadIntPtr(IntPtr.Add(cg.Pointer, kNativeSoundOffset));
+    private static bool IsRetired(_Cg controller) {
+        return controller is null || controller.Pointer == IntPtr.Zero
+            || Marshal.ReadByte(IntPtr.Add(controller.Pointer, kNativeDisposedOffset)) != 0
+            || Marshal.ReadByte(IntPtr.Add(controller.Pointer, kNativeDisposingOffset)) != 0;
     }
 
-    private static IntPtr GetNativeChannel(_Cg cg)
-    {
-        return Marshal.ReadIntPtr(IntPtr.Add(cg.Pointer, kNativeChannelOffset));
+    private static void RetireController(_Cg controller) {
+        if (!IsRetired(controller)) controller.Dispose();
     }
 
-    private static void SetNativeSound(_Cg cg, IntPtr sound)
-    {
-        Marshal.WriteIntPtr(IntPtr.Add(cg.Pointer, kNativeSoundOffset), sound);
-    }
-
-    private static void SetNativeChannel(_Cg cg, IntPtr channel)
-    {
-        Marshal.WriteIntPtr(IntPtr.Add(cg.Pointer, kNativeChannelOffset), channel);
-    }
-
-    private static Il2CppFMOD.System GetSystem(IntPtr sound)
-    {
-        lock (Gate)
-        {
-            _getSystemObject ??= ResolveGetSystemObject();
-            int status = _getSystemObject(sound, out IntPtr handle);
-            if (status != 0 || handle == IntPtr.Zero)
-                throw new InvalidOperationException($"FMOD Sound::getSystemObject returned {status}; source={sound}; system={handle}");
-            return new Il2CppFMOD.System { handle = handle };
+    private static void FailPending(PendingController pending, Exception exception) {
+        CustomSongMod.Log.Error($"[CustomSong] external audio replacement failed: {pending.Route.Config.ChartId}; {exception}");
+        try {
+            RetireController(pending.Controller);
+        } catch (Exception retirementException) {
+            CustomSongMod.Log.Warning("[CustomSong] audio controller retirement failed: " + retirementException.Message);
         }
     }
 
-    private static SoundGetSystemObjectDelegate ResolveGetSystemObject()
-    {
-        // The copied FMOD databases contain this C ABI export. Resolve it at
-        // runtime just as the game's native bridge resolves FMOD5 callbacks;
-        // do not call a C++ member-function RVA against an opaque handle.
-        IntPtr module = GetModuleHandle("fmodstudioL.dll");
-        if (module == IntPtr.Zero) module = GetModuleHandle("fmodstudio.dll");
-        if (module == IntPtr.Zero)
-            throw new InvalidOperationException("FMOD runtime module is not loaded");
-        return ResolveExport<SoundGetSystemObjectDelegate>("FMOD5_Sound_GetSystemObject", module);
+    private static void ReleaseRetiredSounds() {
+        if (m_ownedSounds.Count == 0) return;
+
+        m_getOpenState ??= ResolveExport<SoundGetOpenStateDelegate>("FMOD5_Sound_GetOpenState");
+        m_releaseSound ??= ResolveExport<SoundReleaseDelegate>("FMOD5_Sound_Release");
+        m_isPlaying ??= ResolveExport<ChannelIsPlayingDelegate>("FMOD5_Channel_IsPlaying");
+        for (int index = m_ownedSounds.Count - 1; index >= 0; --index) {
+            OwnedSound sound = m_ownedSounds[index];
+            if (!IsRetired(sound.Controller) && GetNativeSound(sound.Controller) == sound.Handle) {
+                IntPtr channel = GetNativeChannel(sound.Controller);
+                if (ChannelOwnsSound(channel, sound.Handle)) sound.Channel = channel;
+                continue;
+            }
+            if (ChannelOwnsSound(sound.Channel, sound.Handle)
+                && m_isPlaying(sound.Channel, out int playing) == 0 && playing != 0) continue;
+
+            int stateStatus = m_getOpenState(sound.Handle, out OPENSTATE state, out _, out _, out _);
+            if (stateStatus == (int)RESULT.ERR_INVALID_HANDLE) {
+                m_ownedSounds.RemoveAt(index);
+                continue;
+            }
+            if (state != OPENSTATE.ERROR && (stateStatus != 0 || state != OPENSTATE.READY)) continue;
+            int releaseStatus = m_releaseSound(sound.Handle);
+            if (releaseStatus != 0)
+                CustomSongMod.Log.Warning($"[CustomSong] external audio release returned {releaseStatus}: {sound.Route.Config.ChartId}");
+            m_ownedSounds.RemoveAt(index);
+        }
     }
 
-    private static T ResolveExport<T>(string exportName) where T : Delegate
-    {
-        IntPtr module = GetModuleHandle("fmodstudioL.dll");
-        if (module == IntPtr.Zero) module = GetModuleHandle("fmodstudio.dll");
-        if (module == IntPtr.Zero)
-            throw new InvalidOperationException("FMOD runtime module is not loaded");
-        return ResolveExport<T>(exportName, module);
+    internal static void Dispose() {
+        lock (m_gate) {
+            foreach (OwnedSound sound in m_ownedSounds) {
+                try {
+                    RetireController(sound.Controller);
+                    if (ChannelOwnsSound(sound.Channel, sound.Handle)) {
+                        m_stopChannel ??= ResolveExport<ChannelStopDelegate>("FMOD5_Channel_Stop");
+                        m_stopChannel(sound.Channel);
+                    }
+                } catch (Exception exception) {
+                    CustomSongMod.Log.Warning("[CustomSong] audio shutdown failed: " + exception.Message);
+                }
+            }
+            m_pending.Clear();
+            ReleaseRetiredSounds();
+        }
     }
 
-    private static T ResolveExport<T>(string exportName, IntPtr module) where T : Delegate
-    {
+    private static bool ChannelOwnsSound(IntPtr channel, IntPtr sound) {
+        if (channel == IntPtr.Zero) return false;
+
+        m_getCurrentSound ??= ResolveExport<ChannelGetCurrentSoundDelegate>("FMOD5_Channel_GetCurrentSound");
+
+        return m_getCurrentSound(channel, out IntPtr currentSound) == 0 && currentSound == sound;
+    }
+
+    private static void CheckResult(int status, string operation) {
+        if (status != 0) throw new InvalidOperationException($"FMOD {operation} returned {status}");
+    }
+
+    private static IntPtr GetNativeSound(_Cg controller) {
+        return Marshal.ReadIntPtr(IntPtr.Add(controller.Pointer, kNativeSoundOffset));
+    }
+
+    private static IntPtr GetNativeChannel(_Cg controller) {
+        return Marshal.ReadIntPtr(IntPtr.Add(controller.Pointer, kNativeChannelOffset));
+    }
+
+    private static void SetNativeSound(_Cg controller, IntPtr sound) {
+        Marshal.WriteIntPtr(IntPtr.Add(controller.Pointer, kNativeSoundOffset), sound);
+    }
+
+    private static void SetNativeChannel(_Cg controller, IntPtr channel) {
+        Marshal.WriteIntPtr(IntPtr.Add(controller.Pointer, kNativeChannelOffset), channel);
+    }
+
+    private static Il2CppFMOD.System GetSystem(IntPtr sound) {
+        m_getSystemObject ??= ResolveExport<SoundGetSystemObjectDelegate>("FMOD5_Sound_GetSystemObject");
+        int status = m_getSystemObject(sound, out IntPtr handle);
+        if (status != 0 || handle == IntPtr.Zero)
+            throw new InvalidOperationException($"FMOD Sound::getSystemObject returned {status}");
+
+        return new Il2CppFMOD.System { handle = handle };
+    }
+
+    private static T ResolveExport<T>(string exportName) where T : Delegate {
+        IntPtr module = GetModuleHandle("fmodstudioL.dll");
+        if (module == IntPtr.Zero) module = GetModuleHandle("fmodstudio.dll");
+        if (module == IntPtr.Zero) throw new InvalidOperationException("FMOD runtime module is not loaded");
+
         IntPtr address = GetProcAddress(module, exportName);
-        if (address == IntPtr.Zero)
-            throw new InvalidOperationException(exportName + " export is unavailable");
+        if (address == IntPtr.Zero) throw new InvalidOperationException(exportName + " export is unavailable");
+
         return Marshal.GetDelegateForFunctionPointer<T>(address);
     }
 
@@ -305,49 +369,53 @@ internal static class CustomSongAudioOverride
     private delegate int SoundGetSystemObjectDelegate(IntPtr sound, out IntPtr system);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int SystemPlaySoundDelegate(IntPtr system, IntPtr sound, IntPtr channelGroup, int paused, out IntPtr channel);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int ChannelGetChannelGroupDelegate(IntPtr channel, out IntPtr channelGroup);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int ChannelSetLoopCountDelegate(IntPtr channel, int loopCount);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int ChannelSetModeDelegate(IntPtr channel, int mode);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int ChannelSetLoopPointsDelegate(
-        IntPtr channel,
-        uint loopStart,
-        uint loopStartType,
-        uint loopEnd,
-        uint loopEndType);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int ChannelSetPositionDelegate(IntPtr channel, uint position, uint timeUnit);
+    private delegate int ChannelGetCurrentSoundDelegate(IntPtr channel, out IntPtr sound);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int ChannelStopDelegate(IntPtr channel);
 
-    private sealed class PendingController
-    {
-        internal PendingController(_Cg controller, bool isSelection, CustomSongConfig config)
-        {
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int ChannelIsPlayingDelegate(IntPtr channel, out int playing);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int SoundGetOpenStateDelegate(IntPtr sound, out OPENSTATE state, out uint percentBuffered, out int starving, out int diskBusy);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int SoundReleaseDelegate(IntPtr sound);
+
+    private sealed class PendingController {
+        internal PendingController(_Cg controller, RouteState route) {
             Controller = controller;
-            IsSelection = isSelection;
-            Config = config;
+            Route = route;
         }
 
         internal _Cg Controller { get; }
-        internal bool IsSelection { get; }
-        internal CustomSongConfig Config { get; }
+        internal RouteState Route { get; }
+        internal Stopwatch Elapsed { get; } = Stopwatch.StartNew();
+        internal OwnedSound Sound { get; set; }
+        internal IntPtr OriginalChannel { get; set; }
+        internal bool SeekIssued { get; set; }
     }
 
-    private sealed class RouteState
-    {
-        internal bool IsCustom;
-        internal bool IsSelection;
+    private sealed class OwnedSound {
+        internal OwnedSound(_Cg controller, RouteState route, IntPtr handle) {
+            Controller = controller;
+            Route = route;
+            Handle = handle;
+        }
+
+        internal _Cg Controller { get; }
+        internal RouteState Route { get; }
+        internal IntPtr Handle { get; }
+        internal IntPtr Channel { get; set; }
+    }
+
+    private sealed class RouteState {
         internal CustomSongConfig Config;
+        internal Il2CppSystem.Action<_Cg> SelectorCallback;
+        internal Il2CppSystem.Action<_Cg> FactoryCallback;
+        internal long Generation;
+        internal bool IsSelection;
+        internal bool NativeReady;
     }
 }

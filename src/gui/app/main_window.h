@@ -15,6 +15,7 @@ class ConveyorView;
 class PlaybackController;
 class QAudioBuffer;
 class QAudioDecoder;
+class QBuffer;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -72,8 +73,10 @@ private:
     void loadProject(const QString& path);
     void rememberRecentProject(const QString& path);
     void refreshRecentProjectMenu();
-    void saveProject();
+    bool saveProject();
     void saveProjectAs();
+    [[nodiscard]] bool requireChartId(ChartProject* project);
+    [[nodiscard]] bool normalizeAssets(ChartProject* project, QByteArray* audio, QByteArray* jacket);
     void exportProject();
     void storeLoadedDifficulty();
     void loadDifficulty(infalsus::Difficulty difficulty);
@@ -97,6 +100,7 @@ private:
     KeyBindingRouter* m_keyBindings = nullptr;
     PlaybackController* m_playback = nullptr;
     QAudioDecoder* m_timingDecoder = nullptr;
+    QBuffer* m_timingAudioBuffer = nullptr;
     ConveyorView* m_viewer = nullptr;
     FlatView* m_flatView = nullptr;
     QWidget* m_contentHost = nullptr;

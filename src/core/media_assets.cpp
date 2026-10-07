@@ -133,16 +133,29 @@ bool readJacketImage(const QByteArray& data, QImage* image, QString* error) {
     return readJacket(reader, image, error);
 }
 
+QByteArray encodeJacketImage(const QImage& image, QString* error) {
+    QByteArray data;
+    QBuffer buffer(&data);
+    const QImage normalized = normalizedJacket(image);
+    buffer.open(QIODevice::WriteOnly);
+    QImageWriter writer(&buffer, "png");
+    if (normalized.isNull() || !writer.write(normalized)) {
+        *error = QStringLiteral("Could not encode the jacket PNG: %1").arg(writer.errorString());
+        return {};
+    }
+
+    return data;
+}
+
 bool writeJacketImage(const QImage& image, const QString& path, QString* error) {
     QSaveFile file(path);
-    const QImage normalized = normalizedJacket(image);
-    if (normalized.isNull() || !file.open(QIODevice::WriteOnly)) {
+    const QByteArray data = encodeJacketImage(image, error);
+    if (data.isEmpty() || !file.open(QIODevice::WriteOnly)) {
         *error = QStringLiteral("Could not write the jacket PNG: %1").arg(file.errorString());
         return false;
     }
-    QImageWriter writer(&file, "png");
-    if (!writer.write(normalized) || !file.commit()) {
-        *error = QStringLiteral("Could not write the jacket PNG: %1").arg(writer.errorString());
+    if (file.write(data) != data.size() || !file.commit()) {
+        *error = QStringLiteral("Could not write the jacket PNG: %1").arg(file.errorString());
         return false;
     }
 

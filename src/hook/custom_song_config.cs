@@ -9,6 +9,7 @@ namespace InFalsusCustomSongHook;
 
 internal sealed class CustomSongConfig
 {
+    private static readonly System.Collections.Generic.HashSet<string> ReportedFolderErrors = new(StringComparer.OrdinalIgnoreCase);
     public bool Enabled { get; set; }
     // A library is a set of real PackData entries.  Each collection becomes a
     // separate arc on the game's pack-select screen and can contain any
@@ -143,43 +144,50 @@ internal sealed class CustomSongConfig
             var songs = new System.Collections.Generic.List<CustomSongConfig>();
             foreach (string directory in Directory.EnumerateDirectories(CustomChartsRoot).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
-                string folderConfigPath = Path.Combine(directory, "config.json");
-                if (!File.Exists(folderConfigPath)) continue;
-
-                CustomSongConfig folderConfig = JsonSerializer.Deserialize<CustomSongConfig>(
-                    File.ReadAllText(folderConfigPath),
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (folderConfig is null)
-                    throw new InvalidDataException("configuration is empty: " + folderConfigPath);
-                if (!folderConfig.Enabled) continue;
-
-                // Accept the prior one-collection/one-song file shape as a
-                // migration convenience. The collection metadata belongs to
-                // the aggregate Custom Charts arc, not to an individual
-                // folder, so unwrap its only song.
-                CustomSongConfig song = folderConfig;
-                if (folderConfig.IsLibrary)
+                try
                 {
-                    if (folderConfig.Collections.Length != 1 ||
-                        folderConfig.Collections[0]?.Songs?.Length != 1)
-                    {
-                        throw new InvalidDataException(
-                            "folder config with collections must contain exactly one collection and one song: " +
-                            folderConfigPath);
-                    }
-                    song = folderConfig.Collections[0].Songs[0] ?? throw new InvalidDataException(
-                        "folder collection song cannot be null: " + folderConfigPath);
-                }
-                if (song.IsLibrary || song.IsCarrierChartOverride)
-                    throw new InvalidDataException("folder config must describe one injected song: " + folderConfigPath);
+                    if (Path.GetFileName(directory).StartsWith(".inlibertas-", StringComparison.OrdinalIgnoreCase)) continue;
+                    ProjectExport.EnsureOrdinary(directory);
+                    string folderConfigPath = Path.Combine(directory, "config.json");
+                    if (!File.Exists(folderConfigPath)) continue;
 
-                // A chart-folder is an opinionated, complete package: its two
-                // jacket PNGs are part of the declared layout, so enable the
-                // established loose-jacket route without requiring every
-                // per-song config to repeat that implementation detail.
-                song.EnableLoosePngJackets = true;
-                song.ContentDirectory = directory;
-                songs.Add(song);
+                    CustomSongConfig folderConfig = JsonSerializer.Deserialize<CustomSongConfig>(
+                        File.ReadAllText(folderConfigPath),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (folderConfig is null)
+                        throw new InvalidDataException("configuration is empty: " + folderConfigPath);
+                    if (!folderConfig.Enabled) continue;
+
+                    CustomSongConfig song = folderConfig;
+                    if (folderConfig.IsLibrary)
+                    {
+                        if (folderConfig.Collections.Length != 1 || folderConfig.Collections[0]?.Songs?.Length != 1)
+                            throw new InvalidDataException("Folder config must contain one collection and one song.");
+                        song = folderConfig.Collections[0].Songs[0]
+                            ?? throw new InvalidDataException("Folder song cannot be null.");
+                    }
+                    if (song.IsLibrary || song.IsCarrierChartOverride)
+                        throw new InvalidDataException("Folder config must describe one injected song.");
+                    song.EnableLoosePngJackets = true;
+                    song.ContentDirectory = directory;
+                    if (!ValidateLibrarySong(song, out string songError))
+                        throw new InvalidDataException(songError);
+                    foreach (CustomSongConfig entry in song.ExpandDifficulties())
+                        if (!File.Exists(Path.Combine(directory, entry.ExternalChartStem + ".spc"))
+                            && !File.Exists(Path.Combine(directory, entry.ExternalChartStem + ".sam")))
+                            throw new InvalidDataException("Chart payload not found: " + entry.ExternalChartStem);
+                    if (songs.Any(existing => string.Equals(existing.BaseName ?? existing.ChartId, song.BaseName ?? song.ChartId, StringComparison.OrdinalIgnoreCase)
+                        || existing.ExpandDifficulties().Any(entry => song.ExpandDifficulties().Any(candidate =>
+                            string.Equals(entry.ChartId, candidate.ChartId, StringComparison.OrdinalIgnoreCase)))))
+                        throw new InvalidDataException("Duplicate custom song/chart identity.");
+                    songs.Add(song);
+                }
+                catch (Exception exception)
+                {
+                    string warning = directory + ": " + exception.Message;
+                    if (ReportedFolderErrors.Add(warning))
+                        CustomSongMod.Log.Warning("[CustomSong] skipped chart folder " + warning);
+                }
             }
 
             if (songs.Count == 0)
