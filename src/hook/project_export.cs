@@ -15,14 +15,13 @@ internal sealed class ExportOwnership {
 }
 
 internal static class ProjectExport {
-    internal const int kConverterRevision = 1;
+    internal const int kConverterRevision = 2;
     internal const string kOwnershipFile = ".inlibertas-export.json";
     internal static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
 
     internal static void Write(string directory, ProjectPackage package, string sourceHash) {
-        Directory.CreateDirectory(directory);
         Dictionary<string, byte[]> output = new(StringComparer.OrdinalIgnoreCase) {
-            ["audio.ogg"] = package.Audio, ["jacketLarge.png"] = package.Jacket, ["jacketSmall.png"] = package.Jacket,
+            ["audio.ogg"] = package.Audio, ["jacketLarge.png"] = package.Jacket, ["jacketSmall.png"] = JacketThumbnail.Create(package.Jacket),
         };
         object[] difficulties = new object[4];
         for (int index = 0; index < 4; index++) {
@@ -44,6 +43,7 @@ internal static class ProjectExport {
             characterIdentifier = OptionalText(metadata, "character_identifier"), gameplayBackground = OptionalText(metadata, "gameplay_background"), difficulties,
         }, JsonOptions);
         ExportOwnership ownership = new() { ChartId = package.ChartId, SourceSha256 = sourceHash };
+        Directory.CreateDirectory(directory);
         foreach (var entry in output) {
             File.WriteAllBytes(Path.Combine(directory, entry.Key), entry.Value);
             ownership.Files.Add(entry.Key, Hash(entry.Value));
@@ -112,8 +112,16 @@ internal static class ProjectExport {
         }
         if (charts == 0) throw new InvalidDataException("No exported charts.");
         byte[] jacket = File.ReadAllBytes(Path.Combine(directory, "jacketLarge.png"));
-        if (!Hash(jacket).Equals(HashFile(Path.Combine(directory, "jacketSmall.png")), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Managed jacket files differ.");
+        byte[] smallJacket = File.ReadAllBytes(Path.Combine(directory, "jacketSmall.png"));
+        if (ownership.ConverterRevision == 1) {
+            if (!Hash(jacket).Equals(Hash(smallJacket), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Managed jacket files differ.");
+        } else {
+            ProjectMedia.ValidatePng(smallJacket);
+            DecodedPng thumbnail = PngDecoder.Decode(smallJacket);
+            if (thumbnail.Width != JacketThumbnail.kExtent || thumbnail.Height != JacketThumbnail.kExtent)
+                throw new InvalidDataException("Managed small jacket must be 256 by 256 pixels.");
+        }
         ProjectMedia.Validate(File.ReadAllBytes(Path.Combine(directory, "audio.ogg")), jacket);
 
         return ownership;

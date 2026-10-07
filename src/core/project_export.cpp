@@ -1,6 +1,7 @@
 #include "core/project_export.h"
 
 #include "core/chart_document.h"
+#include "core/media_assets.h"
 #include "core/project_format.h"
 
 #include <QtCore/QCryptographicHash>
@@ -28,6 +29,16 @@ namespace {
 
 [[nodiscard]] QJsonValue optionalValue(const QString& value) {
     return value.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(value);
+}
+
+[[nodiscard]] QByteArray smallJacketData(const QByteArray& jacket, QString* error) {
+    QImage image;
+    if (!readJacketImage(jacket, &image, error)) {
+        return {};
+    }
+
+    return encodeJacketImage(image.convertToFormat(QImage::Format_ARGB32_Premultiplied).scaled(
+        kProjectSmallJacketExtent, kProjectSmallJacketExtent, Qt::IgnoreAspectRatio, Qt::SmoothTransformation), error);
 }
 
 } // namespace
@@ -82,10 +93,15 @@ bool writeProjectExport(const QString& directoryPath, const ChartProject& projec
     const QByteArray& audio, const QByteArray& jacket, QString* error) {
     const QDir directory(directoryPath);
     QJsonObject inventory;
+    QByteArray smallJacket;
     QStringList names{QStringLiteral("audio.ogg"), QStringLiteral("jacketLarge.png"),
         QStringLiteral("jacketSmall.png"), QStringLiteral("config.json")};
     *error = projectExportError(project);
     if (!error->isEmpty() || !validateProjectMedia(audio, jacket, error)) {
+        return false;
+    }
+    smallJacket = smallJacketData(jacket, error);
+    if (smallJacket.isEmpty()) {
         return false;
     }
     if (!QDir().mkpath(directoryPath)) {
@@ -94,7 +110,7 @@ bool writeProjectExport(const QString& directoryPath, const ChartProject& projec
     }
     if (!writeBytes(directory.filePath(names[0]), audio, error)
         || !writeBytes(directory.filePath(names[1]), jacket, error)
-        || !writeBytes(directory.filePath(names[2]), jacket, error)) {
+        || !writeBytes(directory.filePath(names[2]), smallJacket, error)) {
         return false;
     }
     for (int index = 0; index < 4; ++index) {

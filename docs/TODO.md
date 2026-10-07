@@ -1,2 +1,1 @@
 - Open first populated difficulty on project load instead of defaulting to 'minimum'
-- Resize jacketSmall to 256x256 on .10no unpack

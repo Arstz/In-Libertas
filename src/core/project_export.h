@@ -6,7 +6,8 @@
 
 namespace infalsus {
 
-inline constexpr int kProjectConverterRevision = 1;
+inline constexpr int kProjectConverterRevision = 2;
+inline constexpr int kProjectSmallJacketExtent = 256;
 inline constexpr char kProjectOwnershipFile[] = ".inlibertas-export.json";
 
 [[nodiscard]] QString projectExportError(const ChartProject& project);
