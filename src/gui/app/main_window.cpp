@@ -11,6 +11,7 @@
 #include "gui/widgets/metadata_widget.h"
 #include "gui/widgets/properties_panel.h"
 #include "gui/widgets/timeline_widget.h"
+#include "gui/widgets/playback_controls.h"
 #include "gui/widgets/timing_widget.h"
 #include "gui/widgets/verification_widget.h"
 #include "core/chart_document.h"
@@ -463,10 +464,13 @@ void MainWindow::buildInterface() {
     m_contentHost = new QWidget(centralWidget);
     m_flatModeSelector = new QComboBox(centralWidget);
     m_noteSpeedSelector = new QDoubleSpinBox(centralWidget);
-    m_statusLabel = new QLabel(QStringLiteral("Import an SPC file to begin."), centralWidget);
+    m_statusLabel = new QLabel(QStringLiteral("Import an SPC file open or create a project to begin."), centralWidget);
     m_flatView = new FlatView(this);
     m_viewer = new ConveyorView(centralWidget);
     m_timeline = new TimelineWidget(this);
+    m_playbackControls = new PlaybackControls(this);
+    m_playbackControls->setPlaying(m_playback->isPlaying());
+    m_playbackControls->setPlaybackRate(m_playback->playbackRate());
     m_timingPositionLabel = new QLabel(QStringLiteral("00:00:000"), this);
 
     m_flatModeSelector->addItems({QStringLiteral("Ground"), QStringLiteral("Sky"), QStringLiteral("Both")});
@@ -561,6 +565,10 @@ void MainWindow::buildInterface() {
         settings.setValue(QStringLiteral("viewer/note_speed"), noteSpeed);
     });
     connect(m_playback, &PlaybackController::positionChanged, m_state, &EditorState::setPlaybackPosition);
+    connect(m_playbackControls, &PlaybackControls::togglePlaybackRequested, this, &MainWindow::togglePlayback);
+    connect(m_playbackControls, &PlaybackControls::playbackRateRequested, m_playback, &PlaybackController::setPlaybackRate);
+    connect(m_playback, &PlaybackController::playbackChanged, m_playbackControls, &PlaybackControls::setPlaying);
+    connect(m_playback, &PlaybackController::playbackRateChanged, m_playbackControls, &PlaybackControls::setPlaybackRate);
     connect(m_playback, &PlaybackController::playbackRateChanged, this, [this](const qreal playbackRate) {
         Q_UNUSED(playbackRate)
         updateStatus();
@@ -857,12 +865,22 @@ void MainWindow::buildWorkspace() {
     auto* verificationPanel = createPanel(QStringLiteral("Verification"), m_verification, m_bottomSplitter);
     auto* rightHost = new QWidget(m_rootSplitter);
     auto* rightLayout = new QVBoxLayout(rightHost);
+    auto* timelineHost = new QWidget(rightHost);
+    auto* timelineLayout = new QHBoxLayout(timelineHost);
+    auto* playbackDivider = new QFrame(timelineHost);
     auto* contentLayout = new QHBoxLayout(m_contentHost);
 
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(2);
     rightLayout->addWidget(m_mainSplitter, 1);
-    rightLayout->addWidget(m_timeline);
+    timelineLayout->setContentsMargins(0, 0, 0, 0);
+    timelineLayout->setSpacing(2);
+    timelineLayout->addWidget(m_timeline, 1);
+    playbackDivider->setFrameShape(QFrame::VLine);
+    playbackDivider->setFrameShadow(QFrame::Sunken);
+    timelineLayout->addWidget(playbackDivider);
+    timelineLayout->addWidget(m_playbackControls);
+    rightLayout->addWidget(timelineHost);
     rightLayout->addWidget(m_statusLabel);
     m_bottomSplitter->addWidget(propertiesPanel);
     m_bottomSplitter->addWidget(metadataPanel);

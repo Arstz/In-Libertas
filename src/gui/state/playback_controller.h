@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gui/state/playback_rates.h"
+
 #include <QtCore/QBuffer>
 #include <QtCore/QObject>
 #include <QtCore/QTimer>
@@ -25,6 +27,7 @@ public:
     void setAudioSource(const QUrl& source);
     void setAudioData(QByteArray audioData, const QUrl& sourceHint);
     void setPosition(qint64 positionMilliseconds);
+    void setPlaybackRate(qreal playbackRate);
     void setVolume(qreal volume);
     void togglePlayback();
     void scrubBy(qint64 offsetMilliseconds);
@@ -49,7 +52,6 @@ private:
     void resetMediaPlayer();
     void changePlaybackRate(int direction);
     void restartClock(qint64 positionMilliseconds);
-    void setPlaybackRate(qreal playbackRate);
     void stopClock();
     void publishPosition(qint64 positionMilliseconds);
 
@@ -64,7 +66,7 @@ private:
     qint64 m_clockAnchorPositionMilliseconds = 0;
     qint64 m_mediaClockStartPositionMilliseconds = 0;
     qint64 m_positionMilliseconds = 0;
-    qreal m_playbackRate = 1.0;
+    qreal m_playbackRate = infalsus::gui::kFullPlaybackRate;
     bool m_playbackActive = false;
     bool m_hasAudioSource = false;
     bool m_usingFallbackClock = false;

@@ -33,6 +33,7 @@ class FlatView;
 class KeyBindingRouter;
 class MetadataWidget;
 class PropertiesPanel;
+class PlaybackControls;
 class TimelineWidget;
 class EventsWidget;
 class VerificationWidget;
@@ -100,6 +101,7 @@ private:
     FlatView* m_flatView = nullptr;
     QWidget* m_contentHost = nullptr;
     TimelineWidget* m_timeline = nullptr;
+    PlaybackControls* m_playbackControls = nullptr;
     MetadataWidget* m_metadata = nullptr;
     EventsWidget* m_timing = nullptr;
     PropertiesPanel* m_properties = nullptr;

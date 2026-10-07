@@ -49,12 +49,15 @@ qt_add_executable(InLibertas WIN32
     src/gui/widgets/properties_panel.h
     src/gui/widgets/timeline_widget.cpp
     src/gui/widgets/timeline_widget.h
+    src/gui/widgets/playback_controls.cpp
+    src/gui/widgets/playback_controls.h
     src/gui/widgets/timing_widget.cpp
     src/gui/widgets/timing_widget.h
     src/gui/widgets/verification_widget.cpp
     src/gui/widgets/verification_widget.h
     src/gui/state/playback_controller.cpp
     src/gui/state/playback_controller.h
+    src/gui/state/playback_rates.h
     src/gui/canvas/conveyor_view.cpp
     src/gui/canvas/conveyor_view.h
     src/gui/canvas/conveyor_geometry.cpp

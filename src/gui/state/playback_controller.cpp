@@ -1,15 +1,14 @@
 #include "gui/state/playback_controller.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 
 namespace {
 
 constexpr int kClockUpdateIntervalMilliseconds = 4;
-constexpr qreal kFullPlaybackRate = 1.0;
-constexpr std::array<qreal, 4> kPlaybackRates{{1.0, 0.75, 0.5, 0.25}};
+using infalsus::gui::kFullPlaybackRate;
+using infalsus::gui::kPlaybackRates;
 
 } // namespace
 
