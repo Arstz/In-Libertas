@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes;
 using UnityEngine;
@@ -17,9 +15,7 @@ namespace InFalsusCustomSongHook;
 /// </summary>
 internal static class NativeJacketResolverOverride
 {
-    private const int kReferencePipelineRva = 7743312;
     private const int kBridgeApiVersion = 1;
-    private const string kGameAssemblySha256 = "E603DC61C6561762D81934C28E694AF1D06EC1F7206074310CFCE20CECF35993";
     private static IntPtr _bridgeModule;
     private static bool _installed;
     private static readonly object RegistrationGate = new();
@@ -51,17 +47,10 @@ internal static class NativeJacketResolverOverride
         if (_installed) return;
         try
         {
-            IntPtr target = new(GetSupportedGameAssemblyBase().ToInt64() + kReferencePipelineRva);
-            IntPtr handleClass = IL2CPP.GetIl2CppClass(
-                "Unity.ResourceManager.dll", "UnityEngine.ResourceManagement.AsyncOperations", "AsyncOperationHandle");
-            if (handleClass == IntPtr.Zero)
-                throw new InvalidOperationException("The native operation-handle class is unavailable.");
-            IntPtr acquireMethodInfo = IL2CPP.il2cpp_class_get_method_from_name(handleClass, "Acquire", 0);
-            if (acquireMethodInfo == IntPtr.Zero)
-                throw new MissingMethodException("AsyncOperationHandle.Acquire");
-            IntPtr acquireHandle = Marshal.ReadIntPtr(acquireMethodInfo);
-            if (acquireHandle == IntPtr.Zero)
-                throw new InvalidOperationException("The native operation-handle Acquire method has no entry point.");
+            int handleSize = Marshal.SizeOf<NativeAsyncOperationHandle>();
+            IntPtr target = NativeMethodLookup.ResolveMaterialLoader(handleSize);
+            IntPtr acquireMethodInfo = NativeMethodLookup.ResolveHandleAcquire(handleSize);
+            IntPtr acquireHandle = NativeMethodLookup.GetEntryPoint(acquireMethodInfo);
             IntPtr bridge = LoadBridge();
             GetBridgeApiVersionDelegate version = Marshal.GetDelegateForFunctionPointer<GetBridgeApiVersionDelegate>(
                 NativeLibrary.GetExport(bridge, "GetJacketBuilderBridgeApiVersion"));
@@ -74,7 +63,7 @@ internal static class NativeJacketResolverOverride
             _installed = true;
             GetBridgeCallCountDelegate count = Marshal.GetDelegateForFunctionPointer<GetBridgeCallCountDelegate>(
                 NativeLibrary.GetExport(bridge, "GetJacketBuilderBridgeCallCount"));
-            CustomSongMod.Log.Msg("[CustomSong] installed independent native jacket resolver bridge; target=0x" +
+            CustomSongMod.Log.Msg("[CustomSong] installed native jacket resolver via metadata: AddressablesImpl.LoadAssetAsync<Material>(Object); target=0x" +
                                   target.ToInt64().ToString("X") + "; initialBridgeCalls=" + count() + ".");
         }
         catch (Exception exception)
@@ -208,20 +197,6 @@ internal static class NativeJacketResolverOverride
         if (!File.Exists(path)) throw new FileNotFoundException("Native jacket resolver bridge is missing.", path);
         _bridgeModule = NativeLibrary.Load(path);
         return _bridgeModule;
-    }
-
-    private static IntPtr GetSupportedGameAssemblyBase() {
-        foreach (ProcessModule module in Process.GetCurrentProcess().Modules) {
-            if (!string.Equals(module.ModuleName, "GameAssembly.dll", StringComparison.OrdinalIgnoreCase)) continue;
-            using FileStream input = File.OpenRead(module.FileName);
-            using SHA256 algorithm = SHA256.Create();
-            string hash = Convert.ToHexString(algorithm.ComputeHash(input));
-            if (!string.Equals(hash, kGameAssemblySha256, StringComparison.Ordinal))
-                throw new InvalidOperationException("Unsupported GameAssembly SHA256 " + hash + "; custom jacket detour disabled.");
-
-            return module.BaseAddress;
-        }
-        throw new InvalidOperationException("GameAssembly.dll is not loaded.");
     }
 
     private sealed class RegisteredJacketPair
