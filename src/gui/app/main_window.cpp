@@ -339,6 +339,10 @@ MainWindow::MainWindow(QWidget* parent)
     buildToolBar();
     registerNavigationKeybinds();
     SettingsDialog::restoreKeybinds(m_keyBindings);
+    m_visualSettings = SettingsDialog::loadVisualSettings();
+    m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
+    m_handlingSettings = SettingsDialog::loadHandlingSettings();
+    m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
     restoreLayout();
     qApp->installEventFilter(this);
 }
@@ -798,8 +802,13 @@ void MainWindow::registerNavigationKeybinds() {
 }
 
 void MainWindow::openSettings() {
-    SettingsDialog dialog(m_keyBindings, this);
-    dialog.exec();
+    SettingsDialog dialog(m_keyBindings, m_visualSettings, m_handlingSettings, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        m_visualSettings = dialog.selectedVisualSettings();
+        m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
+        m_handlingSettings = dialog.selectedHandlingSettings();
+        m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
+    }
 }
 
 void MainWindow::updateVolumeSliderPlacement() {

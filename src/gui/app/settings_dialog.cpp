@@ -4,6 +4,9 @@
 #include <QtCore/QSettings>
 #include <QtGui/QKeyEvent>
 #include <QtWidgets/QDialogButtonBox>
+#include <QtWidgets/QColorDialog>
+#include <QtWidgets/QComboBox>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QKeySequenceEdit>
@@ -23,6 +26,7 @@ constexpr int kNavigationWidth = 150;
 constexpr int kSettingsWidth = 800;
 constexpr int kSettingsHeight = 650;
 constexpr int kControlSpacing = 8;
+constexpr int kColorTextLightnessThreshold = 128;
 constexpr auto kShortcutConflictStyle = "QLineEdit { border: 2px solid #d9534f; }";
 
 void setShortcutConflictStyle(QKeySequenceEdit* edit, const bool conflict) {
@@ -61,9 +65,11 @@ protected:
 
 } // namespace
 
-SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, QWidget* parent)
+SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettings& visuals,
+    const HandlingSettings& handling, QWidget* parent)
     : QDialog(parent)
     , m_keyBindings(keyBindings)
+    , m_visuals(visuals)
     , m_bindings(keyBindings->bindings()) {
     auto* layout = new QVBoxLayout(this);
     auto* contentLayout = new QHBoxLayout;
@@ -81,7 +87,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, QWidget* parent)
 
     setWindowTitle(QStringLiteral("Settings"));
     resize(kSettingsWidth, kSettingsHeight);
-    navigation->addItem(QStringLiteral("Keybinds"));
+    navigation->addItems({QStringLiteral("Keybinds"), QStringLiteral("Visuals"), QStringLiteral("Handling")});
     navigation->setCurrentRow(0);
     navigation->setFixedWidth(kNavigationWidth);
     navigation->setUniformItemSizes(true);
@@ -115,6 +121,8 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, QWidget* parent)
     resetControls->addWidget(resetAll);
     pageLayout->addLayout(resetControls);
     pageLayout->addStretch();
+    buildVisualsPage(pages);
+    buildHandlingPage(pages, handling);
     contentLayout->addWidget(navigation);
     contentLayout->addWidget(pages, 1);
     layout->addLayout(contentLayout, 1);
@@ -124,6 +132,38 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, QWidget* parent)
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     updateConflicts();
+}
+
+VisualSettings SettingsDialog::selectedVisualSettings() const {
+    VisualSettings result = m_visuals;
+    result.customPlayheadColor = m_playheadColorMode->currentData().toBool();
+
+    return result;
+}
+
+VisualSettings SettingsDialog::loadVisualSettings() {
+    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    VisualSettings result;
+    const QColor color(settings.value(QStringLiteral("visuals/playhead_color")).toString());
+    if (color.isValid()) {
+        result.playheadColor = color;
+        result.customPlayheadColor = settings.value(QStringLiteral("visuals/custom_playhead_color"), false).toBool();
+    }
+
+    return result;
+}
+
+HandlingSettings SettingsDialog::selectedHandlingSettings() const {
+    return {.invertMousewheelScroll = m_invertMousewheelScroll->isChecked()};
+}
+
+HandlingSettings SettingsDialog::loadHandlingSettings() {
+    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    HandlingSettings result;
+    result.invertMousewheelScroll = settings.value(QStringLiteral("handling/invert_mousewheel_scroll"),
+        result.invertMousewheelScroll).toBool();
+
+    return result;
 }
 
 void SettingsDialog::restoreKeybinds(KeyBindingRouter* keyBindings) {
@@ -150,7 +190,83 @@ void SettingsDialog::accept() {
     const QVector<KeyBinding> bindings = editedBindings();
     m_keyBindings->setBindings(bindings);
     saveKeybinds(bindings);
+    saveVisualSettings(selectedVisualSettings());
+    saveHandlingSettings(selectedHandlingSettings());
     QDialog::accept();
+}
+
+void SettingsDialog::buildVisualsPage(QStackedWidget* pages) {
+    auto* scrollArea = new QScrollArea(pages);
+    auto* page = new QWidget(scrollArea);
+    auto* pageLayout = new QVBoxLayout(page);
+    auto* rows = new QFormLayout;
+    auto* controls = new QWidget(page);
+    auto* controlsLayout = new QHBoxLayout(controls);
+    m_playheadColorMode = new QComboBox(controls);
+    m_playheadColorButton = new QPushButton(controls);
+
+    pages->addWidget(scrollArea);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setWidget(page);
+    m_playheadColorMode->addItem(QStringLiteral("Theme default"), false);
+    m_playheadColorMode->addItem(QStringLiteral("Custom"), true);
+    m_playheadColorMode->setCurrentIndex(m_visuals.customPlayheadColor ? 1 : 0);
+    controlsLayout->setContentsMargins(0, 0, 0, 0);
+    controlsLayout->setSpacing(kControlSpacing);
+    controlsLayout->addWidget(m_playheadColorMode, 1);
+    controlsLayout->addWidget(m_playheadColorButton);
+    rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    rows->addRow(QStringLiteral("Custom playhead color"), controls);
+    pageLayout->addLayout(rows);
+    pageLayout->addStretch();
+    connect(m_playheadColorMode, &QComboBox::currentIndexChanged, this, &SettingsDialog::updateVisualControls);
+    connect(m_playheadColorButton, &QPushButton::clicked, this, &SettingsDialog::choosePlayheadColor);
+    updateVisualControls();
+}
+
+void SettingsDialog::choosePlayheadColor() {
+    const QColor picked = QColorDialog::getColor(m_visuals.playheadColor, this, QStringLiteral("Playhead Color"));
+    if (!picked.isValid()) {
+        return;
+    }
+    m_visuals.playheadColor = picked;
+    updateVisualControls();
+}
+
+void SettingsDialog::updateVisualControls() {
+    const VisualSettings visuals = selectedVisualSettings();
+    const QColor color = visuals.effectivePlayheadColor();
+    m_playheadColorButton->setEnabled(visuals.customPlayheadColor);
+    m_playheadColorButton->setText(color.name(QColor::HexRgb).toUpper());
+    m_playheadColorButton->setStyleSheet(QStringLiteral("background-color: %1; color: %2;")
+        .arg(color.name(QColor::HexRgb), color.lightness() < kColorTextLightnessThreshold
+            ? QStringLiteral("#ffffff") : QStringLiteral("#202225")));
+}
+
+void SettingsDialog::saveVisualSettings(const VisualSettings& visuals) {
+    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    settings.setValue(QStringLiteral("visuals/custom_playhead_color"), visuals.customPlayheadColor);
+    settings.setValue(QStringLiteral("visuals/playhead_color"), visuals.playheadColor.name(QColor::HexRgb));
+}
+
+void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSettings& handling) {
+    auto* scrollArea = new QScrollArea(pages);
+    auto* page = new QWidget(scrollArea);
+    auto* pageLayout = new QVBoxLayout(page);
+    m_invertMousewheelScroll = new QCheckBox(QStringLiteral("Invert scroll direction for mousewheel"), page);
+
+    pages->addWidget(scrollArea);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setWidget(page);
+    m_invertMousewheelScroll->setChecked(handling.invertMousewheelScroll);
+    m_invertMousewheelScroll->setToolTip(QStringLiteral("Reverse mousewheel scrolling in Flat View."));
+    pageLayout->addWidget(m_invertMousewheelScroll);
+    pageLayout->addStretch();
+}
+
+void SettingsDialog::saveHandlingSettings(const HandlingSettings& handling) {
+    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    settings.setValue(QStringLiteral("handling/invert_mousewheel_scroll"), handling.invertMousewheelScroll);
 }
 
 QVector<KeyBinding> SettingsDialog::editedBindings() const {

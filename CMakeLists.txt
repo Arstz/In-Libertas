@@ -32,6 +32,8 @@ qt_add_executable(InLibertas WIN32
     src/gui/app/main_window.h
     src/gui/app/settings_dialog.cpp
     src/gui/app/settings_dialog.h
+    src/gui/app/visual_settings.h
+    src/gui/app/handling_settings.h
     src/gui/key_bindings.cpp
     src/gui/key_bindings.h
     src/gui/app/dark_theme.cpp

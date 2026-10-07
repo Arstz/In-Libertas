@@ -1,10 +1,13 @@
 #pragma once
 
 #include "gui/state/editor_state.h"
+#include "gui/app/handling_settings.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QBuffer>
 #include <QtCore/QSet>
+#include <QtGui/QColor>
+#include <QtGui/QCursor>
 #include <QtOpenGLWidgets/QOpenGLWidget>
 
 class QPainter;
@@ -23,6 +26,8 @@ public:
 
     void setChart(const ChartData& chart);
     void setPlaybackPosition(qint64 positionMilliseconds);
+    void setPlayheadColor(const QColor& color);
+    void setInvertMousewheelScroll(bool inverted);
     void setMode(FlatViewMode mode);
     void setTool(EditorTool tool);
     void setGridDuration(qint64 durationMilliseconds);
@@ -58,6 +63,7 @@ signals:
     void waveformError(const QString& message);
 
 protected:
+    bool event(QEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -135,6 +141,9 @@ private:
     void ensureSelectedZoneConnections() const;
     void resetWaveformAudio();
     void appendWaveformAudio(const QAudioBuffer& buffer);
+    void beginDragNavigation(const QPointF& position);
+    void updateDragNavigation(const QPointF& position);
+    void finishDragNavigation();
     [[nodiscard]] double timeToY(qint64 timeMilliseconds) const;
     [[nodiscard]] double playheadY() const;
     [[nodiscard]] double flickTriangleHeight() const;
@@ -149,6 +158,7 @@ private:
     [[nodiscard]] bool shouldDrawFlickControls(int hitObjectIndex) const;
 
     ChartData m_chart;
+    QColor m_playheadColor;
     qint64 m_playbackPositionMilliseconds = 0;
     qint64 m_gridDurationMilliseconds = 500;
     double m_pixelsPerSecond = 120.0;
@@ -166,6 +176,9 @@ private:
     QBuffer m_waveformBuffer;
     QByteArray m_waveformAudioData;
     QPointF m_pressPosition;
+    QPointF m_navigationLastPosition;
+    QCursor m_navigationPreviousCursor;
+    double m_navigationPositionMilliseconds = 0.0;
     double m_waveformMillisecondsPerPeak = 0.0;
     int m_waveformFramesPerPeak = 1;
     int m_waveformFramesInPeak = 0;
@@ -192,6 +205,9 @@ private:
     bool m_selectionOnlyClick = false;
     bool m_marqueeSelecting = false;
     bool m_movingSelection = false;
+    bool m_invertMousewheelScroll = kDefaultInvertMousewheelScroll;
+    bool m_dragNavigating = false;
+    bool m_navigationHadCursor = false;
 };
 
 } // namespace infalsus::gui

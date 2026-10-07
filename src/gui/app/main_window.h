@@ -2,6 +2,8 @@
 
 #include "core/chart_project.h"
 #include "core/timing_analyzer.h"
+#include "gui/app/visual_settings.h"
+#include "gui/app/handling_settings.h"
 
 #include <QtCore/QByteArray>
 #include <QtGui/QImage>
@@ -89,6 +91,8 @@ private:
     [[nodiscard]] QString audioPathForFolder(const QString& folderPath) const;
 
     EditorState* m_state = nullptr;
+    VisualSettings m_visualSettings;
+    HandlingSettings m_handlingSettings;
     KeyBindingRouter* m_keyBindings = nullptr;
     PlaybackController* m_playback = nullptr;
     QAudioDecoder* m_timingDecoder = nullptr;

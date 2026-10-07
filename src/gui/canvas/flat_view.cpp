@@ -9,6 +9,7 @@
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
 #include <QtCore/QLineF>
+#include <QtCore/QEvent>
 #include <QtCore/QSet>
 #include <QtCore/QUrl>
 #include <QtMultimedia/QAudioBuffer>
@@ -28,8 +29,10 @@ constexpr double kMaximumPixelsPerSecond = 720.0;
 constexpr double kZoomStepFactor = 1.35;
 constexpr double kWaveformWidth = 184.0;
 constexpr double kWaveformWidthFraction = 0.45;
+constexpr double kWaveformDividerOpacity = 0.35;
 constexpr int kWaveformPointsPerSecond = static_cast<int>(kMaximumPixelsPerSecond);
 constexpr double kMargin = 12.0;
+constexpr double kPlayheadWidth = 6.0;
 constexpr qint64 kTapDurationMilliseconds = 30;
 constexpr qint64 kMinimumHoldDurationMilliseconds = 80;
 constexpr double kHoldEndEdgeHitDistance = 8.0;
@@ -228,6 +231,23 @@ void FlatView::setPlaybackPosition(const qint64 positionMilliseconds) {
 
     m_playbackPositionMilliseconds = positionMilliseconds;
     update();
+}
+
+void FlatView::setPlayheadColor(const QColor& color) {
+    if (m_playheadColor == color) {
+        return;
+    }
+
+    m_playheadColor = color;
+    update();
+}
+
+void FlatView::setInvertMousewheelScroll(const bool inverted) {
+    if (m_invertMousewheelScroll == inverted) {
+        return;
+    }
+
+    m_invertMousewheelScroll = inverted;
 }
 
 void FlatView::setMode(const FlatViewMode mode) {
@@ -1398,7 +1418,60 @@ void FlatView::appendWaveformAudio(const QAudioBuffer& buffer) {
     }
 }
 
+void FlatView::beginDragNavigation(const QPointF& position) {
+    m_navigationLastPosition = position;
+    m_navigationPositionMilliseconds = static_cast<double>(m_playbackPositionMilliseconds);
+    m_navigationPreviousCursor = cursor();
+    m_navigationHadCursor = testAttribute(Qt::WA_SetCursor);
+    m_dragNavigating = true;
+    setCursor(Qt::ClosedHandCursor);
+}
+
+void FlatView::updateDragNavigation(const QPointF& position) {
+    const double offsetMilliseconds = (position.y() - m_navigationLastPosition.y()) * 1000.0 / m_pixelsPerSecond;
+    m_navigationLastPosition = position;
+    if (offsetMilliseconds == 0.0) {
+        return;
+    }
+    m_navigationPositionMilliseconds = std::clamp(m_navigationPositionMilliseconds + offsetMilliseconds,
+        0.0, static_cast<double>(m_chart.durationMilliseconds));
+    emit playbackPositionRequested(static_cast<qint64>(std::llround(m_navigationPositionMilliseconds)));
+}
+
+void FlatView::finishDragNavigation() {
+    if (!m_dragNavigating) {
+        return;
+    }
+    m_dragNavigating = false;
+    if (m_navigationHadCursor) {
+        setCursor(m_navigationPreviousCursor);
+    } else {
+        unsetCursor();
+    }
+}
+
+bool FlatView::event(QEvent* event) {
+    if (event->type() == QEvent::WindowDeactivate || event->type() == QEvent::UngrabMouse
+        || event->type() == QEvent::Hide) {
+        finishDragNavigation();
+    }
+
+    return QOpenGLWidget::event(event);
+}
+
 void FlatView::mousePressEvent(QMouseEvent* event) {
+    if (m_dragNavigating) {
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::MiddleButton) {
+        if (!(event->buttons() & Qt::LeftButton) && !m_marqueeSelecting && !m_movingSelection
+            && !m_draggingHitObject && !m_placingHitObject) {
+            beginDragNavigation(event->globalPosition());
+        }
+        event->accept();
+        return;
+    }
     if (!groundArea().contains(event->position())) {
         event->ignore();
         return;
@@ -1618,6 +1691,15 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
 }
 
 void FlatView::mouseMoveEvent(QMouseEvent* event) {
+    if (m_dragNavigating) {
+        if (event->buttons() & Qt::MiddleButton) {
+            updateDragNavigation(event->globalPosition());
+        } else {
+            finishDragNavigation();
+        }
+        event->accept();
+        return;
+    }
     if (m_marqueeSelecting) {
         if (!(event->buttons() & Qt::LeftButton)) {
             event->ignore();
@@ -1674,6 +1756,14 @@ void FlatView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void FlatView::mouseReleaseEvent(QMouseEvent* event) {
+    if (m_dragNavigating) {
+        if (event->button() == Qt::MiddleButton) {
+            updateDragNavigation(event->globalPosition());
+            finishDragNavigation();
+        }
+        event->accept();
+        return;
+    }
     if (m_marqueeSelecting) {
         if (event->button() != Qt::LeftButton) {
             event->ignore();
@@ -1795,7 +1885,7 @@ void FlatView::paintGL() {
     drawGround(painter, laneArea, groundOpacity);
     drawSky(painter, laneArea, skyOpacity);
 
-    painter.setPen(QPen(palette::outerNoteRed, 2.0));
+    painter.setPen(QPen(m_playheadColor.isValid() ? m_playheadColor : palette::guideGreen, kPlayheadWidth));
     painter.drawLine(QPointF(content.left(), playheadY()), QPointF(content.right(), playheadY()));
     painter.setPen(palette::textMuted);
     painter.drawText(
@@ -1824,7 +1914,7 @@ void FlatView::wheelEvent(QWheelEvent* event) {
     } else if ((event->modifiers() & Qt::AltModifier) != 0) {
         zoom(steps);
     } else {
-        const int direction = steps > 0.0 ? -1 : 1;
+        const int direction = (steps > 0.0 ? -1 : 1) * (m_invertMousewheelScroll ? -1 : 1);
         const int count = std::max(1, static_cast<int>(std::lround(std::abs(steps))));
         for (int index = 0; index < count; ++index) {
             emit divisorSeekRequested(direction);
@@ -1859,6 +1949,11 @@ void FlatView::drawWaveform(QPainter& painter, const QRectF& area) const {
     painter.setPen(QPen(palette::gridLine, 1.0));
     painter.setBrush(palette::panel);
     painter.drawRect(area);
+    painter.save();
+    painter.setClipRect(area, Qt::IntersectClip);
+    painter.setOpacity(kWaveformDividerOpacity);
+    drawDividers(painter, area);
+    painter.restore();
     if (m_waveformPeaks.isEmpty()) {
         return;
     }
