@@ -61,6 +61,7 @@
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 
+#include <algorithm>
 #include <cmath>
 
 #ifndef NOMINMAX
@@ -1460,20 +1461,25 @@ void MainWindow::loadProject(const QString& path) {
         QMessageBox::warning(this, QStringLiteral("Open project"), QStringLiteral("The project does not contain a song."));
         return;
     }
+    const auto populatedDifficulty = std::find_if(m_project.difficulties.cbegin(), m_project.difficulties.cend(),
+        [](const DifficultyChart& difficulty) { return !difficulty.hitObjects.notes.isEmpty(); });
+    const DifficultyChart& chart = populatedDifficulty == m_project.difficulties.cend()
+        ? m_project.difficulties.front() : *populatedDifficulty;
+
     m_projectPath = projectPath;
     m_hasProject = true;
-    m_loadedDifficulty = Difficulty::Minimal;
+    m_loadedDifficulty = chart.difficulty;
     m_loadingProject = true;
     m_state->setMetadata(m_project.metadata);
-    m_state->setDifficulty(Difficulty::Minimal);
+    m_state->setDifficulty(m_loadedDifficulty);
     m_metadata->setChartId(m_project.chartId);
     m_metadata->setJacketAvailable(!m_project.jacketPath.isEmpty());
     m_metadata->setJacketEditingEnabled(true);
-    m_metadata->setDifficultyMetadata(m_project.difficulties.at(0).metadata);
-    m_state->setChart(m_project.difficulties.at(0).hitObjects);
-    m_state->setTimingPoints(m_project.difficulties.at(0).timingPoints);
-    m_state->setLaneEvents(m_project.difficulties.at(0).laneEvents);
-    m_state->setSpeedEvents(m_project.difficulties.at(0).speedEvents);
+    m_metadata->setDifficultyMetadata(chart.metadata);
+    m_state->setChart(chart.hitObjects);
+    m_state->setTimingPoints(chart.timingPoints);
+    m_state->setLaneEvents(chart.laneEvents);
+    m_state->setSpeedEvents(chart.speedEvents);
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = false;

@@ -1,1 +1,0 @@
-- Open first populated difficulty on project load instead of defaulting to 'minimum'
