@@ -9,6 +9,8 @@
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
 #include <QtCore/QLineF>
+#include <QtCore/QHash>
+#include <QtCore/QMap>
 #include <QtCore/QEvent>
 #include <QtCore/QSet>
 #include <QtCore/QUrl>
@@ -40,6 +42,9 @@ constexpr double kDefaultZoneWidth = 0.18;
 constexpr double kMinimumFlickWidth = 0.06;
 constexpr double kMouseDragDistance = 4.0;
 constexpr int kZoneSamples = 18;
+constexpr int kZoneFillAlpha = 105;
+constexpr double kZoneContourWidth = 1.5;
+constexpr double kMillisecondsPerSecond = 1000.0;
 constexpr double kZoneControlRadius = 5.0;
 constexpr double kZoneEdgeHitDistance = 10.0;
 constexpr double kMinimumZoneWidth = 0.01;
@@ -56,6 +61,21 @@ constexpr std::uint32_t kWidthSineIn = 0x80U;
 constexpr std::uint32_t kFlickRight = 0x400U;
 constexpr std::uint32_t kFlickLeft = 0x1000U;
 constexpr int kInactiveOpacity = 50;
+
+[[nodiscard]] std::uint64_t nextZoneGroupId(const ChartData& chart) {
+    QSet<std::uint64_t> usedIds;
+    std::uint64_t groupId = 0;
+    for (const ChartNote& note : chart.notes) {
+        if (note.kind == NoteKind::Sky) {
+            usedIds.insert(note.groupId);
+        }
+    }
+    while (usedIds.contains(groupId)) {
+        ++groupId;
+    }
+
+    return groupId;
+}
 
 struct LaneSpan {
     double left = 0.0;
@@ -220,7 +240,7 @@ FlatView::FlatView(QWidget* parent)
 
 void FlatView::setChart(const ChartData& chart) {
     m_chart = chart;
-    invalidateSelectedZoneConnections();
+    invalidateZoneGroups();
     update();
 }
 
@@ -308,7 +328,6 @@ void FlatView::setSelectedHitObjects(QVector<int> indexes) {
     for (const int index : m_selectedHitObjects) {
         m_selectedHitObjectIndexes.insert(index);
     }
-    invalidateSelectedZoneConnections();
     update();
 }
 
@@ -341,7 +360,7 @@ void FlatView::setAudioData(QByteArray audioData, const QString& fileName) {
 void FlatView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
     m_chart.notes.insert(insertionIndex, hitObject);
-    invalidateSelectedZoneConnections();
+    invalidateZoneGroups();
     update();
 }
 
@@ -351,7 +370,7 @@ void FlatView::removeHitObject(const int index) {
     }
 
     m_chart.notes.removeAt(index);
-    invalidateSelectedZoneConnections();
+    invalidateZoneGroups();
     update();
 }
 
@@ -361,7 +380,7 @@ void FlatView::updateHitObject(const int index, const ChartNote& hitObject) {
     }
 
     m_chart.notes[index] = hitObject;
-    invalidateSelectedZoneConnections();
+    invalidateZoneGroups();
     update();
 }
 
@@ -380,7 +399,7 @@ void FlatView::updateHitObjects(const QVector<int>& indexes, const QVector<Chart
         changed = true;
     }
     if (changed) {
-        invalidateSelectedZoneConnections();
+        invalidateZoneGroups();
         update();
     }
 }
@@ -843,20 +862,22 @@ FlatView::ZoneSegmentAnchor FlatView::zoneSegmentAnchorAt(const QPointF& positio
         return area.left() + std::clamp(coordinate, 0.0, 1.0) * area.width();
     };
 
-    for (int index = m_chart.notes.size() - 1; index >= 0; --index) {
-        const ChartNote& hitObject = m_chart.notes.at(index);
-        if (hitObject.kind != NoteKind::Sky) {
-            continue;
-        }
-        for (const bool atStart : {true, false}) {
-            const double left = skyX(zoneLeftEdge(hitObject, atStart));
-            const double right = skyX(zoneRightEdge(hitObject, atStart));
-            const qint64 time = atStart ? hitObject.startMilliseconds : hitObject.endMilliseconds;
-            const double y = timeToY(time);
-            if (std::abs(position.y() - y) <= kZoneEdgeHitDistance
-                && position.x() >= left - kZoneEdgeHitDistance
-                && position.x() <= right + kZoneEdgeHitDistance) {
-                return {.hitObjectIndex = index, .atStart = atStart};
+    for (const bool selected : {true, false}) {
+        for (int index = m_chart.notes.size() - 1; index >= 0; --index) {
+            const ChartNote& hitObject = m_chart.notes.at(index);
+            if (hitObject.kind != NoteKind::Sky || m_selectedHitObjectIndexes.contains(index) != selected) {
+                continue;
+            }
+            for (const bool atStart : {true, false}) {
+                const double left = skyX(zoneLeftEdge(hitObject, atStart));
+                const double right = skyX(zoneRightEdge(hitObject, atStart));
+                const qint64 time = atStart ? hitObject.startMilliseconds : hitObject.endMilliseconds;
+                const double y = timeToY(time);
+                if (std::abs(position.y() - y) <= kZoneEdgeHitDistance
+                    && position.x() >= left - kZoneEdgeHitDistance
+                    && position.x() <= right + kZoneEdgeHitDistance) {
+                    return {.hitObjectIndex = index, .atStart = atStart};
+                }
             }
         }
     }
@@ -1040,6 +1061,8 @@ ChartNote FlatView::zoneHitObjectForDrag(const QPointF& position, const bool sna
 
     hitObject.kind = NoteKind::Sky;
     hitObject.side = FloorSide::Sky;
+    hitObject.groupId = m_placingHitObject && m_dragHitObjectIndex >= 0 && m_dragHitObjectIndex < m_chart.notes.size()
+        ? m_chart.notes.at(m_dragHitObjectIndex).groupId : nextZoneGroupId(m_chart);
     const bool forward = pressTime <= releaseTime;
     hitObject.startMilliseconds = std::min(pressTime, releaseTime);
     hitObject.endMilliseconds = std::max(pressTime, releaseTime);
@@ -1273,31 +1296,15 @@ QVector<ChartNote> FlatView::zoneHitObjectsForControlMove(const QPointF& positio
     }
     case ZoneControlKind::StartTime:
     case ZoneControlKind::EndTime: {
+        QVector<bool> endpointStarts;
         const qint64 requestedTime = snapToGrid ? snappedTimeAtY(position.y()) : timeAtY(position.y());
-        const qint64 minimumDuration = snapToGrid
-            ? std::max<qint64>(m_gridDurationMilliseconds, 1)
-            : qint64(1);
+        endpointStarts.reserve(hitObjects.size());
         for (int index = 0; index < hitObjects.size(); ++index) {
             const bool targetIsPrimary = m_dragLinkedZoneIndexes.isEmpty()
                 || m_dragLinkedZoneIndexes.value(index) == m_dragHitObjectIndex;
-            const bool targetControlsStart = targetIsPrimary ? controlsStart : !controlsStart;
-            if (targetControlsStart) {
-                const qint64 maximumStart = std::max<qint64>(
-                    0,
-                    hitObjects[index].endMilliseconds - minimumDuration);
-                hitObjects[index].startMilliseconds = std::clamp(
-                    requestedTime,
-                    qint64(0),
-                    maximumStart);
-                hitObjects[index].endMilliseconds = std::max(
-                    hitObjects[index].endMilliseconds,
-                    hitObjects[index].startMilliseconds + minimumDuration);
-            } else {
-                hitObjects[index].endMilliseconds = std::max(
-                    requestedTime,
-                    hitObjects[index].startMilliseconds + minimumDuration);
-            }
+            endpointStarts.append(targetIsPrimary ? controlsStart : !controlsStart);
         }
+        hitObjects = moveZoneJointTime(std::move(hitObjects), endpointStarts, requestedTime);
         break;
     }
     case ZoneControlKind::LeftSide:
@@ -1565,8 +1572,6 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
     m_dragMoved = false;
     m_draggingHoldEnd = false;
     m_selectionOnlyClick = false;
-    // Placement modifiers describe the requested object type. They must win
-    // over any existing note, zone, or control under the initial click.
     if (m_tool == EditorTool::Place && (m_pressModifiers & (Qt::AltModifier | Qt::ShiftModifier))
         && canPlaceSky()) {
         m_dragHitObjectIndex = m_chart.notes.size();
@@ -1574,7 +1579,9 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         m_placingHitObject = true;
         m_dragZoneControl = {};
         m_dragFlickControl = {};
-        m_zoneSegmentAnchor = {};
+        m_zoneSegmentAnchor = (m_pressModifiers & Qt::AltModifier) && !(m_pressModifiers & Qt::ShiftModifier)
+            ? zoneSegmentAnchorAt(m_pressPosition)
+            : ZoneSegmentAnchor{};
         emit hitObjectAddRequested(hitObjectForPlacement(m_pressPosition, true));
         if (m_dragHitObjectIndex < m_chart.notes.size()) {
             m_dragOriginal = m_chart.notes.at(m_dragHitObjectIndex);
@@ -2134,48 +2141,38 @@ void FlatView::drawSky(QPainter& painter, const QRectF& area, const int opacity)
     const auto skyX = [&area](const double coordinate) {
         return area.left() + std::clamp(coordinate, 0.0, 1.0) * area.width();
     };
+    const QTransform transform(area.width(), 0.0, 0.0, -m_pixelsPerSecond, area.left(), timeToY(0));
+    const QColor contourColor = palette::withAlpha(palette::skyArea.lighter(115), opacity);
+    const QColor fill = palette::withAlpha(palette::skyArea, std::min(opacity, kZoneFillAlpha));
 
-    for (int index = 0; index < m_chart.notes.size(); ++index) {
-        const ChartNote& note = m_chart.notes.at(index);
-        if (note.kind != NoteKind::Sky) {
+    ensureZoneGroups();
+    painter.save();
+    painter.setClipRect(area, Qt::IntersectClip);
+    for (int groupIndex = 0; groupIndex < m_zoneGroups.size(); ++groupIndex) {
+        const QPainterPath contour = transform.map(m_zoneGroupContours.at(groupIndex));
+        if (!contour.boundingRect().intersects(area)) {
             continue;
         }
-
+        painter.setPen(QPen(contourColor, kZoneContourWidth));
+        painter.setBrush(fill);
+        painter.drawPath(contour);
+        painter.setPen(QPen(contourColor, kZoneContourWidth, Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(transform.map(m_zoneGroupJoints.at(groupIndex)));
+    }
+    for (int index = 0; index < m_chart.notes.size(); ++index) {
+        const ChartNote& note = m_chart.notes.at(index);
+        if (note.kind != NoteKind::Sky || !shouldDrawZoneControls(index)) {
+            continue;
+        }
         const double startY = timeToY(note.startMilliseconds);
         const double endY = timeToY(note.endMilliseconds);
         if (std::max(startY, endY) < area.top() || std::min(startY, endY) > area.bottom()) {
             continue;
         }
-
-        const qint64 duration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
-        QPolygonF leftSide;
-        QPolygonF rightSide;
-        leftSide.reserve(kZoneSamples + 1);
-        rightSide.reserve(kZoneSamples + 1);
-        for (int sampleIndex = 0; sampleIndex <= kZoneSamples; ++sampleIndex) {
-            const double progress = static_cast<double>(sampleIndex) / kZoneSamples;
-            const double left = zoneLeftEdge(note, true)
-                + (zoneLeftEdge(note, false) - zoneLeftEdge(note, true))
-                    * easingFor(note.auxiliary, false, progress);
-            const double right = zoneRightEdge(note, true)
-                + (zoneRightEdge(note, false) - zoneRightEdge(note, true))
-                    * easingFor(note.auxiliary, true, progress);
-            const qint64 time = note.startMilliseconds + static_cast<qint64>(duration * progress);
-            leftSide.append(QPointF(skyX(left), timeToY(time)));
-            rightSide.append(QPointF(skyX(right), timeToY(time)));
-        }
-        QPolygonF zone = leftSide;
-        for (auto iterator = rightSide.crbegin(); iterator != rightSide.crend(); ++iterator) {
-            zone.append(*iterator);
-        }
-        const QColor fill = palette::withAlpha(palette::skyArea, std::min(opacity, 105));
-        painter.setPen(QPen(palette::withAlpha(palette::skyArea.lighter(115), opacity), 1.5));
-        painter.setBrush(fill);
-        painter.drawPolygon(zone);
-        if (shouldDrawZoneControls(index)) {
-            drawZoneControls(painter, area, note);
-        }
+        drawZoneControls(painter, area, note);
     }
+    painter.restore();
 
     for (int index = 0; index < m_chart.notes.size(); ++index) {
         const ChartNote& note = m_chart.notes.at(index);
@@ -2223,53 +2220,69 @@ void FlatView::drawSky(QPainter& painter, const QRectF& area, const int opacity)
     }
 }
 
-void FlatView::invalidateSelectedZoneConnections() {
-    m_selectedZoneConnectionsDirty = true;
+void FlatView::invalidateZoneGroups() {
+    m_zoneGroupsDirty = true;
 }
 
-void FlatView::ensureSelectedZoneConnections() const {
-    if (!m_selectedZoneConnectionsDirty) {
+void FlatView::ensureZoneGroups() const {
+    if (!m_zoneGroupsDirty) {
         return;
     }
-    m_selectedConnectedZoneIndexes.clear();
-    m_selectedZoneConnectionsDirty = false;
-    const auto sharesEndpoint = [](const ChartNote& first, const ChartNote& second) {
-        constexpr qint64 kTimeTolerance = 1;
-        constexpr double kEdgeToleranceValue = 0.0001;
-        for (const bool firstAtStart : {true, false}) {
-            for (const bool secondAtStart : {true, false}) {
-                if (std::abs((firstAtStart ? first.startMilliseconds : first.endMilliseconds)
-                        - (secondAtStart ? second.startMilliseconds : second.endMilliseconds)) <= kTimeTolerance
-                    && std::abs(zoneLeftEdge(first, firstAtStart) - zoneLeftEdge(second, secondAtStart)) <= kEdgeToleranceValue
-                    && std::abs(zoneRightEdge(first, firstAtStart) - zoneRightEdge(second, secondAtStart)) <= kEdgeToleranceValue) {
-                    return true;
-                }
+    m_zoneGroups = analyzeZoneGroups(m_chart);
+    m_zoneGroupContours.clear();
+    m_zoneGroupJoints.clear();
+    for (const ZoneGroup& group : m_zoneGroups) {
+        QHash<int, ChartNote> drawingNotes;
+        QMap<qint64, QVector<ZoneSegment>> sharedSegments;
+        QPainterPath contour;
+        QPainterPath joints;
+        contour.setFillRule(Qt::WindingFill);
+        for (const int index : group.indexes) {
+            drawingNotes.insert(index, m_chart.notes.at(index));
+        }
+        for (const ZoneJoint& joint : group.joints) {
+            const ChartNote& source = m_chart.notes.at(joint.firstAtStart ? joint.secondIndex : joint.firstIndex);
+            ChartNote& target = drawingNotes[joint.firstAtStart ? joint.firstIndex : joint.secondIndex];
+            target.startMilliseconds = source.endMilliseconds;
+            if (joint.fullyShared) {
+                target.startX = source.endX;
+                target.startWidth = source.endWidth;
+            }
+            sharedSegments[source.endMilliseconds].append(joint.segment);
+        }
+        for (auto iterator = sharedSegments.cbegin(); iterator != sharedSegments.cend(); ++iterator) {
+            const double time = iterator.key() / kMillisecondsPerSecond;
+            for (const ZoneSegment& segment : mergeZoneSegments(iterator.value())) {
+                joints.moveTo(std::clamp(segment.left, 0.0, 1.0), time);
+                joints.lineTo(std::clamp(segment.right, 0.0, 1.0), time);
             }
         }
-        return false;
-    };
-
-    QVector<int> pending;
-    for (const int selectedIndex : m_selectedHitObjects) {
-        if (selectedIndex >= 0 && selectedIndex < m_chart.notes.size()
-            && m_chart.notes.at(selectedIndex).kind == NoteKind::Sky) {
-            m_selectedConnectedZoneIndexes.insert(selectedIndex);
-            pending.append(selectedIndex);
-        }
-    }
-    while (!pending.isEmpty()) {
-        const int currentIndex = pending.takeLast();
-        const ChartNote& current = m_chart.notes.at(currentIndex);
-        for (int candidateIndex = 0; candidateIndex < m_chart.notes.size(); ++candidateIndex) {
-            const ChartNote& candidate = m_chart.notes.at(candidateIndex);
-            if (m_selectedConnectedZoneIndexes.contains(candidateIndex) || candidate.kind != NoteKind::Sky
-                || candidate.groupId != current.groupId || !sharesEndpoint(current, candidate)) {
-                continue;
+        for (const int index : group.indexes) {
+            const ChartNote& note = drawingNotes[index];
+            QPolygonF leftSide;
+            QPolygonF rightSide;
+            const qint64 duration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
+            for (int sampleIndex = 0; sampleIndex <= kZoneSamples; ++sampleIndex) {
+                const double progress = static_cast<double>(sampleIndex) / kZoneSamples;
+                const double left = zoneLeftEdge(note, true)
+                    + (zoneLeftEdge(note, false) - zoneLeftEdge(note, true)) * easingFor(note.auxiliary, false, progress);
+                const double right = zoneRightEdge(note, true)
+                    + (zoneRightEdge(note, false) - zoneRightEdge(note, true)) * easingFor(note.auxiliary, true, progress);
+                const double time = (note.startMilliseconds + static_cast<qint64>(duration * progress)) / kMillisecondsPerSecond;
+                leftSide.append(QPointF(std::clamp(left, 0.0, 1.0), time));
+                rightSide.append(QPointF(std::clamp(right, 0.0, 1.0), time));
             }
-            m_selectedConnectedZoneIndexes.insert(candidateIndex);
-            pending.append(candidateIndex);
+            QPolygonF zone = leftSide;
+            for (auto iterator = rightSide.crbegin(); iterator != rightSide.crend(); ++iterator) {
+                zone.append(*iterator);
+            }
+            contour.addPolygon(zone);
+            contour.closeSubpath();
         }
+        m_zoneGroupContours.append(contour.simplified());
+        m_zoneGroupJoints.append(joints);
     }
+    m_zoneGroupsDirty = false;
 }
 
 bool FlatView::shouldDrawZoneControls(const int hitObjectIndex) const {
@@ -2277,8 +2290,8 @@ bool FlatView::shouldDrawZoneControls(const int hitObjectIndex) const {
         || m_chart.notes.at(hitObjectIndex).kind != NoteKind::Sky) {
         return false;
     }
-    ensureSelectedZoneConnections();
-    return m_selectedConnectedZoneIndexes.contains(hitObjectIndex);
+
+    return m_selectedHitObjectIndexes.contains(hitObjectIndex);
 }
 
 bool FlatView::shouldDrawFlickControls(const int hitObjectIndex) const {

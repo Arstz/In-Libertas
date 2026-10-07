@@ -2,6 +2,7 @@
 
 #include "gui/app/game_palette.h"
 #include "gui/canvas/conveyor_geometry.h"
+#include "core/zone_groups.h"
 
 #include <QtCore/QLineF>
 #include <QtCore/QRectF>
@@ -183,6 +184,7 @@ ConveyorView::ConveyorView(QWidget* parent)
 
 void ConveyorView::setChart(const ChartData& chart) {
     m_chart = chart;
+    m_zoneBoundariesDirty = true;
     m_playbackPositionMilliseconds = 0;
     update();
 }
@@ -241,6 +243,7 @@ void ConveyorView::setPlaybackPosition(const qint64 positionMilliseconds) {
 void ConveyorView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
     m_chart.notes.insert(insertionIndex, hitObject);
+    m_zoneBoundariesDirty = true;
     update();
 }
 
@@ -250,6 +253,7 @@ void ConveyorView::removeHitObject(const int index) {
     }
 
     m_chart.notes.removeAt(index);
+    m_zoneBoundariesDirty = true;
     update();
 }
 
@@ -259,6 +263,7 @@ void ConveyorView::updateHitObject(const int index, const ChartNote& hitObject) 
     }
 
     m_chart.notes[index] = hitObject;
+    m_zoneBoundariesDirty = true;
     update();
 }
 
@@ -277,6 +282,7 @@ void ConveyorView::updateHitObjects(const QVector<int>& indexes, const QVector<C
         changed = true;
     }
     if (changed) {
+        m_zoneBoundariesDirty = true;
         update();
     }
 }
@@ -762,7 +768,47 @@ void ConveyorView::drawFlick(QPainter& painter, const ChartNote& note) {
     painter.restore();
 }
 
-void ConveyorView::drawSkyZone(QPainter& painter, const ChartNote& note) {
+void ConveyorView::ensureZoneBoundaries() {
+    if (!m_zoneBoundariesDirty) {
+        return;
+    }
+    m_sharedZoneStarts.clear();
+    m_sharedZoneEnds.clear();
+    for (const infalsus::ZoneGroup& group : infalsus::analyzeZoneGroups(m_chart)) {
+        for (const infalsus::ZoneJoint& joint : group.joints) {
+            (joint.firstAtStart ? m_sharedZoneStarts : m_sharedZoneEnds)[joint.firstIndex].append(joint.segment);
+            (joint.secondAtStart ? m_sharedZoneStarts : m_sharedZoneEnds)[joint.secondIndex].append(joint.segment);
+        }
+    }
+    for (QVector<infalsus::ZoneSegment>& segments : m_sharedZoneStarts) {
+        segments = infalsus::mergeZoneSegments(std::move(segments));
+    }
+    for (QVector<infalsus::ZoneSegment>& segments : m_sharedZoneEnds) {
+        segments = infalsus::mergeZoneSegments(std::move(segments));
+    }
+    m_zoneBoundariesDirty = false;
+}
+
+void ConveyorView::drawZoneBoundary(QPainter& painter, const double left, const double right,
+    const qint64 timeMilliseconds, const QVector<infalsus::ZoneSegment>& sharedSegments) {
+    const QColor color = palette::skyArea.lighter(115);
+    double cursor = left;
+
+    painter.setPen(QPen(color, kSkyContourWidth));
+    for (const infalsus::ZoneSegment& segment : sharedSegments) {
+        const double sharedLeft = std::clamp(segment.left, left, right);
+        const double sharedRight = std::clamp(segment.right, left, right);
+        if (sharedLeft > cursor) {
+            painter.drawLine(skyPointAt(cursor, timeMilliseconds), skyPointAt(sharedLeft, timeMilliseconds));
+        }
+        cursor = std::max(cursor, sharedRight);
+    }
+    if (cursor < right) {
+        painter.drawLine(skyPointAt(cursor, timeMilliseconds), skyPointAt(right, timeMilliseconds));
+    }
+}
+
+void ConveyorView::drawSkyZone(QPainter& painter, const ChartNote& note, const int index) {
     const qint64 clippedStart = std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
     const qint64 clippedEnd = note.endMilliseconds;
     const qint64 segmentDuration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
@@ -793,15 +839,31 @@ void ConveyorView::drawSkyZone(QPainter& painter, const ChartNote& note) {
     }
 
     const QColor color = palette::withAlpha(palette::skyArea, kSkyFillAlpha);
+    const QColor contourColor = palette::skyArea.lighter(115);
+    const bool originalStartVisible = note.startMilliseconds > m_playbackPositionMilliseconds;
     painter.save();
     painter.setOpacity(painter.opacity() * noteOpacity(clippedStart));
-    painter.setPen(QPen(palette::skyArea.lighter(115), kSkyContourWidth));
+    painter.setPen(Qt::NoPen);
     painter.setBrush(color);
     painter.drawPolygon(zone);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(contourColor, kSkyContourWidth));
+    painter.drawPolyline(leftBoundary);
+    painter.drawPolyline(rightBoundary);
+    drawZoneBoundary(painter, zoneLeftEdge(note, false), zoneRightEdge(note, false), note.endMilliseconds,
+        m_sharedZoneEnds.value(index));
+    if (originalStartVisible) {
+        drawZoneBoundary(painter, zoneLeftEdge(note, true), zoneRightEdge(note, true), note.startMilliseconds,
+            m_sharedZoneStarts.value(index));
+    } else {
+        painter.setPen(QPen(contourColor, kSkyContourWidth));
+        painter.drawLine(leftBoundary.front(), rightBoundary.front());
+    }
     painter.restore();
 }
 
 void ConveyorView::drawChart(QPainter& painter) {
+    ensureZoneBoundaries();
     // Track_BuildVisibleNoteCandidates works independently on the four raw
     // side buffers.  Its coordinate window is signed: a note is accepted only
     // when its start/end span touches [current - range, current + range].
@@ -860,7 +922,7 @@ void ConveyorView::drawChart(QPainter& painter) {
 
     for (const ChartNote* note : visibleNotes) {
         if (note->kind == NoteKind::Sky) {
-            drawSkyZone(painter, *note);
+            drawSkyZone(painter, *note, static_cast<int>(note - m_chart.notes.constData()));
         }
     }
 

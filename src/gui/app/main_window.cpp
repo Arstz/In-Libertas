@@ -515,6 +515,7 @@ void MainWindow::buildInterface() {
     auto* selectAllAction = addEditAction(QStringLiteral("Select all visible"), KeyCommand::SelectAll);
     auto* mirrorAction = addEditAction(QStringLiteral("Mirror selection"), KeyCommand::MirrorSelection);
     auto* verticalFlipAction = addEditAction(QStringLiteral("Flip selection vertically"), KeyCommand::FlipSelectionVertically);
+    auto* groupingAction = addEditAction(QStringLiteral("Grouping"), KeyCommand::ToggleZoneGrouping);
     auto* resnapAllAction = addEditAction(QStringLiteral("Resnap all hit objects"), KeyCommand::ResnapAll);
     auto* verifyAction = addEditAction(QStringLiteral("Refresh verification"), KeyCommand::RefreshVerification);
     auto* resetLayoutAction = windowMenu->addAction(QStringLiteral("Reset layout"));
@@ -545,6 +546,7 @@ void MainWindow::buildInterface() {
     connect(selectAllAction, &QAction::triggered, this, &MainWindow::selectAllVisibleHitObjects);
     connect(mirrorAction, &QAction::triggered, m_state, &EditorState::mirrorSelectedHitObjects);
     connect(verticalFlipAction, &QAction::triggered, m_state, &EditorState::flipSelectedHitObjectsVertically);
+    connect(groupingAction, &QAction::triggered, m_state, &EditorState::toggleSelectedZoneGrouping);
     connect(resnapAllAction, &QAction::triggered, m_state, &EditorState::resnapAllHitObjects);
     connect(verifyAction, &QAction::triggered, this, [this] {
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
@@ -637,9 +639,6 @@ void MainWindow::buildInterface() {
     connect(m_state, &EditorState::hitObjectsBatchChanged, m_viewer, &ConveyorView::updateHitObjects);
     connect(m_state, &EditorState::hitObjectsBatchChanged, m_flatView, &FlatView::updateHitObjects);
     connect(m_state, &EditorState::hitObjectsBatchChanged, this, [this] {
-        if (m_state->selectedHitObjects().size() != 1) {
-            return;
-        }
         QTimer::singleShot(0, m_properties, [this] {
             m_properties->setSelection(*m_state);
         });
@@ -953,10 +952,8 @@ void MainWindow::buildWorkspace() {
         m_metadata->setPreviewEndMilliseconds(m_state->playbackPosition());
     });
     connect(m_metadata, &MetadataWidget::difficultyRequested, m_state, &EditorState::setDifficulty);
-    connect(m_properties, &PropertiesPanel::hitObjectEditRequested, m_state, &EditorState::editHitObject);
-    connect(m_properties, &PropertiesPanel::timingPointEditRequested, m_state, &EditorState::editTimingPoint);
-    connect(m_properties, &PropertiesPanel::laneEventEditRequested, m_state, &EditorState::editLaneEvent);
-    connect(m_properties, &PropertiesPanel::speedEventEditRequested, m_state, &EditorState::editSpeedEvent);
+    connect(m_properties, &PropertiesPanel::hitObjectsEditRequested, m_state, &EditorState::editHitObjects);
+    connect(m_properties, &PropertiesPanel::eventsEditRequested, m_state, &EditorState::editSelectedEvents);
     connect(m_timing, &EventsWidget::addTimingRequested, m_state, &EditorState::addTimingPointAtPlaybackPosition);
     connect(m_timing, &EventsWidget::addLaneRequested, m_state, &EditorState::addLaneEventAtPlaybackPosition);
     connect(m_timing, &EventsWidget::addSpeedRequested, m_state, &EditorState::addSpeedEventAtPlaybackPosition);

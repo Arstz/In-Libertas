@@ -2,12 +2,14 @@
 
 #include "gui/state/editor_state.h"
 #include "gui/app/handling_settings.h"
+#include "core/zone_groups.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QBuffer>
 #include <QtCore/QSet>
 #include <QtGui/QColor>
 #include <QtGui/QCursor>
+#include <QtGui/QPainterPath>
 #include <QtOpenGLWidgets/QOpenGLWidget>
 
 class QPainter;
@@ -137,8 +139,8 @@ private:
     [[nodiscard]] bool canInteractSky() const;
     [[nodiscard]] bool canPlaceGround() const;
     [[nodiscard]] bool canPlaceSky() const;
-    void invalidateSelectedZoneConnections();
-    void ensureSelectedZoneConnections() const;
+    void invalidateZoneGroups();
+    void ensureZoneGroups() const;
     void resetWaveformAudio();
     void appendWaveformAudio(const QAudioBuffer& buffer);
     void beginDragNavigation(const QPointF& position);
@@ -168,8 +170,10 @@ private:
     QVector<LaneEvent> m_laneEvents;
     QVector<int> m_selectedHitObjects;
     QSet<int> m_selectedHitObjectIndexes;
-    mutable QSet<int> m_selectedConnectedZoneIndexes;
-    mutable bool m_selectedZoneConnectionsDirty = true;
+    mutable QVector<ZoneGroup> m_zoneGroups;
+    mutable QVector<QPainterPath> m_zoneGroupContours;
+    mutable QVector<QPainterPath> m_zoneGroupJoints;
+    mutable bool m_zoneGroupsDirty = true;
     QVector<QPointF> m_waveformPeaks;
     ChartNote m_dragOriginal;
     QAudioDecoder* m_waveformDecoder = nullptr;

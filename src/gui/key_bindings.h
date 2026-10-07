@@ -15,7 +15,7 @@ namespace infalsus::gui {
 enum class KeyCommand {
     NewProject, OpenProject, ImportSpc, SaveProject, SaveProjectAs, ExportProject,
     Undo, Redo, Cut, Copy, Paste, DeleteSelection, SelectAll, MirrorSelection,
-    FlipSelectionVertically, ResnapAll, RefreshVerification,
+    FlipSelectionVertically, ToggleZoneGrouping, ResnapAll, RefreshVerification,
     PlaceTool, SelectTool, MoveTool, ZoomIn, ZoomInAlternate, ZoomOut, ZoomOutAlternate,
     TogglePlayback, IncreasePlaybackRate, DecreasePlaybackRate,
     SeekBackward, SeekForward, IncreaseDivisor, DecreaseDivisor, CycleFlatMode,

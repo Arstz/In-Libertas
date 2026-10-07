@@ -2,8 +2,10 @@
 
 #include "core/chart_types.h"
 #include "core/chart_project.h"
+#include "core/zone_groups.h"
 
 #include <QtCore/QPointF>
+#include <QtCore/QHash>
 #include <QtGui/QImage>
 #include <QtOpenGLWidgets/QOpenGLWidget>
 
@@ -45,11 +47,16 @@ private:
     void drawDivisors(QPainter& painter);
     void drawFloorNote(QPainter& painter, const ChartNote& note);
     void drawFlick(QPainter& painter, const ChartNote& note);
-    void drawSkyZone(QPainter& painter, const ChartNote& note);
+    void ensureZoneBoundaries();
+    void drawZoneBoundary(QPainter& painter, double left, double right, qint64 timeMilliseconds,
+        const QVector<infalsus::ZoneSegment>& sharedSegments);
+    void drawSkyZone(QPainter& painter, const ChartNote& note, int index);
     void drawChart(QPainter& painter);
     void drawSongCard(QPainter& painter) const;
 
     ChartData m_chart;
+    QHash<int, QVector<infalsus::ZoneSegment>> m_sharedZoneStarts;
+    QHash<int, QVector<infalsus::ZoneSegment>> m_sharedZoneEnds;
     QVector<infalsus::TimingPoint> m_timingPoints;
     QVector<infalsus::LaneEvent> m_laneEvents;
     QVector<infalsus::SpeedEvent> m_speedEvents;
@@ -59,4 +66,5 @@ private:
     QImage m_cardJacket;
     qint64 m_playbackPositionMilliseconds = 0;
     double m_noteSpeed = 2.5;
+    bool m_zoneBoundariesDirty = true;
 };

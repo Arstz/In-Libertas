@@ -47,6 +47,7 @@ constexpr CommandDefinition kCommands[]{
     {KeyCommand::SelectAll, "select_all", "Edit / Select all visible", "Ctrl+A"},
     {KeyCommand::MirrorSelection, "mirror_selection", "Edit / Mirror selection", "Ctrl+H"},
     {KeyCommand::FlipSelectionVertically, "flip_selection_vertically", "Edit / Flip selection vertically", "Ctrl+J"},
+    {KeyCommand::ToggleZoneGrouping, "toggle_zone_grouping", "Edit / Grouping", "Ctrl+G"},
     {KeyCommand::ResnapAll, "resnap_all", "Edit / Resnap all hit objects", "Ctrl+Shift+E"},
     {KeyCommand::RefreshVerification, "refresh_verification", "Edit / Refresh verification", "Ctrl+Shift+A"},
     {KeyCommand::PlaceTool, "place_tool", "Tools / Place", "1"},

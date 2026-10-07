@@ -4,6 +4,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QSaveFile>
+#include <QtCore/QSet>
 #include <QtCore/QtEndian>
 
 #include <algorithm>
@@ -330,51 +331,26 @@ void appendU16(QByteArray& bytes, const std::uint16_t value) {
     qToLittleEndian(value, reinterpret_cast<uchar*>(bytes.data() + offset));
 }
 
-[[nodiscard]] bool zonesShareEndpoint(const ChartNote& first, const ChartNote& second) {
-    constexpr qint64 kTimeToleranceMilliseconds = 1;
-    constexpr double kCoordinateTolerance = 0.0001;
-    const std::array<std::pair<qint64, std::pair<double, double>>, 2> firstEndpoints{{
-        {first.startMilliseconds, {first.startX - first.startWidth * 0.5, first.startX + first.startWidth * 0.5}},
-        {first.endMilliseconds, {first.endX - first.endWidth * 0.5, first.endX + first.endWidth * 0.5}},
-    }};
-    const std::array<std::pair<qint64, std::pair<double, double>>, 2> secondEndpoints{{
-        {second.startMilliseconds, {second.startX - second.startWidth * 0.5, second.startX + second.startWidth * 0.5}},
-        {second.endMilliseconds, {second.endX - second.endWidth * 0.5, second.endX + second.endWidth * 0.5}},
-    }};
-    for (const auto& firstEndpoint : firstEndpoints) {
-        for (const auto& secondEndpoint : secondEndpoints) {
-            if (std::abs(firstEndpoint.first - secondEndpoint.first) <= kTimeToleranceMilliseconds
-                && std::abs(firstEndpoint.second.first - secondEndpoint.second.first) <= kCoordinateTolerance
-                && std::abs(firstEndpoint.second.second - secondEndpoint.second.second) <= kCoordinateTolerance) {
-                return true;
-            }
+[[nodiscard]] QVector<std::uint64_t> exportGroupIds(const ChartData& chart) {
+    QVector<std::uint64_t> groupIds(chart.notes.size());
+    QSet<std::uint64_t> usedIds;
+    std::uint64_t nextGroupId = 0;
+    for (const ChartNote& note : chart.notes) {
+        if (note.kind == NoteKind::Sky) {
+            usedIds.insert(note.groupId);
         }
     }
-
-    return false;
-}
-
-[[nodiscard]] QVector<std::uint64_t> canonicalGroupIds(const ChartData& chart) {
-    QVector<std::uint64_t> groupIds(chart.notes.size());
-    std::uint64_t nextGroupId = 0;
     for (int index = 0; index < chart.notes.size(); ++index) {
         const ChartNote& note = chart.notes.at(index);
-        if (note.kind != NoteKind::Sky) {
-            groupIds[index] = nextGroupId++;
+        if (note.kind == NoteKind::Sky) {
+            groupIds[index] = note.groupId;
             continue;
         }
-        bool foundConnectedZone = false;
-        for (int previousIndex = 0; previousIndex < index; ++previousIndex) {
-            const ChartNote& previous = chart.notes.at(previousIndex);
-            if (previous.kind == NoteKind::Sky && zonesShareEndpoint(previous, note)) {
-                groupIds[index] = groupIds.at(previousIndex);
-                foundConnectedZone = true;
-                break;
-            }
+        while (usedIds.contains(nextGroupId)) {
+            ++nextGroupId;
         }
-        if (!foundConnectedZone) {
-            groupIds[index] = nextGroupId++;
-        }
+        groupIds[index] = nextGroupId;
+        usedIds.insert(nextGroupId++);
     }
 
     return groupIds;
@@ -673,7 +649,7 @@ bool saveEncodedChart(const QString& filePath, const QString& chartName, const C
             }
             return first.endMilliseconds < second.endMilliseconds;
         });
-    const QVector<std::uint64_t> groupIds = canonicalGroupIds(orderedChart);
+    const QVector<std::uint64_t> groupIds = exportGroupIds(orderedChart);
     QByteArray bytes;
     bytes.reserve(kHeaderLength + static_cast<int>(noteCount) * kNoteRecordLength
         + static_cast<int>(eventCount) * kEventRecordLength);

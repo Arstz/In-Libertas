@@ -2,10 +2,13 @@
 
 #include "core/timing_grid.h"
 
+#include <QtCore/QSet>
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <type_traits>
 
 namespace infalsus::gui {
@@ -33,6 +36,97 @@ void constrainZoneDuration(ChartNote& hitObject) {
             hitObject.endMilliseconds,
             hitObject.startMilliseconds + kMinimumZoneDurationMilliseconds);
     }
+}
+
+void normalizeHitObject(ChartNote& hitObject) {
+    hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
+    hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
+    constrainZoneDuration(hitObject);
+    hitObject.startX = std::clamp(hitObject.startX, 0.0, 1.0);
+    hitObject.endX = std::clamp(hitObject.endX, 0.0, 1.0);
+    hitObject.startWidth = std::clamp(hitObject.startWidth, 0.01, 1.0);
+    hitObject.endWidth = std::clamp(hitObject.endWidth, 0.01, 1.0);
+    if (hitObject.side == FloorSide::Central) {
+        constexpr double kLaneWidth = 0.25;
+        constexpr double kFirstCentralLane = 0.25;
+        constexpr double kLastCentralLane = 1.0;
+        constexpr double kCentralRightBoundary = 1.25;
+        hitObject.startX = std::clamp(hitObject.startX, kFirstCentralLane, kLastCentralLane);
+        hitObject.endX = std::clamp(hitObject.endX, kFirstCentralLane, kLastCentralLane);
+        hitObject.startWidth = std::clamp(hitObject.startWidth, kLaneWidth, kCentralRightBoundary - hitObject.startX);
+        hitObject.endWidth = std::clamp(hitObject.endWidth, kLaneWidth, kCentralRightBoundary - hitObject.endX);
+    }
+}
+
+void normalizeEvent(TimingPoint& point) {
+    constexpr double kMinimumBpm = 1.0;
+    constexpr double kMaximumBpm = 1000.0;
+    constexpr int kMinimumSignaturePart = 1;
+    constexpr int kMaximumNumerator = 32;
+    constexpr int kMaximumDenominator = 64;
+    point.timeMilliseconds = std::max<qint64>(0, point.timeMilliseconds);
+    point.beatsPerMinute = std::clamp(point.beatsPerMinute, kMinimumBpm, kMaximumBpm);
+    point.timeSignatureNumerator = std::clamp(point.timeSignatureNumerator, kMinimumSignaturePart, kMaximumNumerator);
+    point.timeSignatureDenominator = std::clamp(point.timeSignatureDenominator, kMinimumSignaturePart, kMaximumDenominator);
+}
+
+void normalizeEvent(LaneEvent& event) {
+    constexpr int kLastLane = 5;
+    event.timeMilliseconds = std::max<qint64>(0, event.timeMilliseconds);
+    event.lane = std::clamp(event.lane, 0, kLastLane);
+}
+
+void normalizeEvent(SpeedEvent& event) {
+    event.timeMilliseconds = std::max<qint64>(0, event.timeMilliseconds);
+}
+
+[[nodiscard]] bool eventsEqual(const TimingPoint& first, const TimingPoint& second) {
+    return first.timeMilliseconds == second.timeMilliseconds && first.beatsPerMinute == second.beatsPerMinute
+        && first.timeSignatureNumerator == second.timeSignatureNumerator
+        && first.timeSignatureDenominator == second.timeSignatureDenominator;
+}
+
+[[nodiscard]] bool eventsEqual(const LaneEvent& first, const LaneEvent& second) {
+    return first.timeMilliseconds == second.timeMilliseconds && first.lane == second.lane && first.enabled == second.enabled;
+}
+
+[[nodiscard]] bool eventsEqual(const SpeedEvent& first, const SpeedEvent& second) {
+    return first.timeMilliseconds == second.timeMilliseconds && first.speed == second.speed;
+}
+
+template <typename Event>
+[[nodiscard]] bool replaceSelectedEvents(QVector<Event>& events, QVector<int>& selection, QVector<Event> replacements) {
+    QVector<int> order(events.size());
+    QVector<int> sortedSelection;
+    QVector<Event> sortedEvents;
+    bool changed = false;
+
+    for (int itemIndex = 0; itemIndex < selection.size(); ++itemIndex) {
+        Event& replacement = replacements[itemIndex];
+        normalizeEvent(replacement);
+        changed = changed || !eventsEqual(events.at(selection.at(itemIndex)), replacement);
+    }
+    if (!changed) {
+        return false;
+    }
+    for (int itemIndex = 0; itemIndex < selection.size(); ++itemIndex) {
+        events[selection.at(itemIndex)] = replacements.at(itemIndex);
+    }
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&events](const int first, const int second) {
+        return events.at(first).timeMilliseconds < events.at(second).timeMilliseconds;
+    });
+    sortedEvents.reserve(events.size());
+    for (const int originalIndex : order) {
+        if (std::binary_search(selection.cbegin(), selection.cend(), originalIndex)) {
+            sortedSelection.append(static_cast<int>(sortedEvents.size()));
+        }
+        sortedEvents.append(events.at(originalIndex));
+    }
+    events = std::move(sortedEvents);
+    selection = std::move(sortedSelection);
+
+    return true;
 }
 
 void mirrorGroundHitObject(ChartNote& hitObject) {
@@ -692,6 +786,42 @@ void EditorState::flipSelectedHitObjectsVertically() {
     finishHitObjectBatchMove();
 }
 
+void EditorState::toggleSelectedZoneGrouping() {
+    QVector<int> indexes;
+    QVector<ChartNote> zones;
+    QSet<std::uint64_t> usedGroupIds;
+    std::uint64_t availableGroupId = 0;
+
+    for (const int index : m_selectedHitObjects) {
+        if (isValidHitObjectIndex(index) && m_chart.notes.at(index).kind == NoteKind::Sky) {
+            indexes.append(index);
+            zones.append(m_chart.notes.at(index));
+        }
+    }
+    if (zones.isEmpty()) {
+        return;
+    }
+    for (const ChartNote& hitObject : m_chart.notes) {
+        if (hitObject.kind == NoteKind::Sky) {
+            usedGroupIds.insert(hitObject.groupId);
+        }
+    }
+    const bool ungroup = zones.size() > 1
+        && std::all_of(zones.cbegin(), zones.cend(), [&zones](const ChartNote& zone) {
+            return zone.groupId == zones.front().groupId;
+        });
+    for (ChartNote& zone : zones) {
+        while (usedGroupIds.contains(availableGroupId)) {
+            ++availableGroupId;
+        }
+        zone.groupId = availableGroupId;
+        if (ungroup) {
+            usedGroupIds.insert(availableGroupId);
+        }
+    }
+    editHitObjects(std::move(indexes), std::move(zones));
+}
+
 void EditorState::resnapAllHitObjects() {
     if (m_chart.notes.isEmpty() || m_timingPoints.isEmpty()) {
         return;
@@ -805,24 +935,7 @@ void EditorState::editHitObject(const int index, ChartNote hitObject) {
 
     const ChartNote original = m_chart.notes.at(index);
     hitObject.id = original.id;
-    hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
-    hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-    constrainZoneDuration(hitObject);
-    hitObject.startX = std::clamp(hitObject.startX, 0.0, 1.0);
-    hitObject.endX = std::clamp(hitObject.endX, 0.0, 1.0);
-    hitObject.startWidth = std::clamp(hitObject.startWidth, 0.01, 1.0);
-    hitObject.endWidth = std::clamp(hitObject.endWidth, 0.01, 1.0);
-
-    if (hitObject.side == FloorSide::Central) {
-        constexpr double kLaneWidth = 0.25;
-        constexpr double kFirstCentralLane = 0.25;
-        constexpr double kLastCentralLane = 1.0;
-        constexpr double kCentralRightBoundary = 1.25;
-        hitObject.startX = std::clamp(hitObject.startX, kFirstCentralLane, kLastCentralLane);
-        hitObject.endX = std::clamp(hitObject.endX, kFirstCentralLane, kLastCentralLane);
-        hitObject.startWidth = std::clamp(hitObject.startWidth, kLaneWidth, kCentralRightBoundary - hitObject.startX);
-        hitObject.endWidth = std::clamp(hitObject.endWidth, kLaneWidth, kCentralRightBoundary - hitObject.endX);
-    }
+    normalizeHitObject(hitObject);
 
     if (hitObjectsEqual(original, hitObject)) {
         return;
@@ -839,26 +952,43 @@ void EditorState::editHitObject(const int index, ChartNote hitObject) {
     });
 }
 
+void EditorState::editHitObjects(QVector<int> indexes, QVector<ChartNote> hitObjects) {
+    if (indexes.isEmpty() || indexes.size() != hitObjects.size()) {
+        return;
+    }
+    HistoryEntry entry;
+    entry.operation = HistoryOperation::MoveBatch;
+    entry.selectionBefore = m_selectedHitObjects;
+    entry.selectionAfter = m_selectedHitObjects;
+    for (int itemIndex = 0; itemIndex < indexes.size(); ++itemIndex) {
+        const int index = indexes.at(itemIndex);
+        if (!isValidHitObjectIndex(index) || entry.batchIndexes.contains(index)) {
+            continue;
+        }
+        const ChartNote original = m_chart.notes.at(index);
+        ChartNote hitObject = hitObjects.at(itemIndex);
+        hitObject.id = original.id;
+        normalizeHitObject(hitObject);
+        if (hitObjectsEqual(original, hitObject)) {
+            continue;
+        }
+        entry.batchIndexes.append(index);
+        entry.batchBefore.append(original);
+        entry.batchAfter.append(hitObject);
+    }
+    if (entry.batchIndexes.isEmpty()) {
+        return;
+    }
+    replaceHitObjectsBatch(entry.batchIndexes, entry.batchAfter);
+    appendHistory(std::move(entry));
+}
+
 void EditorState::editTimingPoint(const int index, TimingPoint timingPoint) {
     if (index < 0 || index >= m_timingPoints.size()) {
         return;
     }
 
-    constexpr double kMinimumBpm = 1.0;
-    constexpr double kMaximumBpm = 1000.0;
-    constexpr int kMinimumSignaturePart = 1;
-    constexpr int kMaximumNumerator = 32;
-    constexpr int kMaximumDenominator = 64;
-    timingPoint.timeMilliseconds = std::max<qint64>(0, timingPoint.timeMilliseconds);
-    timingPoint.beatsPerMinute = std::clamp(timingPoint.beatsPerMinute, kMinimumBpm, kMaximumBpm);
-    timingPoint.timeSignatureNumerator = std::clamp(
-        timingPoint.timeSignatureNumerator,
-        kMinimumSignaturePart,
-        kMaximumNumerator);
-    timingPoint.timeSignatureDenominator = std::clamp(
-        timingPoint.timeSignatureDenominator,
-        kMinimumSignaturePart,
-        kMaximumDenominator);
+    normalizeEvent(timingPoint);
     if (m_timingPoints.at(index).timeMilliseconds == timingPoint.timeMilliseconds
         && m_timingPoints.at(index).beatsPerMinute == timingPoint.beatsPerMinute
         && m_timingPoints.at(index).timeSignatureNumerator == timingPoint.timeSignatureNumerator
@@ -888,8 +1018,7 @@ void EditorState::editLaneEvent(const int index, LaneEvent laneEvent) {
     if (index < 0 || index >= m_laneEvents.size()) {
         return;
     }
-    laneEvent.timeMilliseconds = std::max<qint64>(0, laneEvent.timeMilliseconds);
-    laneEvent.lane = std::clamp(laneEvent.lane, 0, 5);
+    normalizeEvent(laneEvent);
     if (m_laneEvents.at(index).timeMilliseconds == laneEvent.timeMilliseconds
         && m_laneEvents.at(index).lane == laneEvent.lane
         && m_laneEvents.at(index).enabled == laneEvent.enabled) {
@@ -914,7 +1043,7 @@ void EditorState::editSpeedEvent(const int index, SpeedEvent speedEvent) {
     if (index < 0 || index >= m_speedEvents.size() || !std::isfinite(speedEvent.speed)) {
         return;
     }
-    speedEvent.timeMilliseconds = std::max<qint64>(0, speedEvent.timeMilliseconds);
+    normalizeEvent(speedEvent);
     if (m_speedEvents.at(index).timeMilliseconds == speedEvent.timeMilliseconds
         && m_speedEvents.at(index).speed == speedEvent.speed) {
         return;
@@ -929,6 +1058,41 @@ void EditorState::editSpeedEvent(const int index, SpeedEvent speedEvent) {
     });
     emit speedEventsChanged();
     setSelectedSpeedEvent(static_cast<int>(std::distance(m_speedEvents.cbegin(), iterator)));
+    appendEventHistory(std::move(before));
+}
+
+void EditorState::editSelectedEvents(QVector<TimingPoint> timingPoints, QVector<LaneEvent> laneEvents,
+    QVector<SpeedEvent> speedEvents) {
+    if (timingPoints.size() != m_selectedTimingPoints.size() || laneEvents.size() != m_selectedLaneEvents.size()
+        || speedEvents.size() != m_selectedSpeedEvents.size()
+        || std::any_of(timingPoints.cbegin(), timingPoints.cend(), [](const TimingPoint& point) {
+            return !std::isfinite(point.beatsPerMinute);
+        }) || std::any_of(speedEvents.cbegin(), speedEvents.cend(), [](const SpeedEvent& event) {
+            return !std::isfinite(event.speed);
+        })) {
+        return;
+    }
+    EventSnapshot before = eventSnapshot();
+    const bool timingChanged = replaceSelectedEvents(m_timingPoints, m_selectedTimingPoints, std::move(timingPoints));
+    const bool lanesChanged = replaceSelectedEvents(m_laneEvents, m_selectedLaneEvents, std::move(laneEvents));
+    const bool speedsChanged = replaceSelectedEvents(m_speedEvents, m_selectedSpeedEvents, std::move(speedEvents));
+    if (!timingChanged && !lanesChanged && !speedsChanged) {
+        return;
+    }
+    m_selectedTimingPoint = m_selectedTimingPoints.isEmpty() ? -1 : m_selectedTimingPoints.constLast();
+    m_selectedLaneEvent = m_selectedLaneEvents.isEmpty() ? -1 : m_selectedLaneEvents.constLast();
+    m_selectedSpeedEvent = m_selectedSpeedEvents.isEmpty() ? -1 : m_selectedSpeedEvents.constLast();
+    if (timingChanged) {
+        emit timingPointsChanged();
+        emit divisorChanged(m_divisor);
+    }
+    if (lanesChanged) {
+        emit laneEventsChanged();
+    }
+    if (speedsChanged) {
+        emit speedEventsChanged();
+    }
+    emit selectionChanged();
     appendEventHistory(std::move(before));
 }
 

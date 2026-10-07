@@ -24,6 +24,8 @@ qt_add_executable(InLibertas WIN32
     src/core/chart_document.cpp
     src/core/chart_document.h
     src/core/chart_types.h
+    src/core/zone_groups.cpp
+    src/core/zone_groups.h
     src/core/audio_exporter.cpp
     src/core/audio_exporter.h
     src/core/media_assets.cpp
@@ -102,4 +104,27 @@ if(BUILD_TESTING)
     )
     add_dependencies(media_assets_test InLibertas)
     add_test(NAME media_assets COMMAND media_assets_test)
+    qt_add_executable(zone_groups_test
+        tests/core/zone_groups_test.cpp
+        src/core/zone_groups.cpp
+        src/core/chart_document.cpp
+        src/core/chart_project.cpp
+        src/core/project_document.cpp
+        src/gui/state/editor_state.cpp
+        src/gui/state/editor_state.h
+    )
+    target_include_directories(zone_groups_test PRIVATE src)
+    target_link_libraries(zone_groups_test PRIVATE Qt6::Core)
+    add_dependencies(zone_groups_test InLibertas)
+    add_test(NAME zone_groups COMMAND zone_groups_test)
+    qt_add_executable(batch_properties_test
+        tests/core/batch_properties_test.cpp
+        src/core/chart_project.cpp
+        src/gui/state/editor_state.cpp
+        src/gui/state/editor_state.h
+    )
+    target_include_directories(batch_properties_test PRIVATE src)
+    target_link_libraries(batch_properties_test PRIVATE Qt6::Core)
+    add_dependencies(batch_properties_test InLibertas)
+    add_test(NAME batch_properties COMMAND batch_properties_test)
 endif()

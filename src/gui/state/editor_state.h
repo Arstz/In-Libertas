@@ -73,14 +73,18 @@ public:
     void pasteCopiedHitObjects();
     void mirrorSelectedHitObjects();
     void flipSelectedHitObjectsVertically();
+    void toggleSelectedZoneGrouping();
     void resnapAllHitObjects();
     void removeHitObject(int index);
     void removeSelectedHitObjects();
     void cancelAddedHitObject(int index);
     void editHitObject(int index, ChartNote hitObject);
+    void editHitObjects(QVector<int> indexes, QVector<ChartNote> hitObjects);
     void editTimingPoint(int index, TimingPoint timingPoint);
     void editLaneEvent(int index, LaneEvent laneEvent);
     void editSpeedEvent(int index, SpeedEvent speedEvent);
+    void editSelectedEvents(QVector<TimingPoint> timingPoints, QVector<LaneEvent> laneEvents,
+        QVector<SpeedEvent> speedEvents);
     void beginHitObjectMove(int index);
     void moveHitObject(int index, ChartNote hitObject);
     void finishHitObjectMove();

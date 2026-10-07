@@ -1,6 +1,7 @@
 #include "gui/widgets/verification_widget.h"
 
 #include "core/timing_grid.h"
+#include "core/zone_groups.h"
 #include "gui/app/game_palette.h"
 
 #include <QtGui/QPalette>
@@ -161,12 +162,13 @@ VerificationWidget::VerificationWidget(QWidget* parent)
 
 void VerificationWidget::setChart(const ChartData& chart, const QVector<SpeedEvent>& speedEvents,
     const QVector<TimingPoint>& timingPoints) {
-    static constexpr std::array<VerificationRule, 5> kRules{
+    static constexpr std::array<VerificationRule, 6> kRules{
         &VerificationWidget::verifyDuplicateNotes,
         &VerificationWidget::verifyDuplicateHolds,
         &VerificationWidget::verifyOverlappingMultilane,
         &VerificationWidget::verifyOverlappingHolds,
         &VerificationWidget::verifyCentralFloorSpans,
+        &VerificationWidget::verifyZoneGroups,
     };
     QVector<VerificationIssue> issues;
     for (const VerificationRule rule : kRules) {
@@ -301,6 +303,29 @@ QVector<VerificationIssue> VerificationWidget::verifyCentralFloorSpans(const Cha
             .hitObjectIds = {hitObject.id},
             .message = QStringLiteral("Invalid central lane span"),
         });
+    }
+
+    return issues;
+}
+
+QVector<VerificationIssue> VerificationWidget::verifyZoneGroups(const ChartData& chart) {
+    const QVector<ZoneGroup> groups = analyzeZoneGroups(chart);
+    QVector<VerificationIssue> issues;
+
+    for (const ZoneGroup& group : groups) {
+        if (group.connected) {
+            continue;
+        }
+        VerificationIssue issue;
+        issue.timestampMilliseconds = chart.notes.at(group.indexes.front()).startMilliseconds;
+        issue.message = QStringLiteral("Group [%1] not connected, will cause combo break").arg(group.groupId);
+        for (const int index : group.indexes) {
+            const ChartNote& note = chart.notes.at(index);
+            issue.timestampMilliseconds = std::min(issue.timestampMilliseconds, note.startMilliseconds);
+            issue.hitObjectIds.append(note.id);
+        }
+        std::sort(issue.hitObjectIds.begin(), issue.hitObjectIds.end());
+        issues.append(std::move(issue));
     }
 
     return issues;

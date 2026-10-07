@@ -40,6 +40,7 @@ private:
     static QVector<VerificationIssue> verifyOverlappingMultilane(const ChartData& chart);
     static QVector<VerificationIssue> verifyOverlappingHolds(const ChartData& chart);
     static QVector<VerificationIssue> verifyCentralFloorSpans(const ChartData& chart);
+    static QVector<VerificationIssue> verifyZoneGroups(const ChartData& chart);
     static QVector<VerificationIssue> verifySnappedObjects(const ChartData& chart,
         const QVector<TimingPoint>& timingPoints);
     static QVector<VerificationIssue> verifyNegativeSpeedSections(
