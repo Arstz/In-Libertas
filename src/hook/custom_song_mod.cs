@@ -1,7 +1,7 @@
 using System.Reflection;
 using MelonLoader;
 
-[assembly: MelonInfo(typeof(InFalsusCustomSongHook.CustomSongMod), "In Falsus Custom Song Hook", "0.1.0", "InFalsusDump")]
+[assembly: MelonInfo(typeof(InFalsusCustomSongHook.CustomSongMod), "In Falsus Custom Song Hook", "0.1.1", "InFalsusDump")]
 [assembly: MelonGame("lowiro", "infalsus")]
 
 namespace InFalsusCustomSongHook;

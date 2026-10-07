@@ -75,6 +75,7 @@ private:
         const QString& jacketFileName, const QByteArray& jacketData);
     void updateProjectDuration(qint64 durationMilliseconds);
     void updateStatus();
+    [[nodiscard]] bool readProjectJacket(QImage* image, QString* error) const;
     void updateViewerSongCard();
     void togglePlayback();
     void adjustFlatZoom(double steps);

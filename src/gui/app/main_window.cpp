@@ -199,6 +199,19 @@ struct ImportedSpcIdentity {
     return {};
 }
 
+[[nodiscard]] bool writeDataForExport(const QByteArray& data, const QString& destinationPath, QString* error) {
+    QSaveFile destination(destinationPath);
+
+    if (!destination.open(QIODevice::WriteOnly)
+        || destination.write(data) != data.size()
+        || !destination.commit()) {
+        *error = QStringLiteral("Could not write %1.").arg(QFileInfo(destinationPath).fileName());
+        return false;
+    }
+
+    return true;
+}
+
 [[nodiscard]] bool copyFileForExport(const QString& sourcePath, const QString& destinationPath, QString* error) {
     QFile source(sourcePath);
     if (!source.open(QIODevice::ReadOnly)) {
@@ -1246,6 +1259,23 @@ void MainWindow::loadChartFile(const QString& chartPath) {
     m_statusLabel->setText(QStringLiteral("Imported %1 as a new unsaved project.").arg(chartFileInfo.fileName()));
 }
 
+bool MainWindow::readProjectJacket(QImage* image, QString* error) const {
+    if (!m_projectJacketData.isEmpty()) {
+        if (m_projectJacketImage.isNull()) {
+            *error = QStringLiteral("The jacket embedded in the project cannot be decoded.");
+            return false;
+        }
+        *image = m_projectJacketImage;
+        return true;
+    }
+    if (m_project.jacketPath.isEmpty()) {
+        *error = QStringLiteral("Add a valid jacket before exporting.");
+        return false;
+    }
+
+    return readExportableJacket(m_project.jacketPath, image, error);
+}
+
 void MainWindow::updateViewerSongCard() {
     if (!m_hasProject) {
         m_viewer->setSongCard({}, Difficulty::Minimal, {}, {});
@@ -1254,12 +1284,10 @@ void MainWindow::updateViewerSongCard() {
 
     const Difficulty difficulty = m_state->difficulty();
     const DifficultyChart& chart = m_project.difficulties.at(difficultyIndex(difficulty));
-    QImage jacket = m_projectJacketImage;
-    if (jacket.isNull() && !m_project.jacketPath.isEmpty()) {
-        QString error;
-        if (!readExportableJacket(m_project.jacketPath, &jacket, &error)) {
-            jacket = {};
-        }
+    QImage jacket;
+    QString error;
+    if (!readProjectJacket(&jacket, &error)) {
+        jacket = {};
     }
     m_viewer->setSongCard(m_state->metadata(), difficulty, chart.metadata, std::move(jacket));
 }
@@ -1675,9 +1703,8 @@ void MainWindow::exportProject() {
     }
     QImage jacket;
     QString error;
-    if (m_project.jacketPath.isEmpty() || !readExportableJacket(m_project.jacketPath, &jacket, &error)) {
-        QMessageBox::warning(this, QStringLiteral("Export project"),
-            m_project.jacketPath.isEmpty() ? QStringLiteral("Add a valid jacket before exporting.") : error);
+    if (!readProjectJacket(&jacket, &error)) {
+        QMessageBox::warning(this, QStringLiteral("Export project"), error);
         return;
     }
     bool hasHitObjects = false;
@@ -1744,7 +1771,11 @@ void MainWindow::exportProject() {
         return;
     }
     const QString audioFileName = QStringLiteral("audio.%1").arg(audioSuffix);
-    if (!copyFileForExport(m_project.songPath, outputDirectory.filePath(audioFileName), &error)
+    const QString audioOutputPath = outputDirectory.filePath(audioFileName);
+    const bool audioExported = m_projectSongData.isEmpty()
+        ? copyFileForExport(m_project.songPath, audioOutputPath, &error)
+        : writeDataForExport(m_projectSongData, audioOutputPath, &error);
+    if (!audioExported
         || !jacket.save(outputDirectory.filePath(QStringLiteral("jacketLarge.png")), "PNG")
         || !jacket.save(outputDirectory.filePath(QStringLiteral("jacketSmall.png")), "PNG")) {
         if (error.isEmpty()) {

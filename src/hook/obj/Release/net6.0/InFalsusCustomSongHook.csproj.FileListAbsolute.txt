@@ -8,3 +8,4 @@ C:\Users\msi\Documents\repos\InLibertas\src\hook\obj\Release\net6.0\InFalsusCust
 C:\Users\msi\Documents\repos\InLibertas\src\hook\obj\Release\net6.0\refint\InFalsusCustomSongHook.dll
 C:\Users\msi\Documents\repos\InLibertas\src\hook\obj\Release\net6.0\InFalsusCustomSongHook.pdb
 C:\Users\msi\Documents\repos\InLibertas\src\hook\obj\Release\net6.0\ref\InFalsusCustomSongHook.dll
+C:\Users\msi\Documents\repos\InLibertas\src\hook\obj\Release\net6.0\InFalsusCustomSongHook.sourcelink.json

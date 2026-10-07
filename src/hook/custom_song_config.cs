@@ -195,7 +195,7 @@ internal sealed class CustomSongConfig
                 {
                     new CustomSongCollection
                     {
-                        PackId = 100,
+                        PackId = CustomSongCollection.kDefaultPackId,
                         Slug = "custom-charts",
                         Title = "Custom Charts",
                         StylePackSlug = "act-4",
@@ -360,9 +360,10 @@ internal sealed class CustomSongDifficulty
 
 internal sealed class CustomSongCollection
 {
-    // PackId is persisted by progress data, so use a stable value (the
-    // example reserves 100) rather than an array index.
-    public ushort PackId { get; set; } = 100;
+    internal const ushort kDefaultPackId = 100;
+
+    // Installation maps configured IDs to their appended PackInfo positions.
+    public ushort PackId { get; set; } = kDefaultPackId;
     public string Slug { get; set; } = "custom";
     public string Title { get; set; } = "Custom Charts";
     // Reuse a stock collection's visual theme until custom pack art is added.

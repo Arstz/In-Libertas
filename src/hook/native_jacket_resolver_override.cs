@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes;
 using UnityEngine;
@@ -12,15 +13,13 @@ using UnityEngine.AddressableAssets;
 namespace InFalsusCustomSongHook;
 
 /// <summary>
-/// An independent x64 detour for the deployed private jacket-operation
-/// builder.  It deliberately does not use MelonLoader's detour/trampoline or
-/// an injected ResourceManager provider.
+/// Resolves custom marker references through the game's asset pipeline.
 /// </summary>
 internal static class NativeJacketResolverOverride
 {
-    // GameAssembly.deployed.20261003.dll: sub_180020370. Its only callers are
-    // the SongId and ChartId jacket resolver helpers.
-    private static readonly IntPtr SharedJacketBuilderRva = new(0x20370);
+    private const int kReferencePipelineRva = 7743312;
+    private const int kBridgeApiVersion = 1;
+    private const string kGameAssemblySha256 = "E603DC61C6561762D81934C28E694AF1D06EC1F7206074310CFCE20CECF35993";
     private static IntPtr _bridgeModule;
     private static bool _installed;
     private static readonly object RegistrationGate = new();
@@ -36,27 +35,42 @@ internal static class NativeJacketResolverOverride
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate int InstallBridgeDelegate(IntPtr target);
+    private delegate int InstallBridgeDelegate(IntPtr target, IntPtr acquireHandle, IntPtr acquireMethodInfo);
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate void RemoveBridgeDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int GetBridgeCallCountDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate int GetBridgeApiVersionDelegate();
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate void RegisterReplacementDelegate(
         IntPtr largeMarker, IntPtr smallMarker,
         ref NativeAsyncOperationHandle largeHandle, ref NativeAsyncOperationHandle smallHandle);
 
-    internal static void Install()
-    {
+    internal static void Install() {
         if (_installed) return;
         try
         {
-            IntPtr target = new(GetGameAssemblyBase().ToInt64() + SharedJacketBuilderRva.ToInt64());
+            IntPtr target = new(GetSupportedGameAssemblyBase().ToInt64() + kReferencePipelineRva);
+            IntPtr handleClass = IL2CPP.GetIl2CppClass(
+                "Unity.ResourceManager.dll", "UnityEngine.ResourceManagement.AsyncOperations", "AsyncOperationHandle");
+            if (handleClass == IntPtr.Zero)
+                throw new InvalidOperationException("The native operation-handle class is unavailable.");
+            IntPtr acquireMethodInfo = IL2CPP.il2cpp_class_get_method_from_name(handleClass, "Acquire", 0);
+            if (acquireMethodInfo == IntPtr.Zero)
+                throw new MissingMethodException("AsyncOperationHandle.Acquire");
+            IntPtr acquireHandle = Marshal.ReadIntPtr(acquireMethodInfo);
+            if (acquireHandle == IntPtr.Zero)
+                throw new InvalidOperationException("The native operation-handle Acquire method has no entry point.");
             IntPtr bridge = LoadBridge();
+            GetBridgeApiVersionDelegate version = Marshal.GetDelegateForFunctionPointer<GetBridgeApiVersionDelegate>(
+                NativeLibrary.GetExport(bridge, "GetJacketBuilderBridgeApiVersion"));
+            if (version() != kBridgeApiVersion)
+                throw new InvalidOperationException("The native jacket bridge API does not match the managed hook.");
             InstallBridgeDelegate install = Marshal.GetDelegateForFunctionPointer<InstallBridgeDelegate>(
                 NativeLibrary.GetExport(bridge, "InstallJacketBuilderBridge"));
-            if (install(target) == 0)
-                throw new InvalidOperationException("The native bridge could not install its jacket-builder trampoline.");
+            if (install(target, acquireHandle, acquireMethodInfo) == 0)
+                throw new InvalidOperationException("The native bridge rejected the reference-pipeline prologue or could not install its trampoline.");
             _installed = true;
             GetBridgeCallCountDelegate count = Marshal.GetDelegateForFunctionPointer<GetBridgeCallCountDelegate>(
                 NativeLibrary.GetExport(bridge, "GetJacketBuilderBridgeCallCount"));
@@ -196,11 +210,17 @@ internal static class NativeJacketResolverOverride
         return _bridgeModule;
     }
 
-    private static IntPtr GetGameAssemblyBase()
-    {
-        foreach (ProcessModule module in Process.GetCurrentProcess().Modules)
-            if (string.Equals(module.ModuleName, "GameAssembly.dll", StringComparison.OrdinalIgnoreCase))
-                return module.BaseAddress;
+    private static IntPtr GetSupportedGameAssemblyBase() {
+        foreach (ProcessModule module in Process.GetCurrentProcess().Modules) {
+            if (!string.Equals(module.ModuleName, "GameAssembly.dll", StringComparison.OrdinalIgnoreCase)) continue;
+            using FileStream input = File.OpenRead(module.FileName);
+            using SHA256 algorithm = SHA256.Create();
+            string hash = Convert.ToHexString(algorithm.ComputeHash(input));
+            if (!string.Equals(hash, kGameAssemblySha256, StringComparison.Ordinal))
+                throw new InvalidOperationException("Unsupported GameAssembly SHA256 " + hash + "; custom jacket detour disabled.");
+
+            return module.BaseAddress;
+        }
         throw new InvalidOperationException("GameAssembly.dll is not loaded.");
     }
 

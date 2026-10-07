@@ -40,7 +40,7 @@ internal static class CustomSongInstaller
     private static bool _libraryInstalled;
     private static bool _collectionAssetsApplied;
     private static int _stockPackCount;
-    private static int[] _collectionStylePackIndexes;
+    private static int[] _collectionStylePackIds;
     private static int _collectionAssetProbeFrames;
 
     internal static CustomSongConfig ActiveConfig { get; private set; }
@@ -292,8 +292,7 @@ internal static class CustomSongInstaller
         SongData songData,
         PackData packData,
         DynamicStringMapping dynamicStrings,
-        CustomSongConfig root)
-    {
+        CustomSongConfig root) {
         Il2CppReferenceArray<SongInfo> oldSongs = songData.allSongInfo ??
             throw new InvalidOperationException("SongData.allSongInfo is unavailable.");
         Il2CppReferenceArray<PackInfo> oldPacks = packData.PackInfo ??
@@ -334,16 +333,22 @@ internal static class CustomSongInstaller
         }
 
         int nextSongId = oldSongs.Length;
-        int[] stylePackIndexes = new int[root.Collections.Length];
-        for (int collectionIndex = 0; collectionIndex < root.Collections.Length; collectionIndex++)
-        {
+        int[] stylePackIds = new int[root.Collections.Length];
+        for (int collectionIndex = 0; collectionIndex < root.Collections.Length; collectionIndex++) {
             CustomSongCollection collection = root.Collections[collectionIndex];
-            if (!usedPackIds.Add(collection.PackId) || !usedPackSlugs.Add(collection.Slug))
+            int runtimePackId = oldPacks.Length + collectionIndex;
+            if (runtimePackId > ushort.MaxValue)
+                throw new InvalidOperationException("custom library exceeds the PackId range.");
+            if (!usedPackIds.Add((ushort)runtimePackId) || !usedPackSlugs.Add(collection.Slug))
                 throw new InvalidOperationException($"custom collection '{collection.Slug}' conflicts with an existing PackData id or slug.");
 
-            stylePackIndexes[collectionIndex] = FindPackIndexBySlug(
+            if (collection.PackId != runtimePackId)
+                CustomSongMod.Log.Msg($"[CustomSong] collection '{collection.Slug}' PackId {collection.PackId}->{runtimePackId} (PackInfo index).");
+            collection.PackId = (ushort)runtimePackId;
+            int stylePackIndex = FindPackIndexBySlug(
                 oldPacks,
                 string.IsNullOrWhiteSpace(collection.StylePackSlug) ? "act-4" : collection.StylePackSlug);
+            stylePackIds[collectionIndex] = oldPacks[stylePackIndex].Id.Value;
             foreach (CustomSongConfig config in collection.Songs)
             {
                 if (nextSongId > ushort.MaxValue)
@@ -431,7 +436,7 @@ internal static class CustomSongInstaller
         packData.OnAfterDeserialize();
 
         _stockPackCount = oldPacks.Length;
-        _collectionStylePackIndexes = stylePackIndexes;
+        _collectionStylePackIds = stylePackIds;
         _libraryInstalled = true;
         CustomSongMod.Log.Msg(
             $"[CustomSong] expanded SongData {oldSongs.Length}->{nextSongs.Length}; PackData {oldPacks.Length}->{packData.PackInfo.Length}; selectorFilter={songData._Ffb?.Length ?? -1}; rebuiltEarlyCache={rebuildingEarlyCache}");
@@ -564,18 +569,16 @@ internal static class CustomSongInstaller
         CustomSongMod.Log.Msg("[CustomSong] reapplied custom title/artist mappings after DynamicStringMapping deserialization.");
     }
 
-    internal static void ApplyCollectionAssets(PackSelectSceneAssets assets)
-    {
+    internal static void ApplyCollectionAssets(PackSelectSceneAssets assets) {
         if (!_libraryInstalled || _collectionAssetsApplied || assets?.packToAssets is null) return;
         try
         {
             var oldAssets = assets.packToAssets;
             if (oldAssets.Length < _stockPackCount)
                 throw new InvalidOperationException($"pack style table shrank to {oldAssets.Length}; expected at least {_stockPackCount}.");
-            if (oldAssets.Length == _stockPackCount)
-                assets.packToAssets = AppendIndexed(oldAssets, _collectionStylePackIndexes);
+            assets.packToAssets = AssignCollectionStyles(oldAssets, _collectionStylePackIds, _stockPackCount);
             _collectionAssetsApplied = true;
-            CustomSongMod.Log.Msg($"[CustomSong] appended collection visual styles: {oldAssets.Length}->{assets.packToAssets.Length}");
+            CustomSongMod.Log.Msg($"[CustomSong] assigned collection visual styles by PackId: {oldAssets.Length}->{assets.packToAssets.Length}; customStart={_stockPackCount}; count={_collectionStylePackIds.Length}");
         }
         catch (Exception exception)
         {
@@ -583,18 +586,19 @@ internal static class CustomSongInstaller
         }
     }
 
-    private static Il2CppReferenceArray<T> AppendIndexed<T>(Il2CppReferenceArray<T> source, int[] sourceIndexes)
-        where T : Il2CppObjectBase
-    {
-        Il2CppReferenceArray<T> next = new(source.Length + sourceIndexes.Length);
+    private static Il2CppReferenceArray<T> AssignCollectionStyles<T>(
+        Il2CppReferenceArray<T> source, int[] sourcePackIds, int firstCustomPackId)
+        where T : Il2CppObjectBase {
+        Il2CppReferenceArray<T> next = new(Math.Max(source.Length, firstCustomPackId + sourcePackIds.Length));
+
         for (int index = 0; index < source.Length; index++) next[index] = source[index];
-        for (int index = 0; index < sourceIndexes.Length; index++)
-        {
-            int sourceIndex = sourceIndexes[index];
-            if (sourceIndex < 0 || sourceIndex >= source.Length)
-                throw new IndexOutOfRangeException($"style pack index {sourceIndex} is outside {source.Length} visual assets.");
-            next[source.Length + index] = source[sourceIndex];
+        for (int index = 0; index < sourcePackIds.Length; index++) {
+            int sourcePackId = sourcePackIds[index];
+            if (sourcePackId < 0 || sourcePackId >= source.Length)
+                throw new IndexOutOfRangeException($"style PackId {sourcePackId} is outside {source.Length} visual assets.");
+            next[firstCustomPackId + index] = source[sourcePackId];
         }
+
         return next;
     }
 
@@ -789,8 +793,7 @@ internal static class CustomSongInstaller
     // IL2CPP value-type wrappers can point at a boxed/array-backed value. Do
     // not assign a template wrapper and then set its properties: that risks
     // changing the original database record instead of the appended one.
-    private static SongInfo CloneSong(SongInfo source) => new()
-    {
+    private static SongInfo CloneSong(SongInfo source) => new() {
         Id = source.Id,
         BaseName = source.BaseName,
         CharacterIdentifier = source.CharacterIdentifier,
@@ -799,6 +802,7 @@ internal static class CustomSongInstaller
         PreviewEndSeconds = source.PreviewEndSeconds,
         LocalizationToTitleReadingOverride = source.LocalizationToTitleReadingOverride,
         ArtistReadingOverride = source.ArtistReadingOverride,
+        Copyright = source.Copyright,
         GameplayBackground = source.GameplayBackground,
         RewardStyle = source.RewardStyle,
     };
