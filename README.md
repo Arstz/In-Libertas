@@ -1,6 +1,6 @@
 # In Libertas - exsurge, two can play fake latin.
 
-A GUI editor for .spc charts and a hook for the game In Falsus by lowiro. This repository does not supply any game assets nor extracted .spc charts from the game itself. In order to play the charts you need to own a copy of the game.
+A GUI editor for .spc charts and a hook for the game In Falsus by lowiro. This repository does not supply any game assets nor extracted .spc charts from the game itself. In order to play the charts you need to own a copy of the game. For fast and direct communication use [discord server](https://discord.gg/MrtxtVvYuZ), I read the issues here as well.
 
 ## Getting started
 
@@ -19,7 +19,7 @@ In order to make custom charts launch the editor and follow [User Manual](docs/M
 - CMake 3.24 or newer.
 - Visual Studio 2022 with the Desktop development with C++ workload and x64 tools.
 - The .NET 6 SDK.
-- [vcpkg](https://github.com/microsoft/vcpkg) at `C:\vcpkg\vcpkg`, with the Qt 6 Core, Gui, Multimedia, OpenGL, OpenGLWidgets, and Widgets components installed for `x64-windows`.
+- [vcpkg](https://github.com/microsoft/vcpkg), with the Qt 6 Core, Gui, Multimedia, OpenGL, OpenGLWidgets, and Widgets components installed for `x64-windows`.
 - An In Falsus installation with MelonLoader, so the hook project can reference its generated IL2CPP assemblies.
 
 Run `tools\build.ps1`. The editor and its runtime files are written to
