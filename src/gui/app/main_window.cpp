@@ -1,6 +1,8 @@
 #include "gui/app/main_window.h"
 
 #include "core/chart_project.h"
+#include "core/audio_exporter.h"
+#include "core/media_assets.h"
 #include "core/timing_analyzer.h"
 #include "gui/canvas/flat_view.h"
 #include "gui/state/editor_state.h"
@@ -34,7 +36,6 @@
 #include <QtGui/QKeyEvent>
 #include <QtGui/QKeySequence>
 #include <QtGui/QImage>
-#include <QtGui/QImageReader>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QAbstractSpinBox>
@@ -50,6 +51,7 @@
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QProgressDialog>
 #include <QtGui/QShowEvent>
 #include <QtGui/QCloseEvent>
 #include <QtWidgets/QSplitter>
@@ -137,20 +139,6 @@ constexpr int kRecentProjectLimit = 10;
     return kAllowedCharacters.match(chartId).hasMatch();
 }
 
-[[nodiscard]] bool readExportableJacket(const QString& path, QImage* image, QString* error) {
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    const QImage decoded = reader.read();
-    if (decoded.isNull()) {
-        *error = QStringLiteral("The jacket cannot be decoded: %1").arg(reader.errorString());
-        return false;
-    }
-    if (image != nullptr) {
-        *image = decoded;
-    }
-    return true;
-}
-
 [[nodiscard]] QUrl inMemoryAudioHint(const QString& fileName) {
     const QString safeFileName = QFileInfo(fileName).fileName();
     return QUrl(QStringLiteral("memory://project/%1").arg(
@@ -178,20 +166,24 @@ struct ImportedSpcIdentity {
 
 [[nodiscard]] QString jacketPathForImportedSpc(const QFileInfo& chartFileInfo, const QString& songName) {
     const QDir folder(chartFileInfo.absolutePath());
-    const QStringList candidates{
-        songName + QStringLiteral(".png"),
-        chartFileInfo.completeBaseName() + QStringLiteral(".png"),
-        QStringLiteral("jacketLarge.png"),
-        QStringLiteral("jacket.png"),
-        QStringLiteral("jacketSmall.png"),
-    };
+    QStringList candidates;
+    const QStringList stems{songName, chartFileInfo.completeBaseName(),
+        QStringLiteral("jacketLarge"), QStringLiteral("jacket"), QStringLiteral("jacketSmall")};
+    const QStringList filters = imageNameFilters();
+    for (const QString& stem : stems) {
+        candidates.append(stem + QStringLiteral(".png"));
+        for (const QString& filter : filters) {
+            candidates.append(stem + filter.mid(1));
+        }
+    }
+    candidates.removeDuplicates();
     for (const QString& fileName : candidates) {
         const QString path = folder.filePath(fileName);
         if (!QFileInfo::exists(path)) {
             continue;
         }
         QString error;
-        if (readExportableJacket(path, nullptr, &error)) {
+        if (readJacketImage(path, nullptr, &error)) {
             return path;
         }
     }
@@ -199,47 +191,6 @@ struct ImportedSpcIdentity {
     return {};
 }
 
-[[nodiscard]] bool writeDataForExport(const QByteArray& data, const QString& destinationPath, QString* error) {
-    QSaveFile destination(destinationPath);
-
-    if (!destination.open(QIODevice::WriteOnly)
-        || destination.write(data) != data.size()
-        || !destination.commit()) {
-        *error = QStringLiteral("Could not write %1.").arg(QFileInfo(destinationPath).fileName());
-        return false;
-    }
-
-    return true;
-}
-
-[[nodiscard]] bool copyFileForExport(const QString& sourcePath, const QString& destinationPath, QString* error) {
-    QFile source(sourcePath);
-    if (!source.open(QIODevice::ReadOnly)) {
-        *error = QStringLiteral("Could not read %1.").arg(QFileInfo(sourcePath).fileName());
-        return false;
-    }
-    QSaveFile destination(destinationPath);
-    if (!destination.open(QIODevice::WriteOnly)) {
-        *error = QStringLiteral("Could not write %1.").arg(QFileInfo(destinationPath).fileName());
-        return false;
-    }
-    while (!source.atEnd()) {
-        const QByteArray chunk = source.read(1024 * 1024);
-        if (chunk.isEmpty() && !source.atEnd()) {
-            *error = QStringLiteral("Could not read %1.").arg(QFileInfo(sourcePath).fileName());
-            return false;
-        }
-        if (destination.write(chunk) != chunk.size()) {
-            *error = QStringLiteral("Could not write %1.").arg(QFileInfo(destinationPath).fileName());
-            return false;
-        }
-    }
-    if (!destination.commit()) {
-        *error = QStringLiteral("Could not finish writing %1.").arg(QFileInfo(destinationPath).fileName());
-        return false;
-    }
-    return true;
-}
 
 [[nodiscard]] QJsonValue optionalConfigValue(const QString& value) {
     return value.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(value);
@@ -404,6 +355,9 @@ MainWindow::MainWindow(QWidget* parent)
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (QApplication::activeModalWidget() != nullptr && QApplication::activeModalWidget() != this) {
+        return QMainWindow::eventFilter(watched, event);
+    }
     if ((watched == m_flatView || watched == m_toolsToolbar) && event->type() == QEvent::Resize) {
         QTimer::singleShot(0, this, &MainWindow::updateVolumeSliderPlacement);
     }
@@ -731,6 +685,9 @@ void MainWindow::buildInterface() {
     connect(m_playback, &PlaybackController::audioError, this, [this](const QString& message) {
         m_statusLabel->setText(QStringLiteral("Audio fallback clock: %1").arg(message));
     });
+    connect(m_flatView, &FlatView::waveformError, this, [this](const QString& message) {
+        m_statusLabel->setText(QStringLiteral("Waveform decoding failed: %1").arg(message));
+    });
     connect(m_playback, &PlaybackController::mediaDurationChanged, this, &MainWindow::updateProjectDuration);
     connect(m_timeline, &TimelineWidget::playbackPositionRequested, m_state, &EditorState::setPlaybackPosition);
     connect(m_flatView, &FlatView::playbackPositionRequested, m_state, &EditorState::setPlaybackPosition);
@@ -1026,12 +983,13 @@ void MainWindow::buildWorkspace() {
         }
         const QString jacketPath = QFileDialog::getOpenFileName(this, QStringLiteral("Choose jacket"),
             m_project.jacketPath.isEmpty() ? QFileInfo(m_project.songPath).absolutePath() : m_project.jacketPath,
-            QStringLiteral("Images (*.png *.jpg *.jpeg *.webp);;All files (*)"));
+            imageFileDialogFilter());
         if (jacketPath.isEmpty()) {
             return;
         }
         QString error;
-        if (!readExportableJacket(jacketPath, nullptr, &error)) {
+        QImage jacket;
+        if (!readJacketImage(jacketPath, &jacket, &error)) {
             QMessageBox::warning(this, QStringLiteral("Choose jacket"), error);
             return;
         }
@@ -1043,11 +1001,7 @@ void MainWindow::buildWorkspace() {
                 return;
             }
             m_projectJacketData = jacketFile.readAll();
-            if (!m_projectJacketImage.loadFromData(m_projectJacketData)) {
-                QMessageBox::warning(this, QStringLiteral("Choose jacket"),
-                    QStringLiteral("The selected jacket could not be decoded."));
-                return;
-            }
+            m_projectJacketImage = std::move(jacket);
             m_project.jacketPath = QFileInfo(jacketPath).fileName();
         } else {
             m_project.jacketPath = jacketPath;
@@ -1273,7 +1227,7 @@ bool MainWindow::readProjectJacket(QImage* image, QString* error) const {
         return false;
     }
 
-    return readExportableJacket(m_project.jacketPath, image, error);
+    return readJacketImage(m_project.jacketPath, image, error);
 }
 
 void MainWindow::updateViewerSongCard() {
@@ -1323,11 +1277,7 @@ void MainWindow::togglePlayback() {
 
 QString MainWindow::audioPathForFolder(const QString& folderPath) const {
     const QDir folder(folderPath);
-    const QFileInfoList audioFiles = folder.entryInfoList({
-        QStringLiteral("*.ogg"), QStringLiteral("*.wav"), QStringLiteral("*.mp3"),
-        QStringLiteral("*.flac"), QStringLiteral("*.m4a"), QStringLiteral("*.aac"),
-        QStringLiteral("*.opus"), QStringLiteral("*.wma"),
-    }, QDir::Files, QDir::Name);
+    const QFileInfoList audioFiles = folder.entryInfoList(audioNameFilters(), QDir::Files, QDir::Name);
 
     return audioFiles.isEmpty() ? QString() : audioFiles.front().absoluteFilePath();
 }
@@ -1494,20 +1444,29 @@ void MainWindow::createProject() {
     if (!confirmDiscardUnsavedChanges(QStringLiteral("creating a new project"))) {
         return;
     }
-    const QString songPath = QFileDialog::getOpenFileName(this, QStringLiteral("Choose project song"), {},
-        QStringLiteral("Audio files (*.ogg *.wav *.mp3 *.flac);;All files (*)"));
-    if (songPath.isEmpty()) {
-        return;
-    }
-    QString jacketPath;
-    while (jacketPath.isEmpty()) {
-        const QString selectedPath = QFileDialog::getOpenFileName(this, QStringLiteral("Choose jacket"),
-            QFileInfo(songPath).absolutePath(), QStringLiteral("Images (*.png *.jpg *.jpeg *.webp);;All files (*)"));
+    QString songPath;
+    while (songPath.isEmpty()) {
+        const QString selectedPath = QFileDialog::getOpenFileName(this, QStringLiteral("Choose project song"), {},
+            audioFileDialogFilter());
         if (selectedPath.isEmpty()) {
             return;
         }
         QString error;
-        if (readExportableJacket(selectedPath, nullptr, &error)) {
+        if (validateAudioSource(selectedPath, &error)) {
+            songPath = selectedPath;
+        } else {
+            QMessageBox::warning(this, QStringLiteral("Choose project song"), error);
+        }
+    }
+    QString jacketPath;
+    while (jacketPath.isEmpty()) {
+        const QString selectedPath = QFileDialog::getOpenFileName(this, QStringLiteral("Choose jacket"),
+            QFileInfo(songPath).absolutePath(), imageFileDialogFilter());
+        if (selectedPath.isEmpty()) {
+            return;
+        }
+        QString error;
+        if (readJacketImage(selectedPath, nullptr, &error)) {
             jacketPath = selectedPath;
         } else {
             QMessageBox::warning(this, QStringLiteral("Choose jacket"), error);
@@ -1765,19 +1724,22 @@ void MainWindow::exportProject() {
         return;
     }
 
-    const QString audioSuffix = QFileInfo(m_project.songPath).suffix().toLower();
-    if (audioSuffix.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Export project"), QStringLiteral("The project song has no file extension."));
-        return;
-    }
-    const QString audioFileName = QStringLiteral("audio.%1").arg(audioSuffix);
+    const QString audioFileName = QStringLiteral("audio.ogg");
     const QString audioOutputPath = outputDirectory.filePath(audioFileName);
-    const bool audioExported = m_projectSongData.isEmpty()
-        ? copyFileForExport(m_project.songPath, audioOutputPath, &error)
-        : writeDataForExport(m_projectSongData, audioOutputPath, &error);
+    QProgressDialog progress(QStringLiteral("Exporting Ogg Vorbis audio..."), QStringLiteral("Cancel"), 0, 100, this);
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    const bool audioExported = exportOggAudio(m_project.songPath, m_projectSongData, audioOutputPath, &error,
+        [&progress](qint64 position, qint64 duration) {
+        progress.setValue(duration > 0 ? static_cast<int>(std::clamp(100 * position / duration, qint64(0), qint64(99))) : 0);
+        return !progress.wasCanceled();
+    });
+    progress.close();
     if (!audioExported
-        || !jacket.save(outputDirectory.filePath(QStringLiteral("jacketLarge.png")), "PNG")
-        || !jacket.save(outputDirectory.filePath(QStringLiteral("jacketSmall.png")), "PNG")) {
+        || !writeJacketImage(jacket, outputDirectory.filePath(QStringLiteral("jacketLarge.png")), &error)
+        || !writeJacketImage(jacket, outputDirectory.filePath(QStringLiteral("jacketSmall.png")), &error)) {
         if (error.isEmpty()) {
             error = QStringLiteral("Could not write the jacket PNG files.");
         }
@@ -1847,7 +1809,10 @@ void MainWindow::loadProjectAssets(const QString& songFileName, const QByteArray
     m_project.jacketPath = QFileInfo(jacketFileName).fileName();
     m_projectJacketImage = {};
     if (!m_projectJacketData.isEmpty()) {
-        m_projectJacketImage.loadFromData(m_projectJacketData);
+        QString error;
+        if (!readJacketImage(m_projectJacketData, &m_projectJacketImage, &error)) {
+            m_statusLabel->setText(error);
+        }
     }
 }
 

@@ -11,7 +11,6 @@ class QPainter;
 class QMouseEvent;
 class QAudioBuffer;
 class QAudioDecoder;
-class QProcess;
 class QWheelEvent;
 
 namespace infalsus::gui {
@@ -56,6 +55,7 @@ signals:
     void hitObjectBatchMoveFinished();
     void hitObjectSelectionRequested(QVector<int> indexes);
     void hitObjectsCopyRequested(QVector<ChartNote> hitObjects);
+    void waveformError(const QString& message);
 
 protected:
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -133,8 +133,7 @@ private:
     [[nodiscard]] bool canPlaceSky() const;
     void invalidateSelectedZoneConnections();
     void ensureSelectedZoneConnections() const;
-    [[nodiscard]] QString waveformToolPath() const;
-    bool loadWaveform(const QByteArray& waveformData);
+    void resetWaveformAudio();
     void appendWaveformAudio(const QAudioBuffer& buffer);
     [[nodiscard]] double timeToY(qint64 timeMilliseconds) const;
     [[nodiscard]] double playheadY() const;
@@ -163,12 +162,11 @@ private:
     mutable bool m_selectedZoneConnectionsDirty = true;
     QVector<QPointF> m_waveformPeaks;
     ChartNote m_dragOriginal;
-    QProcess* m_waveformProcess = nullptr;
     QAudioDecoder* m_waveformDecoder = nullptr;
     QBuffer m_waveformBuffer;
     QByteArray m_waveformAudioData;
     QPointF m_pressPosition;
-    double m_waveformMillisecondsPerPeak = 10.0;
+    double m_waveformMillisecondsPerPeak = 0.0;
     int m_waveformFramesPerPeak = 1;
     int m_waveformFramesInPeak = 0;
     double m_waveformMinimum = 0.0;

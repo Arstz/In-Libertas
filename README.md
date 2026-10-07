@@ -19,13 +19,27 @@ In order to make custom charts launch the editor and follow [User Manual](docs/M
 - CMake 3.24 or newer.
 - Visual Studio 2022 with the Desktop development with C++ workload and x64 tools.
 - The .NET 6 SDK.
-- [vcpkg](https://github.com/microsoft/vcpkg), with the Qt 6 Core, Gui, Multimedia, OpenGL, OpenGLWidgets, and Widgets components installed for `x64-windows`.
+- [vcpkg](https://github.com/microsoft/vcpkg), with Qt 6.10 or newer (Core, Gui, Multimedia, OpenGL, OpenGLWidgets, and Widgets) installed for `x64-windows`. Qt Multimedia must use its FFmpeg backend.
+- Qt's JPEG and GIF plugins, and `qtimageformats[core,webp]:x64-windows` for WebP. The build also deploys Qt's ICO and TGA plugins; BMP and PNG are built into Qt Gui.
+- FFmpeg with the stable libvorbis encoder enabled (`vcpkg install "ffmpeg[vorbis]:x64-windows" --recurse`) for Ogg Vorbis export. No separate `ffmpeg.exe` or audiowaveform executable is needed.
 - An In Falsus installation with MelonLoader, so the hook project can reference its generated IL2CPP assemblies.
 
 Run `tools\build.ps1`. The editor and its runtime files are written to
 `build\In Libertas`; the managed hook and native jacket resolver bridge are
 written to `build\Mods`.
 
+Run `ctest --test-dir build -C Release --output-on-failure` after building to
+check media decoding, normalized jacket export, and Ogg Vorbis audio export.
+
 ## Credits
 
-The repository bundles [audiowaveform](https://github.com/bbc/audiowaveform) in `tools\audiowaveform` for waveform generation.
+The editor uses [Qt](https://www.qt.io/) and its
+[FFmpeg](https://ffmpeg.org/) multimedia backend for audio playback, waveform
+generation, timing analysis, and export. Ogg Vorbis encoding uses
+[libvorbis and libogg](https://xiph.org/). JPEG and WebP support use Qt's plugins
+and their [libjpeg-turbo](https://libjpeg-turbo.org/) and
+[WebP](https://developers.google.com/speed/webp) codecs.
+
+The repository also retains the legacy bundled
+[audiowaveform](https://github.com/bbc/audiowaveform) binary; the editor no longer
+requires or uses it.

@@ -8,15 +8,9 @@
 #include <QtGui/QCursor>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
-#include <QtCore/QCoreApplication>
-#include <QtCore/QDir>
-#include <QtCore/QFileInfo>
-#include <QtCore/QJsonArray>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
 #include <QtCore/QLineF>
-#include <QtCore/QProcess>
 #include <QtCore/QSet>
+#include <QtCore/QUrl>
 #include <QtMultimedia/QAudioBuffer>
 #include <QtMultimedia/QAudioDecoder>
 
@@ -195,18 +189,19 @@ FlatView::FlatView(QWidget* parent)
     : QOpenGLWidget(parent) {
     setMinimumSize(240, 300);
     setFocusPolicy(Qt::StrongFocus);
-    m_waveformProcess = new QProcess(this);
-    connect(m_waveformProcess, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-        [this](const int exitCode, const QProcess::ExitStatus exitStatus) {
-            if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
-                loadWaveform(m_waveformProcess->readAllStandardOutput());
-            }
-        });
     m_waveformDecoder = new QAudioDecoder(this);
     connect(m_waveformDecoder, &QAudioDecoder::bufferReady, this, [this] {
         while (m_waveformDecoder->bufferAvailable()) {
             appendWaveformAudio(m_waveformDecoder->read());
         }
+        update();
+    });
+    connect(m_waveformDecoder, qOverload<QAudioDecoder::Error>(&QAudioDecoder::error), this,
+        [this](QAudioDecoder::Error) {
+        m_waveformPeaks.clear();
+        m_waveformFramesInPeak = 0;
+        update();
+        emit waveformError(m_waveformDecoder->errorString());
     });
     connect(m_waveformDecoder, &QAudioDecoder::finished, this, [this] {
         while (m_waveformDecoder->bufferAvailable()) {
@@ -298,54 +293,18 @@ void FlatView::setSelectedHitObjects(QVector<int> indexes) {
 }
 
 void FlatView::setAudioSource(const QString& audioPath) {
-    if (m_waveformProcess->state() != QProcess::NotRunning) {
-        m_waveformProcess->kill();
-    }
-    if (m_waveformDecoder->isDecoding()) {
-        m_waveformDecoder->stop();
-    }
-    m_waveformBuffer.close();
-    m_waveformBuffer.setBuffer(nullptr);
-    m_waveformAudioData.clear();
-    m_waveformPeaks.clear();
-    m_waveformMillisecondsPerPeak = 10.0;
+    resetWaveformAudio();
+    m_waveformDecoder->setSource(QUrl::fromLocalFile(audioPath));
     if (audioPath.isEmpty()) {
-        update();
         return;
     }
-
-    const QString toolPath = waveformToolPath();
-    if (!QFileInfo(toolPath).isExecutable()) {
-        update();
-        return;
-    }
-    m_waveformProcess->start(toolPath, {
-        QStringLiteral("--input-filename"), audioPath,
-        QStringLiteral("--output-filename"), QStringLiteral("-"),
-        QStringLiteral("--output-format"), QStringLiteral("json"),
-        QStringLiteral("--pixels-per-second"), QString::number(kWaveformPointsPerSecond),
-        QStringLiteral("--bits"), QStringLiteral("8"),
-        QStringLiteral("--quiet"),
-    });
-    update();
+    m_waveformDecoder->start();
 }
 
 void FlatView::setAudioData(QByteArray audioData, const QString& fileName) {
     Q_UNUSED(fileName)
 
-    if (m_waveformProcess->state() != QProcess::NotRunning) {
-        m_waveformProcess->kill();
-    }
-    if (m_waveformDecoder->isDecoding()) {
-        m_waveformDecoder->stop();
-    }
-    m_waveformPeaks.clear();
-    m_waveformMillisecondsPerPeak = 1000.0 / kWaveformPointsPerSecond;
-    m_waveformFramesPerPeak = 1;
-    m_waveformFramesInPeak = 0;
-    m_waveformMinimum = 0.0;
-    m_waveformMaximum = 0.0;
-    m_waveformBuffer.close();
+    resetWaveformAudio();
     m_waveformAudioData = std::move(audioData);
     if (m_waveformAudioData.isEmpty()) {
         update();
@@ -1374,43 +1333,18 @@ bool FlatView::canPlaceSky() const {
     return m_tool == EditorTool::Place && canInteractSky();
 }
 
-QString FlatView::waveformToolPath() const {
-    QDir applicationDirectory(QCoreApplication::applicationDirPath());
-    applicationDirectory.cdUp();
-    applicationDirectory.cdUp();
-
-    return applicationDirectory.filePath(QStringLiteral("tools/audiowaveform/audiowaveform.exe"));
-}
-
-bool FlatView::loadWaveform(const QByteArray& waveformData) {
-    const QJsonDocument document = QJsonDocument::fromJson(waveformData);
-    if (!document.isObject()) {
-        return false;
-    }
-    const QJsonObject root = document.object();
-    const QJsonArray data = root.value(QStringLiteral("data")).toArray();
-    const int sampleRate = root.value(QStringLiteral("sample_rate")).toInt();
-    const int samplesPerPixel = root.value(QStringLiteral("samples_per_pixel")).toInt();
-    const int bits = root.value(QStringLiteral("bits")).toInt();
-    if (data.size() < 2 || sampleRate <= 0 || samplesPerPixel <= 0 || (data.size() % 2) != 0) {
-        return false;
-    }
-
-    const double amplitudeRange = bits == 8 ? 128.0 : 32768.0;
-    const double millisecondsPerPeak = 1000.0 * samplesPerPixel / sampleRate;
-    QVector<QPointF> peaks;
-    peaks.reserve(data.size() / 2);
-    for (int index = 0; index < data.size(); index += 2) {
-        peaks.append({
-            data.at(index).toDouble() / amplitudeRange,
-            data.at(index + 1).toDouble() / amplitudeRange,
-        });
-    }
-    m_waveformPeaks = std::move(peaks);
-    m_waveformMillisecondsPerPeak = millisecondsPerPeak;
+void FlatView::resetWaveformAudio() {
+    m_waveformDecoder->stop();
+    m_waveformBuffer.close();
+    m_waveformBuffer.setBuffer(nullptr);
+    m_waveformAudioData.clear();
+    m_waveformPeaks.clear();
+    m_waveformMillisecondsPerPeak = 1000.0 / kWaveformPointsPerSecond;
+    m_waveformFramesPerPeak = 1;
+    m_waveformFramesInPeak = 0;
+    m_waveformMinimum = 0.0;
+    m_waveformMaximum = 0.0;
     update();
-
-    return true;
 }
 
 void FlatView::appendWaveformAudio(const QAudioBuffer& buffer) {

@@ -1,6 +1,6 @@
 # In Libertas editor manual
 
-Please read this guide in full before using the editor, this would answer many of your questions before you encounter them down the line, I tried to keep it as consice as possible.
+Please read this guide in full before using the editor, this would answer many of your questions before you encounter them down the line, I tried to keep it as concise as possible.
 
 ## Main workflow
 

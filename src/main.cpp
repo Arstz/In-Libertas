@@ -5,6 +5,7 @@
 #include <QtWidgets/QApplication>
 
 int main(int argc, char* argv[]) {
+    qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     QSurfaceFormat surfaceFormat = QSurfaceFormat::defaultFormat();
     surfaceFormat.setSamples(4);
     QSurfaceFormat::setDefaultFormat(surfaceFormat);

@@ -9,7 +9,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Multimedia OpenGL OpenGLWidgets Widgets)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Multimedia OpenGL OpenGLWidgets Widgets)
+find_package(FFmpeg REQUIRED COMPONENTS AVCODEC AVFORMAT)
 
 qt_add_executable(InLibertas WIN32
     src/main.cpp
@@ -23,6 +24,10 @@ qt_add_executable(InLibertas WIN32
     src/core/chart_document.cpp
     src/core/chart_document.h
     src/core/chart_types.h
+    src/core/audio_exporter.cpp
+    src/core/audio_exporter.h
+    src/core/media_assets.cpp
+    src/core/media_assets.h
     src/gui/app/main_window.cpp
     src/gui/app/main_window.h
     src/gui/app/dark_theme.cpp
@@ -52,7 +57,7 @@ qt_add_executable(InLibertas WIN32
 
 set_target_properties(InLibertas PROPERTIES OUTPUT_NAME "In Libertas")
 
-target_include_directories(InLibertas PRIVATE src)
+target_include_directories(InLibertas PRIVATE src ${FFMPEG_INCLUDE_DIRS})
 
 target_link_libraries(InLibertas PRIVATE
     Qt6::Core
@@ -61,35 +66,31 @@ target_link_libraries(InLibertas PRIVATE
     Qt6::OpenGL
     Qt6::OpenGLWidgets
     Qt6::Widgets
+    FFmpeg::avcodec
+    FFmpeg::avformat
 )
 
-# Qt's platform plugins are not linked into the executable. Keep the native
-# Windows backend beside the Release binary so it also launches from Explorer.
 add_custom_command(TARGET InLibertas POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:InLibertas>/platforms"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:InLibertas>/multimedia"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms/qwindows.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/platforms/qwindows.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/multimedia/ffmpegmediaplugin.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/multimedia/ffmpegmediaplugin.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/multimedia/windowsmediaplugin.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/multimedia/windowsmediaplugin.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/avformat-62.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/avformat-62.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/avcodec-62.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/avcodec-62.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/swresample-6.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/swresample-6.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/swscale-9.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/swscale-9.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/avutil-60.dll"
-        "$<TARGET_FILE_DIR:InLibertas>/avutil-60.dll"
+    COMMAND ${CMAKE_COMMAND}
+        "-Dvcpkg_directory=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
+        "-Doutput_directory=$<TARGET_FILE_DIR:InLibertas>"
+        "-Dconfiguration=$<CONFIG>"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/deploy_editor_runtime.cmake"
+    VERBATIM
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    qt_add_executable(media_assets_test
+        tests/core/media_assets_test.cpp
+        src/core/media_assets.cpp
+        src/core/audio_exporter.cpp
+    )
+    target_include_directories(media_assets_test PRIVATE src ${FFMPEG_INCLUDE_DIRS})
+    target_link_libraries(media_assets_test PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Multimedia
+        FFmpeg::avcodec FFmpeg::avformat
+    )
+    add_dependencies(media_assets_test InLibertas)
+    add_test(NAME media_assets COMMAND media_assets_test)
+endif()
