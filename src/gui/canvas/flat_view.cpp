@@ -1218,7 +1218,12 @@ ChartNote FlatView::zoneHitObjectForControlMove(const QPointF& position) const {
 }
 
 QVector<int> FlatView::linkedZoneIndexes() const {
-    QVector<int> indexes;
+    const bool controlsStart = m_dragZoneControl.kind == ZoneControlKind::StartLeft
+        || m_dragZoneControl.kind == ZoneControlKind::StartRight
+        || m_dragZoneControl.kind == ZoneControlKind::StartTime;
+    const bool controlsTime = m_dragZoneControl.kind == ZoneControlKind::StartTime
+        || m_dragZoneControl.kind == ZoneControlKind::EndTime;
+
     if (m_dragZoneControl.kind == ZoneControlKind::None
         || m_dragHitObjectIndex < 0) {
         return {m_dragHitObjectIndex};
@@ -1228,37 +1233,7 @@ QVector<int> FlatView::linkedZoneIndexes() const {
         return {m_dragHitObjectIndex};
     }
 
-    const bool controlsStart = m_dragZoneControl.kind == ZoneControlKind::StartLeft
-        || m_dragZoneControl.kind == ZoneControlKind::StartRight
-        || m_dragZoneControl.kind == ZoneControlKind::StartTime;
-    const qint64 sharedTime = controlsStart ? m_dragOriginal.startMilliseconds : m_dragOriginal.endMilliseconds;
-    const double sharedLeft = zoneLeftEdge(m_dragOriginal, controlsStart);
-    const double sharedRight = zoneRightEdge(m_dragOriginal, controlsStart);
-    constexpr qint64 kTimeToleranceMilliseconds = 1;
-    constexpr double kEdgeTolerance = 0.0001;
-
-    for (int index = 0; index < m_chart.notes.size(); ++index) {
-        const ChartNote& candidate = m_chart.notes.at(index);
-        if (candidate.kind != NoteKind::Sky || candidate.groupId != m_dragOriginal.groupId) {
-            continue;
-        }
-        const bool candidateEndpointIsStart = !controlsStart;
-        const qint64 candidateTime = candidateEndpointIsStart
-            ? candidate.startMilliseconds
-            : candidate.endMilliseconds;
-        if (std::abs(candidateTime - sharedTime) > kTimeToleranceMilliseconds
-            || std::abs(zoneLeftEdge(candidate, candidateEndpointIsStart) - sharedLeft) > kEdgeTolerance
-            || std::abs(zoneRightEdge(candidate, candidateEndpointIsStart) - sharedRight) > kEdgeTolerance) {
-            continue;
-        }
-        indexes.append(index);
-    }
-    if (!indexes.contains(m_dragHitObjectIndex)) {
-        indexes.append(m_dragHitObjectIndex);
-    }
-    std::sort(indexes.begin(), indexes.end());
-
-    return indexes;
+    return linkedZoneEndpointIndexes(m_chart, m_dragHitObjectIndex, controlsStart, !controlsTime);
 }
 
 QVector<ChartNote> FlatView::zoneHitObjectsForControlMove(const QPointF& position, const bool snapToGrid) const {

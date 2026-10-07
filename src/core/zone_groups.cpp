@@ -126,6 +126,40 @@ QVector<ZoneSegment> mergeZoneSegments(QVector<ZoneSegment> segments) {
     return result;
 }
 
+QVector<int> linkedZoneEndpointIndexes(const ChartData& chart, const int zoneIndex, const bool atStart,
+    const bool fullySharedOnly) {
+    QVector<int> indexes;
+
+    if (zoneIndex < 0 || zoneIndex >= chart.notes.size() || chart.notes.at(zoneIndex).kind != NoteKind::Sky) {
+        return indexes;
+    }
+    const ChartNote& zone = chart.notes.at(zoneIndex);
+    const ZoneEndpoint endpoint = endpointFor(zone, zoneIndex, atStart);
+    indexes.append(zoneIndex);
+    for (int index = 0; index < chart.notes.size(); ++index) {
+        const ChartNote& candidate = chart.notes.at(index);
+        if (index == zoneIndex || candidate.kind != NoteKind::Sky || candidate.groupId != zone.groupId) {
+            continue;
+        }
+        const ZoneEndpoint candidateEndpoint = endpointFor(candidate, index, !atStart);
+        if (std::abs(candidateEndpoint.timeMilliseconds - endpoint.timeMilliseconds) > kEndpointTimeToleranceMilliseconds
+            || !std::isfinite(endpoint.left) || !std::isfinite(endpoint.right)
+            || !std::isfinite(candidateEndpoint.left) || !std::isfinite(candidateEndpoint.right)) {
+            continue;
+        }
+        const bool shared = fullySharedOnly
+            ? std::abs(candidateEndpoint.left - endpoint.left) <= kEndpointEdgeTolerance
+                && std::abs(candidateEndpoint.right - endpoint.right) <= kEndpointEdgeTolerance
+            : std::min(candidateEndpoint.right, endpoint.right) > std::max(candidateEndpoint.left, endpoint.left);
+        if (shared) {
+            indexes.append(index);
+        }
+    }
+    std::sort(indexes.begin(), indexes.end());
+
+    return indexes;
+}
+
 QVector<ChartNote> moveZoneJointTime(QVector<ChartNote> zones, const QVector<bool>& controlsStart,
     const qint64 requestedTimeMilliseconds) {
     qint64 minimumTime = 0;

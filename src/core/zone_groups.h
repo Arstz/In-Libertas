@@ -27,6 +27,8 @@ struct ZoneGroup {
 
 [[nodiscard]] QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart);
 [[nodiscard]] QVector<ZoneSegment> mergeZoneSegments(QVector<ZoneSegment> segments);
+[[nodiscard]] QVector<int> linkedZoneEndpointIndexes(const ChartData& chart, int zoneIndex, bool atStart,
+    bool fullySharedOnly);
 [[nodiscard]] QVector<ChartNote> moveZoneJointTime(QVector<ChartNote> zones, const QVector<bool>& controlsStart,
     qint64 requestedTimeMilliseconds);
 
