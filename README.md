@@ -30,16 +30,3 @@ written to `build\Mods`.
 
 Run `ctest --test-dir build -C Release --output-on-failure` after building to
 check media decoding, normalized jacket export, and Ogg Vorbis audio export.
-
-## Credits
-
-The editor uses [Qt](https://www.qt.io/) and its
-[FFmpeg](https://ffmpeg.org/) multimedia backend for audio playback, waveform
-generation, timing analysis, and export. Ogg Vorbis encoding uses
-[libvorbis and libogg](https://xiph.org/). JPEG and WebP support use Qt's plugins
-and their [libjpeg-turbo](https://libjpeg-turbo.org/) and
-[WebP](https://developers.google.com/speed/webp) codecs.
-
-The repository also retains the legacy bundled
-[audiowaveform](https://github.com/bbc/audiowaveform) binary; the editor no longer
-requires or uses it.
