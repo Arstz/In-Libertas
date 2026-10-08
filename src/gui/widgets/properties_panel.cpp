@@ -5,8 +5,10 @@
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QPushButton>
 #include <QtWidgets/QSpinBox>
 
 #include <algorithm>
@@ -86,7 +88,8 @@ template <typename Object, typename Getter>
 
 template <typename SpinBox, typename Value, typename Apply>
 void addNumberField(QFormLayout* layout, const QString& label, const QVector<Value>& values,
-    const Value minimum, const Value maximum, const Value step, const QString& suffix, Apply apply) {
+    const Value minimum, const Value maximum, const Value step, const QString& suffix, Apply apply,
+    QWidget* button = nullptr) {
     auto* editor = new SpinBox(layout->parentWidget());
     const double average = std::accumulate(values.cbegin(), values.cend(), 0.0) / values.size();
 
@@ -102,7 +105,16 @@ void addNumberField(QFormLayout* layout, const QString& label, const QVector<Val
         editor->setValue(static_cast<int>(std::lround(average)));
     }
     setMixedStyle(editor, hasMixedValues(values));
-    layout->addRow(label, editor);
+    if (button) {
+        auto* row = new QWidget(layout->parentWidget());
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->addWidget(editor, 1);
+        rowLayout->addWidget(button);
+        layout->addRow(label, row);
+    } else {
+        layout->addRow(label, editor);
+    }
     const auto markEdited = [editor] { editor->setProperty("edited", true); };
     QObject::connect(editor, &SpinBox::valueChanged, editor, markEdited);
     QObject::connect(editor->template findChild<QLineEdit*>(), &QLineEdit::textEdited, editor, markEdited);
@@ -242,6 +254,10 @@ void PropertiesPanel::clearRows() {
     m_speedEvents.clear();
 }
 
+void PropertiesPanel::setEventOffset(const qint64 offsetMilliseconds) {
+    applyEventProperty(EventProperty::Offset, displayedTime(offsetMilliseconds));
+}
+
 void PropertiesPanel::addReadOnlyRow(const QString& label, const QString& value) {
     auto* valueLabel = new QLabel(value, this);
     valueLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -342,8 +358,10 @@ void PropertiesPanel::showEvents() {
     collectTimes(m_laneEvents, QStringLiteral("Lane event"));
     collectTimes(m_speedEvents, QStringLiteral("SV event"));
     addReadOnlyRow(QStringLiteral("Type"), types.size() == 1 ? types.front() : QStringLiteral("Mixed"));
-    addNumberField<QSpinBox>(m_layout, QStringLiteral("Time"), times,
-        0, kMaximumOffsetMilliseconds, 1, QStringLiteral(" ms"), apply(EventProperty::Time));
+    auto* currentTimeButton = new QPushButton(QStringLiteral("Set current time"), this);
+    connect(currentTimeButton, &QPushButton::clicked, this, &PropertiesPanel::eventOffsetCurrentTimeRequested);
+    addNumberField<QSpinBox>(m_layout, QStringLiteral("Offset"), times,
+        0, kMaximumOffsetMilliseconds, 1, QStringLiteral(" ms"), apply(EventProperty::Offset), currentTimeButton);
     if (!m_timingPoints.isEmpty()) {
         addNumberField<QDoubleSpinBox>(m_layout, QStringLiteral("BPM"), propertyValues(m_timingPoints,
             [](const TimingPoint& point) { return point.beatsPerMinute; }),
@@ -359,9 +377,13 @@ void PropertiesPanel::showEvents() {
             denominators, apply(EventProperty::Denominator));
     }
     if (!m_laneEvents.isEmpty()) {
-        addNumberField<QSpinBox>(m_layout, QStringLiteral("Lane"), propertyValues(m_laneEvents,
+        QVector<QPair<QString, int>> lanes;
+        for (int lane = 0; lane <= kLastFloorLane; ++lane) {
+            lanes.append({QString::number(lane), lane});
+        }
+        addChoiceField(m_layout, QStringLiteral("Lane"), propertyValues(m_laneEvents,
             [](const LaneEvent& event) { return event.lane; }),
-            0, kLastFloorLane, 1, QString(), apply(EventProperty::Lane));
+            lanes, apply(EventProperty::Lane));
         const QVector<QPair<QString, int>> states{{QStringLiteral("OFF (dim)"), 0}, {QStringLiteral("ON (restore)"), 1}};
         addChoiceField(m_layout, QStringLiteral("State"), propertyValues(m_laneEvents,
             [](const LaneEvent& event) { return event.enabled ? 1 : 0; }), states, apply(EventProperty::Enabled));
@@ -415,7 +437,7 @@ void PropertiesPanel::applyEventProperty(const EventProperty property, const QVa
     }
     for (TimingPoint& point : m_timingPoints) {
         switch (property) {
-        case EventProperty::Time: point.timeMilliseconds = value.toInt(); break;
+        case EventProperty::Offset: point.timeMilliseconds = value.toInt(); break;
         case EventProperty::Bpm: point.beatsPerMinute = value.toDouble(); break;
         case EventProperty::Numerator: point.timeSignatureNumerator = value.toInt(); break;
         case EventProperty::Denominator: point.timeSignatureDenominator = value.toInt(); break;
@@ -424,7 +446,7 @@ void PropertiesPanel::applyEventProperty(const EventProperty property, const QVa
     }
     for (LaneEvent& event : m_laneEvents) {
         switch (property) {
-        case EventProperty::Time: event.timeMilliseconds = value.toInt(); break;
+        case EventProperty::Offset: event.timeMilliseconds = value.toInt(); break;
         case EventProperty::Lane: event.lane = value.toInt(); break;
         case EventProperty::Enabled: event.enabled = value.toBool(); break;
         default: break;
@@ -432,7 +454,7 @@ void PropertiesPanel::applyEventProperty(const EventProperty property, const QVa
     }
     for (SpeedEvent& event : m_speedEvents) {
         switch (property) {
-        case EventProperty::Time: event.timeMilliseconds = value.toInt(); break;
+        case EventProperty::Offset: event.timeMilliseconds = value.toInt(); break;
         case EventProperty::Speed: event.speed = value.toDouble(); break;
         default: break;
         }

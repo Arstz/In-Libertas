@@ -142,7 +142,7 @@ VisualSettings SettingsDialog::selectedVisualSettings() const {
 }
 
 VisualSettings SettingsDialog::loadVisualSettings() {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     VisualSettings result;
     const QColor color(settings.value(QStringLiteral("visuals/playhead_color")).toString());
     if (color.isValid()) {
@@ -158,7 +158,7 @@ HandlingSettings SettingsDialog::selectedHandlingSettings() const {
 }
 
 HandlingSettings SettingsDialog::loadHandlingSettings() {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     HandlingSettings result;
     result.invertMousewheelScroll = settings.value(QStringLiteral("handling/invert_mousewheel_scroll"),
         result.invertMousewheelScroll).toBool();
@@ -167,7 +167,7 @@ HandlingSettings SettingsDialog::loadHandlingSettings() {
 }
 
 void SettingsDialog::restoreKeybinds(KeyBindingRouter* keyBindings) {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     restoreKeybinds(keyBindings, settings);
 }
 
@@ -244,7 +244,7 @@ void SettingsDialog::updateVisualControls() {
 }
 
 void SettingsDialog::saveVisualSettings(const VisualSettings& visuals) {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("visuals/custom_playhead_color"), visuals.customPlayheadColor);
     settings.setValue(QStringLiteral("visuals/playhead_color"), visuals.playheadColor.name(QColor::HexRgb));
 }
@@ -265,7 +265,7 @@ void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSett
 }
 
 void SettingsDialog::saveHandlingSettings(const HandlingSettings& handling) {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("handling/invert_mousewheel_scroll"), handling.invertMousewheelScroll);
 }
 
@@ -303,7 +303,7 @@ void SettingsDialog::resetAllShortcuts() {
 }
 
 void SettingsDialog::saveKeybinds(const QVector<KeyBinding>& bindings) {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.beginGroup(QStringLiteral("keybinds"));
     for (const KeyBinding& binding : bindings) {
         if (binding.sequence == binding.defaultSequence) {

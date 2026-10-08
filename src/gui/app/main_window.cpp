@@ -433,7 +433,7 @@ void MainWindow::buildInterface() {
     m_noteSpeedSelector->setPrefix(QStringLiteral("Conveyor speed "));
     m_noteSpeedSelector->setSuffix(QStringLiteral("x"));
     m_noteSpeedSelector->setToolTip(QStringLiteral("Matches the game's note-speed setting in the 3D view only."));
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     m_noteSpeedSelector->setValue(settings.value(QStringLiteral("viewer/note_speed"), 2.5).toDouble());
     m_viewer->setNoteSpeed(m_noteSpeedSelector->value());
     layout->setContentsMargins(0, 0, 0, 0);
@@ -515,7 +515,7 @@ void MainWindow::buildInterface() {
     });
     connect(m_noteSpeedSelector, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](const double noteSpeed) {
         m_viewer->setNoteSpeed(noteSpeed);
-        QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+        QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
         settings.setValue(QStringLiteral("viewer/note_speed"), noteSpeed);
     });
     connect(m_playback, &PlaybackController::positionChanged, m_state, &EditorState::setPlaybackPosition);
@@ -616,7 +616,7 @@ void MainWindow::arrangeSplitters() {
 }
 
 void MainWindow::restoreLayout() {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     restoreGeometry(settings.value(QStringLiteral("layout/geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("layout/window_state")).toByteArray());
     const auto restoreSplitter = [&settings](QSplitter* splitter, const QString& key) {
@@ -634,7 +634,7 @@ void MainWindow::restoreLayout() {
 }
 
 void MainWindow::saveLayout() const {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("layout/geometry"), saveGeometry());
     settings.setValue(QStringLiteral("layout/window_state"), saveState());
     settings.setValue(QStringLiteral("layout/root_splitter"), m_rootSplitter->saveState());
@@ -644,7 +644,7 @@ void MainWindow::saveLayout() const {
 }
 
 void MainWindow::resetLayout() {
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.remove(QStringLiteral("layout"));
     resize(1540, 980);
     arrangeSplitters();
@@ -718,7 +718,7 @@ void MainWindow::buildToolBar() {
         }
     )"));
 
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     const int volumePercent = std::clamp(settings.value(QStringLiteral("playback/volume"), 100).toInt(), 0, 100);
     m_volumeSlider->setValue(volumePercent);
     m_playback->setVolume(logarithmicVolumeForPercent(volumePercent));
@@ -735,7 +735,7 @@ void MainWindow::buildToolBar() {
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](const int volume) {
         m_playback->setVolume(logarithmicVolumeForPercent(volume));
         m_volumeSlider->setToolTip(QStringLiteral("Volume: %1%").arg(volume));
-        QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+        QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
         settings.setValue(QStringLiteral("playback/volume"), volume);
     });
 }
@@ -903,6 +903,9 @@ void MainWindow::buildWorkspace() {
     connect(m_metadata, &MetadataWidget::difficultyRequested, m_state, &EditorState::setDifficulty);
     connect(m_properties, &PropertiesPanel::hitObjectsEditRequested, m_state, &EditorState::editHitObjects);
     connect(m_properties, &PropertiesPanel::eventsEditRequested, m_state, &EditorState::editSelectedEvents);
+    connect(m_properties, &PropertiesPanel::eventOffsetCurrentTimeRequested, this, [this] {
+        m_properties->setEventOffset(m_state->playbackPosition());
+    });
     connect(m_timing, &EventsWidget::addTimingRequested, m_state, &EditorState::addTimingPointAtPlaybackPosition);
     connect(m_timing, &EventsWidget::addLaneRequested, m_state, &EditorState::addLaneEventAtPlaybackPosition);
     connect(m_timing, &EventsWidget::addSpeedRequested, m_state, &EditorState::addSpeedEventAtPlaybackPosition);
@@ -1497,7 +1500,7 @@ void MainWindow::rememberRecentProject(const QString& path) {
     }
 
     const QString projectPath = fileInfo.absoluteFilePath();
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     QStringList recentProjects = settings.value(QStringLiteral("recent/projects")).toStringList();
     recentProjects.removeAll(projectPath);
     recentProjects.push_front(projectPath);
@@ -1514,7 +1517,7 @@ void MainWindow::refreshRecentProjectMenu() {
     }
 
     m_recentProjectMenu->clear();
-    QSettings settings(QStringLiteral("InFalsusDump"), QStringLiteral("In Libertas"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     const QStringList recentProjects = settings.value(QStringLiteral("recent/projects")).toStringList();
     QStringList existingProjects;
     for (const QString& path : recentProjects) {

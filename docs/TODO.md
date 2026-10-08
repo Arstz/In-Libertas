@@ -1,3 +1,1 @@
 - Investigate score DB persistance for different sizes 
-- Rename Time proprty field to Offset, add Set current time button, as done for metadata
-- Lane property should be a combobox with options 0 thorugh 5

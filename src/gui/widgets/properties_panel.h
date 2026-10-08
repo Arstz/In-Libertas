@@ -16,8 +16,10 @@ public:
     explicit PropertiesPanel(QWidget* parent = nullptr);
 
     void setSelection(const EditorState& state);
+    void setEventOffset(qint64 offsetMilliseconds);
 
 signals:
+    void eventOffsetCurrentTimeRequested();
     void hitObjectsEditRequested(QVector<int> indexes, QVector<ChartNote> hitObjects);
     void eventsEditRequested(QVector<TimingPoint> timingPoints, QVector<LaneEvent> laneEvents,
         QVector<SpeedEvent> speedEvents);
@@ -27,7 +29,7 @@ private:
         GroupId, Offset, End, FirstLane, LastLane, StartPosition, StartWidth, EndPosition, EndWidth, Encoding,
     };
     enum class EventProperty {
-        Time, Bpm, Numerator, Denominator, Lane, Enabled, Speed,
+        Offset, Bpm, Numerator, Denominator, Lane, Enabled, Speed,
     };
 
     void clearRows();
