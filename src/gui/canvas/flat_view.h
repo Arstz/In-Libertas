@@ -3,9 +3,10 @@
 #include "gui/state/editor_state.h"
 #include "gui/app/handling_settings.h"
 #include "core/zone_groups.h"
+#include "core/waveform.h"
 
 #include <QtCore/QByteArray>
-#include <QtCore/QBuffer>
+#include <QtCore/QFutureWatcher>
 #include <QtCore/QSet>
 #include <QtGui/QColor>
 #include <QtGui/QCursor>
@@ -14,8 +15,6 @@
 
 class QPainter;
 class QMouseEvent;
-class QAudioBuffer;
-class QAudioDecoder;
 class QWheelEvent;
 
 namespace infalsus::gui {
@@ -25,6 +24,7 @@ class FlatView final : public QOpenGLWidget {
 
 public:
     explicit FlatView(QWidget* parent = nullptr);
+    ~FlatView() override;
 
     void setChart(const ChartData& chart);
     void setPlaybackPosition(qint64 positionMilliseconds);
@@ -37,8 +37,8 @@ public:
     void setTimingPoints(QVector<TimingPoint> timingPoints);
     void setLaneEvents(QVector<LaneEvent> laneEvents);
     void setSelectedHitObjects(QVector<int> indexes);
-    void setAudioSource(const QString& audioPath);
-    void setAudioData(QByteArray audioData, const QString& fileName);
+    void clearWaveform();
+    void setDecodedAudio(QByteArray samples, const QAudioFormat& format);
     void zoom(double steps);
     [[nodiscard]] int playheadViewportY() const;
     void addHitObject(int index, const ChartNote& hitObject);
@@ -141,8 +141,6 @@ private:
     [[nodiscard]] bool canPlaceSky() const;
     void invalidateZoneGroups();
     void ensureZoneGroups() const;
-    void resetWaveformAudio();
-    void appendWaveformAudio(const QAudioBuffer& buffer);
     void beginDragNavigation(const QPointF& position);
     void updateDragNavigation(const QPointF& position);
     void finishDragNavigation();
@@ -176,18 +174,12 @@ private:
     mutable bool m_zoneGroupsDirty = true;
     QVector<QPointF> m_waveformPeaks;
     ChartNote m_dragOriginal;
-    QAudioDecoder* m_waveformDecoder = nullptr;
-    QBuffer m_waveformBuffer;
-    QByteArray m_waveformAudioData;
+    QFutureWatcher<WaveformData>* m_waveformWatcher = nullptr;
     QPointF m_pressPosition;
     QPointF m_navigationLastPosition;
     QCursor m_navigationPreviousCursor;
     double m_navigationPositionMilliseconds = 0.0;
     double m_waveformMillisecondsPerPeak = 0.0;
-    int m_waveformFramesPerPeak = 1;
-    int m_waveformFramesInPeak = 0;
-    double m_waveformMinimum = 0.0;
-    double m_waveformMaximum = 0.0;
     Qt::KeyboardModifiers m_pressModifiers = Qt::NoModifier;
     int m_dragHitObjectIndex = -1;
     int m_divisor = 4;

@@ -519,6 +519,8 @@ void MainWindow::buildInterface() {
         settings.setValue(QStringLiteral("viewer/note_speed"), noteSpeed);
     });
     connect(m_playback, &PlaybackController::positionChanged, m_state, &EditorState::setPlaybackPosition);
+    connect(m_playback, &PlaybackController::audioSourceChanged, m_flatView, &FlatView::clearWaveform);
+    connect(m_playback, &PlaybackController::audioDecoded, m_flatView, &FlatView::setDecodedAudio);
     connect(m_playbackControls, &PlaybackControls::togglePlaybackRequested, this, &MainWindow::togglePlayback);
     connect(m_playbackControls, &PlaybackControls::playbackRateRequested, m_playback, &PlaybackController::setPlaybackRate);
     connect(m_playback, &PlaybackController::playbackChanged, m_playbackControls, &PlaybackControls::setPlaying);
@@ -1087,7 +1089,6 @@ void MainWindow::loadChartFile(const QString& chartPath) {
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = true;
-    m_flatView->setAudioSource(audioPath);
     m_playback->setAudioSource(audioPath.isEmpty() ? QUrl() : QUrl::fromLocalFile(audioPath));
     updateViewerSongCard();
     m_statusLabel->setText(QStringLiteral("Imported %1 as a new unsaved project.").arg(chartFileInfo.fileName()));
@@ -1392,7 +1393,6 @@ void MainWindow::createProject() {
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = true;
-    m_flatView->setAudioData(m_projectSongData, m_project.songPath);
     m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
     updateViewerSongCard();
     startInitialTimingAnalysis(songPath);
@@ -1483,7 +1483,6 @@ void MainWindow::loadProject(const QString& path) {
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = false;
-    m_flatView->setAudioData(m_projectSongData, m_project.songPath);
     m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
     updateViewerSongCard();
     m_statusLabel->setText(backupPath.isEmpty() ? QStringLiteral("Opened %1").arg(fileInfo.fileName())
@@ -1551,7 +1550,6 @@ bool MainWindow::saveProject() {
             return false;
         }
         loadProjectAssets(m_project.songPath, m_projectSongData, m_project.jacketPath, m_projectJacketData);
-        m_flatView->setAudioData(m_projectSongData, m_project.songPath);
         m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
     }
     m_metadata->setChartId(m_project.chartId);
@@ -1679,7 +1677,6 @@ void MainWindow::exportProject() {
     m_project = std::move(project);
     if (mediaChanged) {
         loadProjectAssets(m_project.songPath, audio, m_project.jacketPath, jacket);
-        m_flatView->setAudioData(m_projectSongData, m_project.songPath);
         m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
         updateViewerSongCard();
     }

@@ -11,6 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Multimedia OpenGL OpenGLWidgets Widgets)
 find_package(FFmpeg REQUIRED COMPONENTS AVCODEC AVFORMAT)
+find_path(SIGNALSMITH_STRETCH_INCLUDE_DIR signalsmith-stretch/signalsmith-stretch.h REQUIRED)
 
 qt_add_executable(InLibertas WIN32
     src/main.cpp
@@ -33,6 +34,8 @@ qt_add_executable(InLibertas WIN32
     src/core/audio_exporter.h
     src/core/media_assets.cpp
     src/core/media_assets.h
+    src/core/waveform.cpp
+    src/core/waveform.h
     src/gui/app/main_window.cpp
     src/gui/app/main_window.h
     src/gui/app/settings_dialog.cpp
@@ -62,6 +65,8 @@ qt_add_executable(InLibertas WIN32
     src/gui/widgets/verification_widget.h
     src/gui/state/playback_controller.cpp
     src/gui/state/playback_controller.h
+    src/gui/state/audio_playback_stream.cpp
+    src/gui/state/audio_playback_stream.h
     src/gui/state/playback_rates.h
     src/gui/canvas/conveyor_view.cpp
     src/gui/canvas/conveyor_view.h
@@ -71,7 +76,7 @@ qt_add_executable(InLibertas WIN32
 
 set_target_properties(InLibertas PROPERTIES OUTPUT_NAME "In Libertas")
 
-target_include_directories(InLibertas PRIVATE src ${FFMPEG_INCLUDE_DIRS})
+target_include_directories(InLibertas PRIVATE src ${FFMPEG_INCLUDE_DIRS} ${SIGNALSMITH_STRETCH_INCLUDE_DIR})
 
 target_link_libraries(InLibertas PRIVATE
     Qt6::Core
@@ -95,6 +100,19 @@ add_custom_command(TARGET InLibertas POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/audio_playback_stream_test.cpp")
+        qt_add_executable(audio_playback_stream_test
+            tests/gui/audio_playback_stream_test.cpp
+            src/gui/state/audio_playback_stream.cpp
+            src/gui/state/playback_controller.cpp
+            src/gui/state/playback_controller.h
+            src/core/waveform.cpp
+        )
+        target_include_directories(audio_playback_stream_test PRIVATE src ${SIGNALSMITH_STRETCH_INCLUDE_DIR})
+        target_link_libraries(audio_playback_stream_test PRIVATE Qt6::Core Qt6::Multimedia)
+        add_dependencies(audio_playback_stream_test InLibertas)
+        add_test(NAME audio_playback_stream COMMAND audio_playback_stream_test)
+    endif()
     qt_add_executable(media_assets_test
         tests/core/media_assets_test.cpp
         src/core/media_assets.cpp

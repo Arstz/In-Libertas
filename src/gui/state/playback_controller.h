@@ -6,17 +6,20 @@
 #include <QtCore/QObject>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
-#include <QtMultimedia/QAudioOutput>
-#include <QtMultimedia/QMediaPlayer>
+#include <QtMultimedia/QAudioDecoder>
+#include <QtMultimedia/QAudioSink>
 
 #include <chrono>
 #include <memory>
+
+class AudioPlaybackStream;
 
 class PlaybackController final : public QObject {
     Q_OBJECT
 
 public:
     explicit PlaybackController(QObject* parent = nullptr);
+    ~PlaybackController() override;
 
     [[nodiscard]] qint64 position() const;
     [[nodiscard]] bool isPlaying() const;
@@ -36,6 +39,8 @@ public:
 
 signals:
     void audioError(const QString& message);
+    void audioSourceChanged();
+    void audioDecoded(const QByteArray& samples, const QAudioFormat& format);
     void mediaDurationChanged(qint64 durationMilliseconds);
     void positionChanged(qint64 positionMilliseconds);
     void playbackChanged(bool isPlaying);
@@ -43,32 +48,39 @@ signals:
 
 private slots:
     void updateClock();
-    void handleMediaPosition(qint64 positionMilliseconds);
-    void handleMediaPlaybackState(QMediaPlayer::PlaybackState state);
-    void handleMediaError(QMediaPlayer::Error error, const QString& message);
+    void appendDecodedAudio();
+    void finishDecoding();
 
 private:
     [[nodiscard]] qint64 clockPosition() const;
-    void resetMediaPlayer();
+    void resetAudioSource();
+    void resetAudioPlayback();
+    void createAudioDecoder();
+    void startAudioPlayback();
+    void handleAudioError(const QString& message);
     void changePlaybackRate(int direction);
     void restartClock(qint64 positionMilliseconds);
     void stopClock();
     void publishPosition(qint64 positionMilliseconds);
 
-    QAudioOutput m_audioOutput;
     QBuffer m_audioBuffer;
-    std::chrono::steady_clock::time_point m_clockAnchor;
-    std::unique_ptr<QMediaPlayer> m_mediaPlayer;
+    QAudioFormat m_audioFormat;
+    std::chrono::steady_clock::time_point m_clockAnchor = std::chrono::steady_clock::now();
+    std::unique_ptr<QAudioDecoder> m_audioDecoder;
+    std::unique_ptr<AudioPlaybackStream> m_audioStream;
+    std::unique_ptr<QAudioSink> m_audioSink;
     QTimer m_clockUpdateTimer;
     QByteArray m_audioData;
-    QUrl m_audioSource;
+    QByteArray m_decodedAudio;
     qint64 m_chartDurationMilliseconds = 0;
     qint64 m_clockAnchorPositionMilliseconds = 0;
-    qint64 m_mediaClockStartPositionMilliseconds = 0;
+    qint64 m_audioStartPositionMilliseconds = 0;
     qint64 m_positionMilliseconds = 0;
     qreal m_playbackRate = infalsus::gui::kFullPlaybackRate;
+    qreal m_volume = 1.0;
     bool m_playbackActive = false;
     bool m_hasAudioSource = false;
     bool m_usingFallbackClock = false;
-    bool m_waitingForMediaClock = false;
+    bool m_decodingAudio = false;
+    bool m_audioFailed = false;
 };

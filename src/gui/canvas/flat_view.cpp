@@ -13,13 +13,12 @@
 #include <QtCore/QMap>
 #include <QtCore/QEvent>
 #include <QtCore/QSet>
-#include <QtCore/QUrl>
-#include <QtMultimedia/QAudioBuffer>
-#include <QtMultimedia/QAudioDecoder>
+#include <QtCore/QThreadPool>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <numbers>
 
 namespace infalsus::gui {
@@ -27,12 +26,11 @@ namespace infalsus::gui {
 namespace {
 
 constexpr double kMinimumPixelsPerSecond = 48.0;
-constexpr double kMaximumPixelsPerSecond = 720.0;
+constexpr double kMaximumPixelsPerSecond = kWaveformPointsPerSecond;
 constexpr double kZoomStepFactor = 1.35;
 constexpr double kWaveformWidth = 184.0;
 constexpr double kWaveformWidthFraction = 0.45;
 constexpr double kWaveformDividerOpacity = 0.35;
-constexpr int kWaveformPointsPerSecond = static_cast<int>(kMaximumPixelsPerSecond);
 constexpr double kMargin = 12.0;
 constexpr double kPlayheadWidth = 6.0;
 constexpr qint64 kTapDurationMilliseconds = 30;
@@ -212,30 +210,12 @@ FlatView::FlatView(QWidget* parent)
     : QOpenGLWidget(parent) {
     setMinimumSize(240, 300);
     setFocusPolicy(Qt::StrongFocus);
-    m_waveformDecoder = new QAudioDecoder(this);
-    connect(m_waveformDecoder, &QAudioDecoder::bufferReady, this, [this] {
-        while (m_waveformDecoder->bufferAvailable()) {
-            appendWaveformAudio(m_waveformDecoder->read());
-        }
-        update();
-    });
-    connect(m_waveformDecoder, qOverload<QAudioDecoder::Error>(&QAudioDecoder::error), this,
-        [this](QAudioDecoder::Error) {
-        m_waveformPeaks.clear();
-        m_waveformFramesInPeak = 0;
-        update();
-        emit waveformError(m_waveformDecoder->errorString());
-    });
-    connect(m_waveformDecoder, &QAudioDecoder::finished, this, [this] {
-        while (m_waveformDecoder->bufferAvailable()) {
-            appendWaveformAudio(m_waveformDecoder->read());
-        }
-        if (m_waveformFramesInPeak > 0) {
-            m_waveformPeaks.append(QPointF(m_waveformMinimum, m_waveformMaximum));
-            m_waveformFramesInPeak = 0;
-        }
-        update();
-    });
+}
+
+FlatView::~FlatView() {
+    if (m_waveformWatcher) {
+        m_waveformWatcher->cancel();
+    }
 }
 
 void FlatView::setChart(const ChartData& chart) {
@@ -331,30 +311,46 @@ void FlatView::setSelectedHitObjects(QVector<int> indexes) {
     update();
 }
 
-void FlatView::setAudioSource(const QString& audioPath) {
-    resetWaveformAudio();
-    m_waveformDecoder->setSource(QUrl::fromLocalFile(audioPath));
-    if (audioPath.isEmpty()) {
-        return;
+void FlatView::clearWaveform() {
+    if (m_waveformWatcher) {
+        m_waveformWatcher->cancel();
+        delete m_waveformWatcher;
+        m_waveformWatcher = nullptr;
     }
-    m_waveformDecoder->start();
+    m_waveformPeaks.clear();
+    m_waveformMillisecondsPerPeak = 0.0;
+    update();
 }
 
-void FlatView::setAudioData(QByteArray audioData, const QString& fileName) {
-    Q_UNUSED(fileName)
+void FlatView::setDecodedAudio(QByteArray samples, const QAudioFormat& format) {
+    QPromise<WaveformData> promise;
 
-    resetWaveformAudio();
-    m_waveformAudioData = std::move(audioData);
-    if (m_waveformAudioData.isEmpty()) {
-        update();
-        return;
-    }
-
-    m_waveformBuffer.setBuffer(&m_waveformAudioData);
-    m_waveformBuffer.open(QIODevice::ReadOnly);
-    m_waveformDecoder->setSourceDevice(&m_waveformBuffer);
-    m_waveformDecoder->start();
-    update();
+    clearWaveform();
+    m_waveformWatcher = new QFutureWatcher<WaveformData>(this);
+    connect(m_waveformWatcher, &QFutureWatcher<WaveformData>::finished, this, [this] {
+        if (m_waveformWatcher->isCanceled()) {
+            return;
+        }
+        try {
+            WaveformData waveform = m_waveformWatcher->result();
+            m_waveformPeaks = std::move(waveform.peaks);
+            m_waveformMillisecondsPerPeak = waveform.millisecondsPerPeak;
+            update();
+        } catch (const std::exception& error) {
+            emit waveformError(QString::fromUtf8(error.what()));
+        }
+    });
+    m_waveformWatcher->setFuture(promise.future());
+    QThreadPool::globalInstance()->start(
+        [promise = std::move(promise), samples = std::move(samples), format]() mutable {
+        promise.start();
+        try {
+            buildWaveform(promise, samples, format);
+        } catch (...) {
+            promise.setException(std::current_exception());
+        }
+        promise.finish();
+    });
 }
 
 void FlatView::addHitObject(const int index, const ChartNote& hitObject) {
@@ -1335,71 +1331,6 @@ bool FlatView::canPlaceSky() const {
     return m_tool == EditorTool::Place && canInteractSky();
 }
 
-void FlatView::resetWaveformAudio() {
-    m_waveformDecoder->stop();
-    m_waveformBuffer.close();
-    m_waveformBuffer.setBuffer(nullptr);
-    m_waveformAudioData.clear();
-    m_waveformPeaks.clear();
-    m_waveformMillisecondsPerPeak = 1000.0 / kWaveformPointsPerSecond;
-    m_waveformFramesPerPeak = 1;
-    m_waveformFramesInPeak = 0;
-    m_waveformMinimum = 0.0;
-    m_waveformMaximum = 0.0;
-    update();
-}
-
-void FlatView::appendWaveformAudio(const QAudioBuffer& buffer) {
-    const QAudioFormat format = buffer.format();
-    const int sampleRate = format.sampleRate();
-    const int channelCount = format.channelCount();
-    if (sampleRate <= 0 || channelCount <= 0 || buffer.frameCount() <= 0) {
-        return;
-    }
-
-    if (m_waveformFramesInPeak == 0 && m_waveformPeaks.isEmpty()) {
-        m_waveformFramesPerPeak = std::max(1, sampleRate / kWaveformPointsPerSecond);
-        m_waveformMillisecondsPerPeak = 1000.0 * m_waveformFramesPerPeak / sampleRate;
-    }
-
-    const auto sampleAt = [&format, &buffer](const int index) {
-        switch (format.sampleFormat()) {
-        case QAudioFormat::UInt8:
-            return (static_cast<int>(buffer.constData<quint8>()[index]) - 128) / 128.0;
-        case QAudioFormat::Int16:
-            return buffer.constData<qint16>()[index] / 32768.0;
-        case QAudioFormat::Int32:
-            return buffer.constData<qint32>()[index] / 2147483648.0;
-        case QAudioFormat::Float:
-            return static_cast<double>(buffer.constData<float>()[index]);
-        default:
-            return 0.0;
-        }
-    };
-
-    for (int frame = 0; frame < buffer.frameCount(); ++frame) {
-        double frameMinimum = 1.0;
-        double frameMaximum = -1.0;
-        for (int channel = 0; channel < channelCount; ++channel) {
-            const double sample = std::clamp(sampleAt(frame * channelCount + channel), -1.0, 1.0);
-            frameMinimum = std::min(frameMinimum, sample);
-            frameMaximum = std::max(frameMaximum, sample);
-        }
-        if (m_waveformFramesInPeak == 0) {
-            m_waveformMinimum = frameMinimum;
-            m_waveformMaximum = frameMaximum;
-        } else {
-            m_waveformMinimum = std::min(m_waveformMinimum, frameMinimum);
-            m_waveformMaximum = std::max(m_waveformMaximum, frameMaximum);
-        }
-        ++m_waveformFramesInPeak;
-        if (m_waveformFramesInPeak >= m_waveformFramesPerPeak) {
-            m_waveformPeaks.append(QPointF(m_waveformMinimum, m_waveformMaximum));
-            m_waveformFramesInPeak = 0;
-        }
-    }
-}
-
 void FlatView::beginDragNavigation(const QPointF& position) {
     m_navigationLastPosition = position;
     m_navigationPositionMilliseconds = static_cast<double>(m_playbackPositionMilliseconds);
@@ -1955,6 +1886,8 @@ void FlatView::drawWaveform(QPainter& painter, const QRectF& area) const {
 
     const double centerX = area.center().x();
     painter.setPen(QPen(palette::floorNoteBlue, 1.0));
+    QVector<QLineF> lines;
+    lines.reserve(std::max(0, lastEnvelope - firstEnvelope + 1));
     for (int envelopeIndex = firstEnvelope; envelopeIndex <= lastEnvelope; ++envelopeIndex) {
         const int firstPeak = envelopeIndex * peaksPerEnvelope;
         const int lastPeak = std::min(firstPeak + peaksPerEnvelope, waveformPeakCount);
@@ -1972,10 +1905,11 @@ void FlatView::drawWaveform(QPainter& painter, const QRectF& area) const {
             minimumAmplitude = std::min(minimumAmplitude, peak.x());
             maximumAmplitude = std::max(maximumAmplitude, peak.y());
         }
-        painter.drawLine(
+        lines.append(QLineF(
             QPointF(centerX + minimumAmplitude * area.width() * 0.42, y),
-            QPointF(centerX + maximumAmplitude * area.width() * 0.42, y));
+            QPointF(centerX + maximumAmplitude * area.width() * 0.42, y)));
     }
+    painter.drawLines(lines);
 }
 
 void FlatView::drawDividers(QPainter& painter, const QRectF& area) const {

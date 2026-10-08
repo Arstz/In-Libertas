@@ -1,4 +1,8 @@
-#include "gui/state/playback_controller.h"
+﻿#include "gui/state/playback_controller.h"
+
+#include "gui/state/audio_playback_stream.h"
+
+#include <QtMultimedia/QMediaDevices>
 
 #include <algorithm>
 #include <chrono>
@@ -7,6 +11,9 @@
 namespace {
 
 constexpr int kClockUpdateIntervalMilliseconds = 4;
+constexpr int kOutputBufferMicroseconds = 30000;
+constexpr int kDefaultSampleRate = 48000;
+constexpr int kDefaultChannelCount = 2;
 using infalsus::gui::kFullPlaybackRate;
 using infalsus::gui::kPlaybackRates;
 
@@ -14,11 +21,15 @@ using infalsus::gui::kPlaybackRates;
 
 PlaybackController::PlaybackController(QObject* parent)
     : QObject(parent) {
-    resetMediaPlayer();
     m_clockUpdateTimer.setInterval(kClockUpdateIntervalMilliseconds);
     m_clockUpdateTimer.setTimerType(Qt::PreciseTimer);
 
     connect(&m_clockUpdateTimer, &QTimer::timeout, this, &PlaybackController::updateClock);
+}
+
+PlaybackController::~PlaybackController() {
+    m_audioDecoder.reset();
+    resetAudioPlayback();
 }
 
 qint64 PlaybackController::position() const {
@@ -34,97 +45,112 @@ qreal PlaybackController::playbackRate() const {
 }
 
 qreal PlaybackController::volume() const {
-    return m_audioOutput.volume();
+    return m_volume;
 }
 
 void PlaybackController::setChartDuration(const qint64 durationMilliseconds) {
     const qint64 clampedDuration = std::max<qint64>(durationMilliseconds, 0);
+    const qint64 currentPosition = m_playbackActive ? clockPosition() : m_positionMilliseconds;
+
     if (m_chartDurationMilliseconds == clampedDuration) {
         return;
     }
     m_chartDurationMilliseconds = clampedDuration;
-    setPosition(m_positionMilliseconds);
+    resetAudioPlayback();
+    publishPosition(currentPosition);
+    if (m_playbackActive) {
+        if (m_usingFallbackClock) {
+            restartClock(m_positionMilliseconds);
+        } else {
+            startAudioPlayback();
+        }
+    }
 }
 
 void PlaybackController::setAudioSource(const QUrl& source) {
-    const bool wasPlaying = m_playbackActive;
-    m_playbackActive = false;
-    stopClock();
-    m_usingFallbackClock = false;
-    m_waitingForMediaClock = false;
-    m_audioBuffer.close();
-    m_audioBuffer.setBuffer(nullptr);
-    m_audioData.clear();
-    resetMediaPlayer();
-    m_audioSource = source;
+    resetAudioSource();
     m_hasAudioSource = !source.isEmpty();
-    m_mediaPlayer->setSource(source);
-    m_mediaPlayer->setPlaybackRate(m_playbackRate);
-    m_mediaPlayer->setPitchCompensation(m_playbackRate < kFullPlaybackRate);
-    m_mediaPlayer->setPosition(m_positionMilliseconds);
-    if (wasPlaying) {
-        emit playbackChanged(false);
+    if (!m_hasAudioSource) {
+        return;
     }
+
+    createAudioDecoder();
+    m_audioDecoder->setSource(source);
+    m_audioDecoder->start();
 }
 
 void PlaybackController::setAudioData(QByteArray audioData, const QUrl& sourceHint) {
-    const bool wasPlaying = m_playbackActive;
-    m_playbackActive = false;
-    stopClock();
-    m_usingFallbackClock = false;
-    m_waitingForMediaClock = false;
-    m_audioBuffer.close();
+    Q_UNUSED(sourceHint)
+
+    resetAudioSource();
     m_audioData = std::move(audioData);
-    resetMediaPlayer();
-    m_audioSource = sourceHint;
     m_hasAudioSource = !m_audioData.isEmpty();
-    if (m_hasAudioSource) {
-        m_audioBuffer.setBuffer(&m_audioData);
-        m_audioBuffer.open(QIODevice::ReadOnly);
-        m_mediaPlayer->setSourceDevice(&m_audioBuffer, sourceHint);
+    if (!m_hasAudioSource) {
+        return;
     }
-    m_mediaPlayer->setPlaybackRate(m_playbackRate);
-    m_mediaPlayer->setPitchCompensation(m_playbackRate < kFullPlaybackRate);
-    m_mediaPlayer->setPosition(m_positionMilliseconds);
-    if (wasPlaying) {
-        emit playbackChanged(false);
-    }
+
+    m_audioBuffer.setBuffer(&m_audioData);
+    m_audioBuffer.open(QIODevice::ReadOnly);
+    createAudioDecoder();
+    m_audioDecoder->setSourceDevice(&m_audioBuffer);
+    m_audioDecoder->start();
 }
 
 void PlaybackController::setPosition(const qint64 positionMilliseconds) {
     const qint64 clampedPosition = std::clamp(positionMilliseconds, qint64(0), m_chartDurationMilliseconds);
+
     if (m_positionMilliseconds == clampedPosition) {
         return;
     }
-
     m_positionMilliseconds = clampedPosition;
-    if (m_playbackActive && !m_usingFallbackClock) {
-        m_mediaClockStartPositionMilliseconds = clampedPosition;
-        m_waitingForMediaClock = true;
-        stopClock();
-    }
-    if (m_hasAudioSource) {
-        m_mediaPlayer->setPosition(clampedPosition);
-    }
+    resetAudioPlayback();
     if (m_playbackActive) {
         if (m_usingFallbackClock) {
             restartClock(clampedPosition);
+        } else {
+            startAudioPlayback();
         }
     }
     emit positionChanged(m_positionMilliseconds);
 }
 
+void PlaybackController::setPlaybackRate(const qreal playbackRate) {
+    const qreal clampedRate = std::clamp(playbackRate, kPlaybackRates.back(), kPlaybackRates.front());
+    const qint64 currentPosition = m_playbackActive ? clockPosition() : m_positionMilliseconds;
+
+    if (!std::isfinite(clampedRate) || qFuzzyCompare(m_playbackRate, clampedRate)) {
+        return;
+    }
+    m_playbackRate = clampedRate;
+    resetAudioPlayback();
+    publishPosition(currentPosition);
+    if (m_playbackActive) {
+        if (m_usingFallbackClock) {
+            restartClock(m_positionMilliseconds);
+        } else {
+            startAudioPlayback();
+        }
+    }
+    emit playbackRateChanged(m_playbackRate);
+}
+
 void PlaybackController::setVolume(const qreal volume) {
-    m_audioOutput.setVolume(std::clamp(volume, qreal(0.0), qreal(1.0)));
+    m_volume = std::clamp(volume, qreal(0.0), qreal(1.0));
+    if (m_audioSink) {
+        m_audioSink->setVolume(m_volume);
+    }
 }
 
 void PlaybackController::togglePlayback() {
     if (isPlaying()) {
-        publishPosition(m_waitingForMediaClock ? m_positionMilliseconds : clockPosition());
-        stopClock();
-        m_mediaPlayer->pause();
+        if (m_audioSink) {
+            m_audioSink->suspend();
+        }
+        const qint64 currentPosition = clockPosition();
+
         m_playbackActive = false;
-        m_waitingForMediaClock = false;
+        stopClock();
+        publishPosition(currentPosition);
         emit playbackChanged(false);
         return;
     }
@@ -133,13 +159,14 @@ void PlaybackController::togglePlayback() {
         setPosition(0);
     }
     m_playbackActive = true;
-    m_usingFallbackClock = !m_hasAudioSource;
+    m_usingFallbackClock = !m_hasAudioSource || m_audioFailed;
     if (m_usingFallbackClock) {
         restartClock(m_positionMilliseconds);
+    } else if (m_audioSink) {
+        m_audioSink->resume();
+        m_clockUpdateTimer.start();
     } else {
-        m_mediaClockStartPositionMilliseconds = m_positionMilliseconds;
-        m_waitingForMediaClock = true;
-        m_mediaPlayer->play();
+        startAudioPlayback();
     }
     emit playbackChanged(true);
 }
@@ -157,76 +184,164 @@ void PlaybackController::decreasePlaybackRate() {
 }
 
 void PlaybackController::updateClock() {
-    if (!m_playbackActive || m_waitingForMediaClock) {
+    if (!m_playbackActive) {
         stopClock();
+        return;
+    }
+    if (m_audioSink && m_audioSink->error() != QAudio::NoError) {
+        handleAudioError(QStringLiteral("Audio output failed (%1).").arg(static_cast<int>(m_audioSink->error())));
         return;
     }
 
     const qint64 updatedPosition = clockPosition();
-    if (updatedPosition >= m_chartDurationMilliseconds) {
-        publishPosition(m_chartDurationMilliseconds);
-        stopClock();
-        if (!m_usingFallbackClock) {
-            m_mediaPlayer->pause();
-        }
+    const bool audioFinished = m_audioSink && m_audioStream->atEnd() && m_audioSink->state() == QAudio::IdleState;
+
+    if ((!m_audioSink && updatedPosition >= m_chartDurationMilliseconds) || audioFinished) {
         m_playbackActive = false;
+        resetAudioPlayback();
+        stopClock();
+        publishPosition(m_chartDurationMilliseconds);
         emit playbackChanged(false);
         return;
     }
     publishPosition(updatedPosition);
 }
 
-void PlaybackController::handleMediaPosition(const qint64 positionMilliseconds) {
-    if (!m_playbackActive || m_usingFallbackClock) {
+void PlaybackController::appendDecodedAudio() {
+    if (m_audioFailed) {
         return;
     }
+    while (m_audioDecoder->bufferAvailable()) {
+        const QAudioBuffer buffer = m_audioDecoder->read();
 
-    const qint64 clampedPosition = std::clamp(positionMilliseconds, qint64(0), m_chartDurationMilliseconds);
-    if (m_waitingForMediaClock) {
-        if (clampedPosition <= m_mediaClockStartPositionMilliseconds) {
+        if (!buffer.isValid()) {
+            continue;
+        }
+        if (buffer.format() != m_audioFormat) {
+            handleAudioError(QStringLiteral("The audio decoder returned an unsupported playback format."));
             return;
         }
-
-        m_waitingForMediaClock = false;
-        restartClock(clampedPosition);
-        publishPosition(clampedPosition);
-        return;
+        m_decodedAudio.append(buffer.constData<char>(), buffer.byteCount());
     }
 }
 
-void PlaybackController::handleMediaPlaybackState(const QMediaPlayer::PlaybackState state) {
-    if (state != QMediaPlayer::StoppedState || !m_playbackActive || m_usingFallbackClock) {
+void PlaybackController::finishDecoding() {
+    appendDecodedAudio();
+    m_decodingAudio = false;
+    if (m_audioFailed) {
+        return;
+    }
+    if (m_decodedAudio.isEmpty()) {
+        handleAudioError(QStringLiteral("The song contains no decodable audio."));
         return;
     }
 
-    publishPosition(clockPosition());
-    stopClock();
-    m_playbackActive = false;
-    m_waitingForMediaClock = false;
-    emit playbackChanged(false);
-}
-
-void PlaybackController::handleMediaError(const QMediaPlayer::Error error, const QString& message) {
-    Q_UNUSED(error)
-
-    if (!message.isEmpty()) {
-        emit audioError(message);
-    }
+    emit mediaDurationChanged(m_audioFormat.durationForBytes(m_decodedAudio.size()) / 1000);
+    emit audioDecoded(m_decodedAudio, m_audioFormat);
     if (m_playbackActive && !m_usingFallbackClock) {
-        publishPosition(m_waitingForMediaClock ? m_positionMilliseconds : clockPosition());
-        m_usingFallbackClock = true;
-        m_waitingForMediaClock = false;
-        restartClock(m_positionMilliseconds);
-        m_mediaPlayer->stop();
+        startAudioPlayback();
     }
 }
 
 qint64 PlaybackController::clockPosition() const {
+    if (!m_usingFallbackClock) {
+        if (!m_audioSink) {
+            return m_positionMilliseconds;
+        }
+
+        return m_audioStartPositionMilliseconds
+            + static_cast<qint64>(std::llround(m_audioSink->processedUSecs() * m_playbackRate / 1000.0));
+    }
     const auto elapsed = std::chrono::steady_clock::now() - m_clockAnchor;
-    const auto elapsedMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+    const qreal elapsedMilliseconds = std::chrono::duration<qreal, std::milli>(elapsed).count();
 
     return m_clockAnchorPositionMilliseconds
-        + static_cast<qint64>(std::llround(static_cast<qreal>(elapsedMilliseconds) * m_playbackRate));
+        + static_cast<qint64>(std::llround(elapsedMilliseconds * m_playbackRate));
+}
+
+void PlaybackController::resetAudioSource() {
+    const bool wasPlaying = m_playbackActive;
+
+    m_playbackActive = false;
+    stopClock();
+    m_audioDecoder.reset();
+    resetAudioPlayback();
+    m_audioBuffer.close();
+    m_audioBuffer.setBuffer(nullptr);
+    m_audioData.clear();
+    m_decodedAudio.clear();
+    m_audioFormat = {};
+    m_hasAudioSource = false;
+    m_usingFallbackClock = false;
+    m_decodingAudio = false;
+    m_audioFailed = false;
+    emit audioSourceChanged();
+    if (wasPlaying) {
+        emit playbackChanged(false);
+    }
+}
+
+void PlaybackController::resetAudioPlayback() {
+    if (m_audioSink) {
+        m_audioSink->reset();
+        m_audioSink.reset();
+    }
+    m_audioStream.reset();
+}
+
+void PlaybackController::createAudioDecoder() {
+    m_audioFormat = QMediaDevices::defaultAudioOutput().preferredFormat();
+    if (!m_audioFormat.isValid()) {
+        m_audioFormat.setSampleRate(kDefaultSampleRate);
+        m_audioFormat.setChannelCount(kDefaultChannelCount);
+    }
+    m_audioFormat.setSampleFormat(QAudioFormat::Float);
+    m_decodingAudio = true;
+    m_audioDecoder = std::make_unique<QAudioDecoder>();
+    m_audioDecoder->setAudioFormat(m_audioFormat);
+    connect(m_audioDecoder.get(), &QAudioDecoder::bufferReady, this, &PlaybackController::appendDecodedAudio);
+    connect(m_audioDecoder.get(), &QAudioDecoder::finished, this, &PlaybackController::finishDecoding);
+    connect(m_audioDecoder.get(), &QAudioDecoder::durationChanged, this, &PlaybackController::mediaDurationChanged);
+    connect(m_audioDecoder.get(), qOverload<QAudioDecoder::Error>(&QAudioDecoder::error), this,
+        [this](QAudioDecoder::Error) { handleAudioError(m_audioDecoder->errorString()); });
+}
+
+void PlaybackController::startAudioPlayback() {
+    if (m_audioSink || m_decodingAudio || m_decodedAudio.isEmpty() || m_audioFailed) {
+        return;
+    }
+
+    m_audioStartPositionMilliseconds = m_positionMilliseconds;
+    m_audioStream = std::make_unique<AudioPlaybackStream>(m_decodedAudio, m_audioFormat,
+        m_positionMilliseconds, m_chartDurationMilliseconds, m_playbackRate);
+    m_audioSink = std::make_unique<QAudioSink>(m_audioFormat);
+    m_audioSink->setBufferSize(m_audioFormat.bytesForDuration(kOutputBufferMicroseconds));
+    m_audioSink->setVolume(m_volume);
+    m_audioSink->start(m_audioStream.get());
+    if (m_audioSink->error() != QAudio::NoError) {
+        handleAudioError(QStringLiteral("Could not start audio output (%1).").arg(static_cast<int>(m_audioSink->error())));
+        return;
+    }
+    m_clockUpdateTimer.start();
+}
+
+void PlaybackController::handleAudioError(const QString& message) {
+    const qint64 currentPosition = m_playbackActive ? clockPosition() : m_positionMilliseconds;
+
+    if (m_audioFailed) {
+        return;
+    }
+    m_audioFailed = true;
+    m_decodingAudio = false;
+    resetAudioPlayback();
+    if (m_playbackActive) {
+        m_usingFallbackClock = true;
+        publishPosition(currentPosition);
+        restartClock(m_positionMilliseconds);
+    }
+    if (!message.isEmpty()) {
+        emit audioError(message);
+    }
 }
 
 void PlaybackController::changePlaybackRate(const int direction) {
@@ -245,48 +360,13 @@ void PlaybackController::restartClock(const qint64 positionMilliseconds) {
     m_clockUpdateTimer.start();
 }
 
-void PlaybackController::setPlaybackRate(const qreal playbackRate) {
-    const qreal clampedRate = std::clamp(playbackRate, kPlaybackRates.back(), kPlaybackRates.front());
-    if (qFuzzyCompare(m_playbackRate, clampedRate)) {
-        return;
-    }
-
-    const qint64 currentPosition = m_playbackActive && !m_waitingForMediaClock
-        ? clockPosition()
-        : m_positionMilliseconds;
-    m_playbackRate = clampedRate;
-    m_mediaPlayer->setPlaybackRate(m_playbackRate);
-    m_mediaPlayer->setPitchCompensation(m_playbackRate < kFullPlaybackRate);
-    if (m_playbackActive) {
-        publishPosition(currentPosition);
-        if (m_usingFallbackClock) {
-            restartClock(m_positionMilliseconds);
-        } else {
-            m_mediaClockStartPositionMilliseconds = m_positionMilliseconds;
-            m_waitingForMediaClock = true;
-            stopClock();
-        }
-    }
-    emit playbackRateChanged(m_playbackRate);
-}
-
 void PlaybackController::stopClock() {
     m_clockUpdateTimer.stop();
 }
 
-void PlaybackController::resetMediaPlayer() {
-    // Make each source own a player. Destroying the old player prevents an
-    // asynchronous backend duration from being delivered for a later source.
-    m_mediaPlayer = std::make_unique<QMediaPlayer>();
-    m_mediaPlayer->setAudioOutput(&m_audioOutput);
-    connect(m_mediaPlayer.get(), &QMediaPlayer::positionChanged, this, &PlaybackController::handleMediaPosition);
-    connect(m_mediaPlayer.get(), &QMediaPlayer::durationChanged, this, &PlaybackController::mediaDurationChanged);
-    connect(m_mediaPlayer.get(), &QMediaPlayer::playbackStateChanged, this, &PlaybackController::handleMediaPlaybackState);
-    connect(m_mediaPlayer.get(), &QMediaPlayer::errorOccurred, this, &PlaybackController::handleMediaError);
-}
-
 void PlaybackController::publishPosition(const qint64 positionMilliseconds) {
     const qint64 clampedPosition = std::clamp(positionMilliseconds, qint64(0), m_chartDurationMilliseconds);
+
     if (m_positionMilliseconds == clampedPosition) {
         return;
     }
