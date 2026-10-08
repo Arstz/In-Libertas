@@ -31,6 +31,8 @@ public:
     void setPlayheadColor(const QColor& color);
     void setInvertMousewheelScroll(bool inverted);
     void setMode(FlatViewMode mode);
+    void setSkyGridEnabled(bool enabled);
+    void setSkyGridDivisor(int divisor);
     void setTool(EditorTool tool);
     void setGridDuration(qint64 durationMilliseconds);
     void setDivisor(int divisor);
@@ -109,6 +111,7 @@ private:
     [[nodiscard]] QRectF groundArea() const;
     [[nodiscard]] qint64 timeAtY(double y) const;
     [[nodiscard]] qint64 snappedTimeAtY(double y) const;
+    [[nodiscard]] double snappedSkyCoordinate(double coordinate, double minimum, double maximum) const;
     [[nodiscard]] int laneAt(const QPointF& position) const;
     [[nodiscard]] int hitObjectAt(const QPointF& position) const;
     [[nodiscard]] int holdEndHitObjectAt(const QPointF& position) const;
@@ -150,6 +153,7 @@ private:
     void drawWaveform(QPainter& painter, const QRectF& area) const;
     void drawDividers(QPainter& painter, const QRectF& area) const;
     void drawGround(QPainter& painter, const QRectF& area, int opacity) const;
+    void drawSkyGrid(QPainter& painter, const QRectF& area) const;
     void drawSky(QPainter& painter, const QRectF& area, int opacity) const;
     void drawFlickControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const;
     void drawZoneControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const;
@@ -183,6 +187,7 @@ private:
     Qt::KeyboardModifiers m_pressModifiers = Qt::NoModifier;
     int m_dragHitObjectIndex = -1;
     int m_divisor = 4;
+    int m_skyGridDivisor = 1;
     ZoneControl m_dragZoneControl;
     FlickControl m_dragFlickControl;
     ZoneSegmentAnchor m_zoneSegmentAnchor;
@@ -195,6 +200,7 @@ private:
     QPointF m_clickCyclePosition;
     int m_clickCycleIndex = -1;
     bool m_dragMoved = false;
+    bool m_skyGridEnabled = false;
     bool m_draggingHoldEnd = false;
     bool m_draggingHitObject = false;
     bool m_placingHitObject = false;

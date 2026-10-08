@@ -40,6 +40,7 @@
 #include <QtGui/QImage>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QFileDialog>
@@ -58,6 +59,7 @@
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QSlider>
 #include <QtWidgets/QToolBar>
+#include <QtWidgets/QToolButton>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 
@@ -760,6 +762,16 @@ void MainWindow::registerNavigationKeybinds() {
     addAction(KeyCommand::CycleFlatMode, [this] {
         m_flatModeSelector->setCurrentIndex((m_flatModeSelector->currentIndex() + 1) % m_flatModeSelector->count());
     });
+    addAction(KeyCommand::ToggleSkyGrid, [this] { m_skyGridToggle->toggle(); });
+    addAction(KeyCommand::SkyGridSize1, [this] { setSkyGridSize(1); });
+    addAction(KeyCommand::SkyGridSize2, [this] { setSkyGridSize(2); });
+    addAction(KeyCommand::SkyGridSize3, [this] { setSkyGridSize(3); });
+    addAction(KeyCommand::SkyGridSize4, [this] { setSkyGridSize(4); });
+}
+
+void MainWindow::setSkyGridSize(const int divisor) {
+    m_skyGridSizes->button(divisor)->setChecked(true);
+    m_flatView->setSkyGridDivisor(divisor);
 }
 
 void MainWindow::openSettings() {
@@ -811,7 +823,35 @@ void MainWindow::buildWorkspace() {
     timingLayout->addWidget(m_timing, 1);
     timingLayout->addWidget(m_timingPositionLabel);
     auto* timingPanel = createPanel(QStringLiteral("Events"), timingHost, m_rootSplitter);
-    auto* flatPanel = createPanel(QStringLiteral("Flat View"), m_flatView, m_mainSplitter, m_flatModeSelector);
+    auto* flatControls = new QWidget(this);
+    auto* flatControlsLayout = new QHBoxLayout(flatControls);
+    flatControlsLayout->setContentsMargins(0, 0, 0, 0);
+    flatControlsLayout->setSpacing(3);
+    m_skyGridToggle = new QToolButton(flatControls);
+    m_skyGridToggle->setText(QStringLiteral("Grid OFF"));
+    m_skyGridToggle->setCheckable(true);
+    m_skyGridToggle->setFocusPolicy(Qt::NoFocus);
+    m_skyGridToggle->setToolTip(QStringLiteral("Toggle the sky snap grid"));
+    flatControlsLayout->addWidget(m_skyGridToggle);
+    connect(m_skyGridToggle, &QToolButton::toggled, this, [this](const bool enabled) {
+        m_skyGridToggle->setText(enabled ? QStringLiteral("Grid ON") : QStringLiteral("Grid OFF"));
+        m_flatView->setSkyGridEnabled(enabled);
+    });
+    m_skyGridSizes = new QButtonGroup(flatControls);
+    m_skyGridSizes->setExclusive(true);
+    for (int divisor = 1; divisor <= 4; ++divisor) {
+        auto* button = new QToolButton(flatControls);
+        button->setText(QStringLiteral("1/%1").arg(divisor));
+        button->setCheckable(true);
+        button->setChecked(divisor == 1);
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setToolTip(QStringLiteral("Sky grid: %1 subdivisions per lane").arg(divisor));
+        m_skyGridSizes->addButton(button, divisor);
+        flatControlsLayout->addWidget(button);
+    }
+    connect(m_skyGridSizes, &QButtonGroup::idClicked, this, &MainWindow::setSkyGridSize);
+    flatControlsLayout->addWidget(m_flatModeSelector);
+    auto* flatPanel = createPanel(QStringLiteral("Flat View"), m_flatView, m_mainSplitter, flatControls);
     auto* viewerPanel = createPanel(QStringLiteral("3D View"), m_viewer, m_viewerSplitter, m_noteSpeedSelector);
     auto* propertiesPanel = createPanel(QStringLiteral("Properties"), m_properties, m_bottomSplitter);
     auto* metadataPanel = createPanel(QStringLiteral("Metadata"), m_metadata, m_bottomSplitter);

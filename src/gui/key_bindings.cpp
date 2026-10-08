@@ -65,6 +65,11 @@ constexpr CommandDefinition kCommands[]{
     {KeyCommand::IncreaseDivisor, "increase_divisor", "View / Increase divisor", "Up", true},
     {KeyCommand::DecreaseDivisor, "decrease_divisor", "View / Decrease divisor", "Down", true},
     {KeyCommand::CycleFlatMode, "cycle_flat_mode", "View / Cycle Ground, Sky, Both", "Tab"},
+    {KeyCommand::ToggleSkyGrid, "toggle_sky_grid", "View / Toggle sky snap grid", "`"},
+    {KeyCommand::SkyGridSize1, "sky_grid_size_1", "View / Sky grid 1/1", "Ctrl+1"},
+    {KeyCommand::SkyGridSize2, "sky_grid_size_2", "View / Sky grid 1/2", "Ctrl+2"},
+    {KeyCommand::SkyGridSize3, "sky_grid_size_3", "View / Sky grid 1/3", "Ctrl+3"},
+    {KeyCommand::SkyGridSize4, "sky_grid_size_4", "View / Sky grid 1/4", "Ctrl+4"},
     {KeyCommand::ResetLayout, "reset_layout", "Window / Reset layout", ""},
     {KeyCommand::Settings, "settings", "Settings / Open settings", "Ctrl+K"},
 };
@@ -77,6 +82,7 @@ struct PhysicalKey {
 [[nodiscard]] Qt::Key layoutIndependentKey(const QKeyEvent& event) {
 #ifdef Q_OS_WIN
     constexpr PhysicalKey kPhysicalKeys[]{
+        {0x29, Qt::Key_QuoteLeft},
         {0x02, Qt::Key_1}, {0x03, Qt::Key_2}, {0x04, Qt::Key_3},
         {0x05, Qt::Key_4}, {0x06, Qt::Key_5}, {0x07, Qt::Key_6},
         {0x08, Qt::Key_7}, {0x09, Qt::Key_8}, {0x0a, Qt::Key_9}, {0x0b, Qt::Key_0},

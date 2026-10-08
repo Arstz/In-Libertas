@@ -16,6 +16,7 @@ class PlaybackController;
 class QAudioBuffer;
 class QAudioDecoder;
 class QBuffer;
+class QButtonGroup;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -25,6 +26,7 @@ class QCloseEvent;
 class QSplitter;
 class QSlider;
 class QToolBar;
+class QToolButton;
 class QWidget;
 
 namespace infalsus::gui {
@@ -55,6 +57,7 @@ private:
     void buildInterface();
     void buildToolBar();
     void registerNavigationKeybinds();
+    void setSkyGridSize(int divisor);
     void openSettings();
     void updateVolumeSliderPlacement();
     void buildWorkspace();
@@ -118,6 +121,8 @@ private:
     QMenu* m_recentProjectMenu = nullptr;
     QSlider* m_volumeSlider = nullptr;
     QComboBox* m_flatModeSelector = nullptr;
+    QToolButton* m_skyGridToggle = nullptr;
+    QButtonGroup* m_skyGridSizes = nullptr;
     QDoubleSpinBox* m_noteSpeedSelector = nullptr;
     QLabel* m_timingPositionLabel = nullptr;
     QLabel* m_statusLabel = nullptr;

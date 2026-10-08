@@ -47,6 +47,8 @@ constexpr double kZoneControlRadius = 5.0;
 constexpr double kZoneEdgeHitDistance = 10.0;
 constexpr double kMinimumZoneWidth = 0.01;
 constexpr double kZoneSnapCoordinateDistance = 0.035;
+constexpr double kSkyGridSnapDistancePixels = 8.0;
+constexpr int kFloorLaneCount = 6;
 constexpr qint64 kZoneSnapTimeDistanceMilliseconds = 32;
 constexpr std::uint32_t kZoneLinear = 0x24U;
 constexpr int kFlickTrailSamples = 18;
@@ -255,6 +257,23 @@ void FlatView::setMode(const FlatViewMode mode) {
     update();
 }
 
+void FlatView::setSkyGridEnabled(const bool enabled) {
+    if (m_skyGridEnabled == enabled) {
+        return;
+    }
+    m_skyGridEnabled = enabled;
+    update();
+}
+
+void FlatView::setSkyGridDivisor(const int divisor) {
+    const int clampedDivisor = std::clamp(divisor, 1, 4);
+    if (m_skyGridDivisor == clampedDivisor) {
+        return;
+    }
+    m_skyGridDivisor = clampedDivisor;
+    update();
+}
+
 void FlatView::setTool(const EditorTool tool) {
     if (m_tool == tool) {
         return;
@@ -431,6 +450,27 @@ qint64 FlatView::timeAtY(const double y) const {
     const double offsetMilliseconds = (playheadY() - y) * 1000.0 / m_pixelsPerSecond;
 
     return m_playbackPositionMilliseconds + static_cast<qint64>(std::llround(offsetMilliseconds));
+}
+
+double FlatView::snappedSkyCoordinate(const double coordinate, double minimum, double maximum) const {
+    minimum = std::clamp(minimum, 0.0, 1.0);
+    maximum = std::clamp(maximum, minimum, 1.0);
+    const double clampedCoordinate = std::clamp(coordinate, minimum, maximum);
+    const double width = groundArea().width();
+    if (!m_skyGridEnabled || !canInteractSky() || width <= 0.0) {
+        return clampedCoordinate;
+    }
+    const int subdivisions = kFloorLaneCount * m_skyGridDivisor;
+    const int firstLine = std::max(1, static_cast<int>(std::ceil(minimum * subdivisions)));
+    const int lastLine = std::min(subdivisions - 1, static_cast<int>(std::floor(maximum * subdivisions)));
+    if (firstLine > lastLine) {
+        return clampedCoordinate;
+    }
+    const int nearestLine = std::clamp(static_cast<int>(std::lround(clampedCoordinate * subdivisions)),
+        firstLine, lastLine);
+    const double snappedCoordinate = static_cast<double>(nearestLine) / subdivisions;
+    return std::abs(snappedCoordinate - clampedCoordinate) * width <= kSkyGridSnapDistancePixels
+        ? snappedCoordinate : clampedCoordinate;
 }
 
 qint64 FlatView::snappedTimeAtY(const double y) const {
@@ -1037,10 +1077,10 @@ ChartNote FlatView::flickHitObjectForControlMove(const QPointF& position) const 
     const double coordinate = std::clamp((position.x() - area.left()) / area.width(), 0.0, 1.0);
     const SkySpan originalSpan = flickSpan(m_dragOriginal);
     const double left = m_dragFlickControl.kind == FlickControlKind::Left
-        ? std::min(coordinate, originalSpan.right - kMinimumFlickWidth)
+        ? snappedSkyCoordinate(coordinate, 0.0, originalSpan.right - kMinimumFlickWidth)
         : originalSpan.left;
     const double right = m_dragFlickControl.kind == FlickControlKind::Right
-        ? std::max(coordinate, originalSpan.left + kMinimumFlickWidth)
+        ? snappedSkyCoordinate(coordinate, originalSpan.left + kMinimumFlickWidth, 1.0)
         : originalSpan.right;
     setFlickSpan(hitObject, left, right);
 
@@ -1253,11 +1293,11 @@ QVector<ChartNote> FlatView::zoneHitObjectsForControlMove(const QPointF& positio
         const double oldLeft = zoneLeftEdge(m_dragOriginal, controlsStart);
         const double oldRight = zoneRightEdge(m_dragOriginal, controlsStart);
         const double newLeft = controlsLeft
-            ? std::min(coordinate, oldRight - kMinimumZoneWidth)
+            ? snappedSkyCoordinate(coordinate, 0.0, oldRight - kMinimumZoneWidth)
             : oldLeft;
         const double newRight = controlsLeft
             ? oldRight
-            : std::max(coordinate, oldLeft + kMinimumZoneWidth);
+            : snappedSkyCoordinate(coordinate, oldLeft + kMinimumZoneWidth, 1.0);
         for (int index = 0; index < hitObjects.size(); ++index) {
             const bool targetIsPrimary = m_dragLinkedZoneIndexes.isEmpty()
                 || m_dragLinkedZoneIndexes.value(index) == m_dragHitObjectIndex;
@@ -1796,6 +1836,7 @@ void FlatView::paintGL() {
     const int groundOpacity = m_mode == FlatViewMode::Sky ? kInactiveOpacity : 255;
     const int skyOpacity = m_mode == FlatViewMode::Ground ? kInactiveOpacity : 255;
     drawGround(painter, laneArea, groundOpacity);
+    drawSkyGrid(painter, laneArea);
     drawSky(painter, laneArea, skyOpacity);
 
     painter.setPen(QPen(m_playheadColor.isValid() ? m_playheadColor : palette::guideGreen, kPlayheadWidth));
@@ -2044,6 +2085,28 @@ void FlatView::drawGround(QPainter& painter, const QRectF& area, const int opaci
             painter.drawPolygon(object);
         }
     }
+}
+
+void FlatView::drawSkyGrid(QPainter& painter, const QRectF& area) const {
+    if (!m_skyGridEnabled || !canInteractSky() || area.width() <= 0.0) {
+        return;
+    }
+    const int subdivisions = kFloorLaneCount * m_skyGridDivisor;
+    QVector<QLineF> lines;
+    QVector<QLineF> laneLines;
+    lines.reserve(subdivisions - kFloorLaneCount);
+    laneLines.reserve(kFloorLaneCount - 1);
+    for (int index = 1; index < subdivisions; ++index) {
+        const double x = area.left() + area.width() * index / subdivisions;
+        (index % m_skyGridDivisor == 0 ? laneLines : lines).append(QLineF(x, area.top(), x, area.bottom()));
+    }
+    painter.save();
+    painter.setClipRect(area, Qt::IntersectClip);
+    painter.setPen(QPen(palette::white, 1.0));
+    painter.drawLines(lines);
+    painter.setPen(QPen(palette::white, 2.0));
+    painter.drawLines(laneLines);
+    painter.restore();
 }
 
 void FlatView::drawSky(QPainter& painter, const QRectF& area, const int opacity) const {

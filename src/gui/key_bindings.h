@@ -18,7 +18,8 @@ enum class KeyCommand {
     FlipSelectionVertically, ToggleZoneGrouping, ResnapAll, RefreshVerification,
     PlaceTool, SelectTool, MoveTool, ZoomIn, ZoomInAlternate, ZoomOut, ZoomOutAlternate,
     TogglePlayback, IncreasePlaybackRate, DecreasePlaybackRate,
-    SeekBackward, SeekForward, IncreaseDivisor, DecreaseDivisor, CycleFlatMode,
+    SeekBackward, SeekForward, IncreaseDivisor, DecreaseDivisor, CycleFlatMode, ToggleSkyGrid,
+    SkyGridSize1, SkyGridSize2, SkyGridSize3, SkyGridSize4,
     ResetLayout, Settings,
 };
 
