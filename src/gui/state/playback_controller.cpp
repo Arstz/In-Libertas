@@ -188,7 +188,7 @@ void PlaybackController::updateClock() {
         stopClock();
         return;
     }
-    if (m_audioSink && m_audioSink->error() != QAudio::NoError) {
+    if (m_audioSink && m_audioSink->error() != QAudio::NoError && m_audioSink->error() != QAudio::UnderrunError) {
         handleAudioError(QStringLiteral("Audio output failed (%1).").arg(static_cast<int>(m_audioSink->error())));
         return;
     }
@@ -221,23 +221,32 @@ void PlaybackController::appendDecodedAudio() {
             handleAudioError(QStringLiteral("The audio decoder returned an unsupported playback format."));
             return;
         }
-        m_decodedAudio.append(buffer.constData<char>(), buffer.byteCount());
+        m_decodedAudio->samples.append(buffer.constData<char>(), buffer.byteCount());
+    }
+    if (m_audioStream) {
+        m_audioStream->sourceUpdated();
+    }
+    if (m_playbackActive && !m_usingFallbackClock) {
+        startAudioPlayback();
     }
 }
 
 void PlaybackController::finishDecoding() {
     appendDecodedAudio();
-    m_decodingAudio = false;
     if (m_audioFailed) {
         return;
     }
-    if (m_decodedAudio.isEmpty()) {
+    if (m_decodedAudio->samples.isEmpty()) {
         handleAudioError(QStringLiteral("The song contains no decodable audio."));
         return;
     }
 
-    emit mediaDurationChanged(m_audioFormat.durationForBytes(m_decodedAudio.size()) / 1000);
-    emit audioDecoded(m_decodedAudio, m_audioFormat);
+    m_decodedAudio->complete = true;
+    if (m_audioStream) {
+        m_audioStream->sourceUpdated();
+    }
+    emit mediaDurationChanged(m_audioFormat.durationForBytes(m_decodedAudio->samples.size()) / 1000);
+    emit audioDecoded(m_decodedAudio->samples, m_audioFormat);
     if (m_playbackActive && !m_usingFallbackClock) {
         startAudioPlayback();
     }
@@ -269,11 +278,10 @@ void PlaybackController::resetAudioSource() {
     m_audioBuffer.close();
     m_audioBuffer.setBuffer(nullptr);
     m_audioData.clear();
-    m_decodedAudio.clear();
+    m_decodedAudio.reset();
     m_audioFormat = {};
     m_hasAudioSource = false;
     m_usingFallbackClock = false;
-    m_decodingAudio = false;
     m_audioFailed = false;
     emit audioSourceChanged();
     if (wasPlaying) {
@@ -296,7 +304,8 @@ void PlaybackController::createAudioDecoder() {
         m_audioFormat.setChannelCount(kDefaultChannelCount);
     }
     m_audioFormat.setSampleFormat(QAudioFormat::Float);
-    m_decodingAudio = true;
+    m_decodedAudio = std::make_shared<AudioPlaybackData>();
+    m_decodedAudio->complete = false;
     m_audioDecoder = std::make_unique<QAudioDecoder>();
     m_audioDecoder->setAudioFormat(m_audioFormat);
     connect(m_audioDecoder.get(), &QAudioDecoder::bufferReady, this, &PlaybackController::appendDecodedAudio);
@@ -307,13 +316,19 @@ void PlaybackController::createAudioDecoder() {
 }
 
 void PlaybackController::startAudioPlayback() {
-    if (m_audioSink || m_decodingAudio || m_decodedAudio.isEmpty() || m_audioFailed) {
+    if (m_audioSink || !m_decodedAudio || m_decodedAudio->samples.isEmpty() || m_audioFailed
+        || m_chartDurationMilliseconds <= m_positionMilliseconds) {
         return;
     }
 
     m_audioStartPositionMilliseconds = m_positionMilliseconds;
-    m_audioStream = std::make_unique<AudioPlaybackStream>(m_decodedAudio, m_audioFormat,
-        m_positionMilliseconds, m_chartDurationMilliseconds, m_playbackRate);
+    if (!m_audioStream) {
+        m_audioStream = std::make_unique<AudioPlaybackStream>(m_decodedAudio, m_audioFormat,
+            m_positionMilliseconds, m_chartDurationMilliseconds, m_playbackRate);
+    }
+    if (m_audioStream->bytesAvailable() == 0) {
+        return;
+    }
     m_audioSink = std::make_unique<QAudioSink>(m_audioFormat);
     m_audioSink->setBufferSize(m_audioFormat.bytesForDuration(kOutputBufferMicroseconds));
     m_audioSink->setVolume(m_volume);
@@ -332,7 +347,6 @@ void PlaybackController::handleAudioError(const QString& message) {
         return;
     }
     m_audioFailed = true;
-    m_decodingAudio = false;
     resetAudioPlayback();
     if (m_playbackActive) {
         m_usingFallbackClock = true;

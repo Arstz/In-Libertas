@@ -6,11 +6,20 @@
 
 #include <memory>
 
+struct AudioPlaybackData {
+    QByteArray samples;
+    bool complete = true;
+};
+
 class AudioPlaybackStream final : public QIODevice {
 public:
     AudioPlaybackStream(QByteArray samples, const QAudioFormat& format,
         qint64 positionMilliseconds, qint64 durationMilliseconds, qreal playbackRate);
+    AudioPlaybackStream(std::shared_ptr<AudioPlaybackData> source, const QAudioFormat& format,
+        qint64 positionMilliseconds, qint64 durationMilliseconds, qreal playbackRate);
     ~AudioPlaybackStream() override;
+
+    void sourceUpdated();
 
     [[nodiscard]] bool isSequential() const override;
     [[nodiscard]] bool atEnd() const override;

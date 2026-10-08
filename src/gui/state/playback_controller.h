@@ -13,6 +13,7 @@
 #include <memory>
 
 class AudioPlaybackStream;
+struct AudioPlaybackData;
 
 class PlaybackController final : public QObject {
     Q_OBJECT
@@ -71,7 +72,7 @@ private:
     std::unique_ptr<QAudioSink> m_audioSink;
     QTimer m_clockUpdateTimer;
     QByteArray m_audioData;
-    QByteArray m_decodedAudio;
+    std::shared_ptr<AudioPlaybackData> m_decodedAudio;
     qint64 m_chartDurationMilliseconds = 0;
     qint64 m_clockAnchorPositionMilliseconds = 0;
     qint64 m_audioStartPositionMilliseconds = 0;
@@ -81,6 +82,5 @@ private:
     bool m_playbackActive = false;
     bool m_hasAudioSource = false;
     bool m_usingFallbackClock = false;
-    bool m_decodingAudio = false;
     bool m_audioFailed = false;
 };

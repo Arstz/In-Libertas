@@ -58,7 +58,7 @@ struct AudioOutput {
 } // namespace
 
 struct AudioPlaybackStream::ProcessingState {
-    ProcessingState(QByteArray samples, const QAudioFormat& audioFormat,
+    ProcessingState(std::shared_ptr<AudioPlaybackData> samples, const QAudioFormat& audioFormat,
         const qint64 positionMilliseconds, const qint64 durationMilliseconds, const qreal rate)
         : source(std::move(samples)), format(audioFormat), playbackRate(rate) {
         const qint64 firstFrame = format.framesForDuration(positionMilliseconds * 1000);
@@ -69,19 +69,40 @@ struct AudioPlaybackStream::ProcessingState {
         processingFrames = std::max(1, format.framesForDuration(kProcessingIntervalMicroseconds));
         if (playbackRate < kNormalPlaybackRate) {
             stretcher.presetDefault(format.channelCount(), format.sampleRate());
-            const int historyFrames = stretcher.blockSamples() + stretcher.intervalSamples();
-            const int outputLatency = stretcher.outputLatency();
-
             sourceFrame += stretcher.inputLatency();
-            stretcher.seek(inputAt(sourceFrame - historyFrames), historyFrames, playbackRate);
-            process(outputLatency);
-            pending.clear();
+            primed = false;
         }
     }
 
     [[nodiscard]] AudioInput inputAt(const qint64 frame) const {
-        return {reinterpret_cast<const float*>(source.constData()), frame,
-            source.size() / format.bytesPerFrame(), format.channelCount()};
+        return {reinterpret_cast<const float*>(source->samples.constData()), frame,
+            source->samples.size() / format.bytesPerFrame(), format.channelCount()};
+    }
+
+    [[nodiscard]] qint64 availableOutputFrames() const {
+        const qint64 remainingFrames = totalOutputFrames - generatedOutputFrames;
+        if (source->complete) {
+            return remainingFrames;
+        }
+        qint64 inputEnd = sourceFrame;
+        qreal fraction = fractionalInputFrames;
+        if (!primed) {
+            const qreal primeInput = stretcher.outputLatency() * playbackRate;
+            const auto primeFrames = static_cast<qint64>(std::floor(primeInput));
+            inputEnd += primeFrames;
+            fraction = primeInput - primeFrames;
+        }
+        const qint64 availableInput = source->samples.size() / format.bytesPerFrame() - inputEnd;
+        if (availableInput < 0) {
+            return 0;
+        }
+        qint64 outputFrames = std::clamp<qint64>(
+            static_cast<qint64>(std::ceil((availableInput + 1 - fraction) / playbackRate)) - 1,
+            0, remainingFrames);
+        if (outputFrames < remainingFrames) {
+            outputFrames -= outputFrames % processingFrames;
+        }
+        return outputFrames;
     }
 
     void process(const int outputFrames) {
@@ -95,32 +116,42 @@ struct AudioPlaybackStream::ProcessingState {
         sourceFrame += inputFrames;
     }
 
-    void generate() {
-        const int outputFrames = static_cast<int>(std::min<qint64>(processingFrames,
-            totalOutputFrames - generatedOutputFrames));
+    bool generate() {
+        const int outputFrames = static_cast<int>(std::min<qint64>(processingFrames, availableOutputFrames()));
+        if (outputFrames == 0) {
+            return false;
+        }
+        if (!primed) {
+            const int historyFrames = stretcher.blockSamples() + stretcher.intervalSamples();
+            stretcher.seek(inputAt(sourceFrame - historyFrames), historyFrames, playbackRate);
+            process(stretcher.outputLatency());
+            pending.clear();
+            primed = true;
+        }
 
         pendingOffset = 0;
         if (playbackRate < kNormalPlaybackRate) {
             process(outputFrames);
         } else {
-            const qint64 sourceFrames = source.size() / format.bytesPerFrame();
+            const qint64 sourceFrames = source->samples.size() / format.bytesPerFrame();
             const qint64 availableFrames = std::clamp(sourceFrames - sourceFrame, qint64(0), qint64(outputFrames));
             const qsizetype availableBytes = availableFrames * format.bytesPerFrame();
 
             pending.resize(outputFrames * format.bytesPerFrame());
             if (availableBytes > 0) {
-                std::memcpy(pending.data(), source.constData() + sourceFrame * format.bytesPerFrame(), availableBytes);
+                std::memcpy(pending.data(), source->samples.constData() + sourceFrame * format.bytesPerFrame(), availableBytes);
             }
             std::memset(pending.data() + availableBytes, 0, pending.size() - availableBytes);
             sourceFrame += outputFrames;
         }
         generatedOutputFrames += outputFrames;
+        return true;
     }
 
-    QByteArray source;
+    std::shared_ptr<AudioPlaybackData> source;
     QByteArray pending;
     QAudioFormat format;
-    signalsmith::stretch::SignalsmithStretch<float> stretcher;
+    signalsmith::stretch::SignalsmithStretch<float> stretcher{0};
     qint64 sourceFrame = 0;
     qint64 totalOutputFrames = 0;
     qint64 generatedOutputFrames = 0;
@@ -129,16 +160,29 @@ struct AudioPlaybackStream::ProcessingState {
     int processingFrames = 0;
     qreal playbackRate = kNormalPlaybackRate;
     qreal fractionalInputFrames = 0.0;
+    bool primed = true;
 };
 
 AudioPlaybackStream::AudioPlaybackStream(QByteArray samples, const QAudioFormat& format,
     const qint64 positionMilliseconds, const qint64 durationMilliseconds, const qreal playbackRate)
-    : m_processing(std::make_unique<ProcessingState>(std::move(samples), format,
+    : AudioPlaybackStream(std::make_shared<AudioPlaybackData>(AudioPlaybackData{std::move(samples), true}),
+          format, positionMilliseconds, durationMilliseconds, playbackRate) {
+}
+
+AudioPlaybackStream::AudioPlaybackStream(std::shared_ptr<AudioPlaybackData> source, const QAudioFormat& format,
+    const qint64 positionMilliseconds, const qint64 durationMilliseconds, const qreal playbackRate)
+    : m_processing(std::make_unique<ProcessingState>(std::move(source), format,
           positionMilliseconds, durationMilliseconds, playbackRate)) {
     open(QIODevice::ReadOnly | QIODevice::Unbuffered);
 }
 
 AudioPlaybackStream::~AudioPlaybackStream() = default;
+
+void AudioPlaybackStream::sourceUpdated() {
+    if (bytesAvailable() > 0) {
+        emit readyRead();
+    }
+}
 
 bool AudioPlaybackStream::isSequential() const {
     return true;
@@ -149,7 +193,8 @@ bool AudioPlaybackStream::atEnd() const {
 }
 
 qint64 AudioPlaybackStream::bytesAvailable() const {
-    return m_processing->totalOutputFrames * m_processing->format.bytesPerFrame() - m_processing->bytesRead
+    return m_processing->pending.size() - m_processing->pendingOffset
+        + m_processing->availableOutputFrames() * m_processing->format.bytesPerFrame()
         + QIODevice::bytesAvailable();
 }
 
@@ -158,7 +203,9 @@ qint64 AudioPlaybackStream::readData(char* data, const qint64 maximumSize) {
 
     while (copiedBytes < maximumSize && !atEnd()) {
         if (m_processing->pendingOffset == m_processing->pending.size()) {
-            m_processing->generate();
+            if (!m_processing->generate()) {
+                break;
+            }
         }
         const qint64 availableBytes = m_processing->pending.size() - m_processing->pendingOffset;
         const qint64 copySize = std::min(maximumSize - copiedBytes, availableBytes);
