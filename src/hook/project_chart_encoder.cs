@@ -92,7 +92,7 @@ internal static class ProjectChartEncoder {
         Note[] notes = chart.GetProperty("notes").EnumerateArray().Select(ReadNote).OrderBy(note => note.Start).ThenBy(note => note.End).ToArray();
         JsonElement[] timing = chart.GetProperty("timing_events").EnumerateArray().OrderBy(point => ProjectReader.Time(point, "time_ms")).ToArray();
         List<Event> events = new();
-        Dictionary<ulong, ulong> zoneGroups = new();
+        Dictionary<ulong, ulong> fieldGroups = new();
         ulong nextGroup = 0;
         double initialBpm = timing.Length == 0 ? 120 : ValidBpm(timing[0]);
         int initialMeter = timing.Length == 0 ? 4 : ValidMeter(timing[0]);
@@ -125,9 +125,9 @@ internal static class ProjectChartEncoder {
                     MakeRatio(outer ? 0.25 : note.EndWidth, denominator) };
                 ulong groupId;
                 if (note.Kind == 3) {
-                    if (!zoneGroups.TryGetValue(note.GroupId, out groupId)) {
+                    if (!fieldGroups.TryGetValue(note.GroupId, out groupId)) {
                         groupId = nextGroup++;
-                        zoneGroups.Add(note.GroupId, groupId);
+                        fieldGroups.Add(note.GroupId, groupId);
                     }
                 } else {
                     groupId = nextGroup++;

@@ -1,4 +1,4 @@
-#include "core/zone_groups.h"
+#include "core/field_groups.h"
 
 #include <QtCore/QHash>
 #include <QtCore/QMap>
@@ -14,9 +14,9 @@ namespace {
 
 constexpr qint64 kEndpointTimeToleranceMilliseconds = 1;
 constexpr double kEndpointEdgeTolerance = 0.0001;
-constexpr qint64 kMinimumZoneDurationMilliseconds = 1;
+constexpr qint64 kMinimumFieldDurationMilliseconds = 1;
 
-struct ZoneEndpoint {
+struct FieldEndpoint {
     qint64 timeMilliseconds = 0;
     int index = -1;
     bool atStart = true;
@@ -24,7 +24,7 @@ struct ZoneEndpoint {
     double right = 0.0;
 };
 
-[[nodiscard]] ZoneEndpoint endpointFor(const ChartNote& note, const int index, const bool atStart) {
+[[nodiscard]] FieldEndpoint endpointFor(const ChartNote& note, const int index, const bool atStart) {
     const double center = atStart ? note.startX : note.endX;
     const double width = atStart ? note.startWidth : note.endWidth;
 
@@ -32,7 +32,7 @@ struct ZoneEndpoint {
         .index = index, .atStart = atStart, .left = center - width * 0.5, .right = center + width * 0.5};
 }
 
-[[nodiscard]] bool isConnected(const ZoneGroup& group, const QHash<int, QVector<int>>& neighbors) {
+[[nodiscard]] bool isConnected(const FieldGroup& group, const QHash<int, QVector<int>>& neighbors) {
     QSet<int> visited;
     QVector<int> pending{group.indexes.front()};
 
@@ -54,14 +54,14 @@ struct ZoneEndpoint {
 
 } // namespace
 
-QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart) {
-    QMap<std::uint64_t, ZoneGroup> groups;
-    QVector<ZoneGroup> result;
+QVector<FieldGroup> analyzeFieldGroups(const ChartData& chart) {
+    QMap<std::uint64_t, FieldGroup> groups;
+    QVector<FieldGroup> result;
 
     for (int index = 0; index < chart.notes.size(); ++index) {
         const ChartNote& note = chart.notes.at(index);
         if (note.kind == NoteKind::Sky) {
-            ZoneGroup& group = groups[note.groupId];
+            FieldGroup& group = groups[note.groupId];
             group.startMilliseconds = group.indexes.isEmpty() ? note.startMilliseconds
                 : std::min(group.startMilliseconds, note.startMilliseconds);
             group.groupId = note.groupId;
@@ -69,8 +69,8 @@ QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart) {
         }
     }
     result.reserve(groups.size());
-    for (ZoneGroup& group : groups) {
-        QVector<ZoneEndpoint> endpoints;
+    for (FieldGroup& group : groups) {
+        QVector<FieldEndpoint> endpoints;
         QHash<int, QVector<int>> neighbors;
         endpoints.reserve(group.indexes.size() * 2);
         for (const int index : group.indexes) {
@@ -78,13 +78,13 @@ QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart) {
             endpoints.append(endpointFor(note, index, true));
             endpoints.append(endpointFor(note, index, false));
         }
-        std::stable_sort(endpoints.begin(), endpoints.end(), [](const ZoneEndpoint& first, const ZoneEndpoint& second) {
+        std::stable_sort(endpoints.begin(), endpoints.end(), [](const FieldEndpoint& first, const FieldEndpoint& second) {
             return first.timeMilliseconds < second.timeMilliseconds;
         });
         for (int firstIndex = 0; firstIndex < endpoints.size(); ++firstIndex) {
-            const ZoneEndpoint& first = endpoints.at(firstIndex);
+            const FieldEndpoint& first = endpoints.at(firstIndex);
             for (int secondIndex = firstIndex + 1; secondIndex < endpoints.size(); ++secondIndex) {
-                const ZoneEndpoint& second = endpoints.at(secondIndex);
+                const FieldEndpoint& second = endpoints.at(secondIndex);
                 if (second.timeMilliseconds - first.timeMilliseconds > kEndpointTimeToleranceMilliseconds) {
                     break;
                 }
@@ -111,7 +111,7 @@ QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart) {
     return result;
 }
 
-QVector<std::uint64_t> chronologicalZoneGroupIds(const ChartData& chart) {
+QVector<std::uint64_t> chronologicalFieldGroupIds(const ChartData& chart) {
     QMap<std::uint64_t, qint64> starts;
     for (const ChartNote& note : chart.notes) {
         if (note.kind != NoteKind::Sky) {
@@ -131,8 +131,8 @@ QVector<std::uint64_t> chronologicalZoneGroupIds(const ChartData& chart) {
     return ids;
 }
 
-QVector<std::uint64_t> ascendingZoneGroupIds(const ChartData& chart) {
-    const QVector<std::uint64_t> chronologicalIds = chronologicalZoneGroupIds(chart);
+QVector<std::uint64_t> ascendingFieldGroupIds(const ChartData& chart) {
+    const QVector<std::uint64_t> chronologicalIds = chronologicalFieldGroupIds(chart);
     QVector<std::uint64_t> sortedIds = chronologicalIds;
     std::sort(sortedIds.begin(), sortedIds.end());
     QHash<std::uint64_t, std::uint64_t> replacements;
@@ -147,13 +147,13 @@ QVector<std::uint64_t> ascendingZoneGroupIds(const ChartData& chart) {
     return ids;
 }
 
-QVector<ZoneSegment> mergeZoneSegments(QVector<ZoneSegment> segments) {
-    QVector<ZoneSegment> result;
+QVector<FieldSegment> mergeFieldSegments(QVector<FieldSegment> segments) {
+    QVector<FieldSegment> result;
 
-    std::sort(segments.begin(), segments.end(), [](const ZoneSegment& first, const ZoneSegment& second) {
+    std::sort(segments.begin(), segments.end(), [](const FieldSegment& first, const FieldSegment& second) {
         return first.left < second.left;
     });
-    for (const ZoneSegment& segment : segments) {
+    for (const FieldSegment& segment : segments) {
         if (!result.isEmpty() && segment.left <= result.back().right) {
             result.back().right = std::max(result.back().right, segment.right);
         } else {
@@ -164,22 +164,22 @@ QVector<ZoneSegment> mergeZoneSegments(QVector<ZoneSegment> segments) {
     return result;
 }
 
-QVector<int> linkedZoneEndpointIndexes(const ChartData& chart, const int zoneIndex, const bool atStart,
+QVector<int> linkedFieldEndpointIndexes(const ChartData& chart, const int fieldIndex, const bool atStart,
     const bool fullySharedOnly) {
     QVector<int> indexes;
 
-    if (zoneIndex < 0 || zoneIndex >= chart.notes.size() || chart.notes.at(zoneIndex).kind != NoteKind::Sky) {
+    if (fieldIndex < 0 || fieldIndex >= chart.notes.size() || chart.notes.at(fieldIndex).kind != NoteKind::Sky) {
         return indexes;
     }
-    const ChartNote& zone = chart.notes.at(zoneIndex);
-    const ZoneEndpoint endpoint = endpointFor(zone, zoneIndex, atStart);
-    indexes.append(zoneIndex);
+    const ChartNote& field = chart.notes.at(fieldIndex);
+    const FieldEndpoint endpoint = endpointFor(field, fieldIndex, atStart);
+    indexes.append(fieldIndex);
     for (int index = 0; index < chart.notes.size(); ++index) {
         const ChartNote& candidate = chart.notes.at(index);
-        if (index == zoneIndex || candidate.kind != NoteKind::Sky || candidate.groupId != zone.groupId) {
+        if (index == fieldIndex || candidate.kind != NoteKind::Sky || candidate.groupId != field.groupId) {
             continue;
         }
-        const ZoneEndpoint candidateEndpoint = endpointFor(candidate, index, !atStart);
+        const FieldEndpoint candidateEndpoint = endpointFor(candidate, index, !atStart);
         if (std::abs(candidateEndpoint.timeMilliseconds - endpoint.timeMilliseconds) > kEndpointTimeToleranceMilliseconds
             || !std::isfinite(endpoint.left) || !std::isfinite(endpoint.right)
             || !std::isfinite(candidateEndpoint.left) || !std::isfinite(candidateEndpoint.right)) {
@@ -198,35 +198,35 @@ QVector<int> linkedZoneEndpointIndexes(const ChartData& chart, const int zoneInd
     return indexes;
 }
 
-QVector<ChartNote> moveZoneJointTime(QVector<ChartNote> zones, const QVector<bool>& controlsStart,
+QVector<ChartNote> moveFieldJointTime(QVector<ChartNote> fields, const QVector<bool>& controlsStart,
     const qint64 requestedTimeMilliseconds) {
     qint64 minimumTime = 0;
     qint64 maximumTime = std::numeric_limits<qint64>::max();
 
-    if (zones.size() != controlsStart.size()) {
-        return zones;
+    if (fields.size() != controlsStart.size()) {
+        return fields;
     }
-    for (int index = 0; index < zones.size(); ++index) {
-        const ChartNote& zone = zones.at(index);
+    for (int index = 0; index < fields.size(); ++index) {
+        const ChartNote& field = fields.at(index);
         if (controlsStart.at(index)) {
-            maximumTime = std::min(maximumTime, zone.endMilliseconds - kMinimumZoneDurationMilliseconds);
+            maximumTime = std::min(maximumTime, field.endMilliseconds - kMinimumFieldDurationMilliseconds);
         } else {
-            minimumTime = std::max(minimumTime, zone.startMilliseconds + kMinimumZoneDurationMilliseconds);
+            minimumTime = std::max(minimumTime, field.startMilliseconds + kMinimumFieldDurationMilliseconds);
         }
     }
     if (minimumTime > maximumTime) {
-        return zones;
+        return fields;
     }
     const qint64 sharedTime = std::clamp(requestedTimeMilliseconds, minimumTime, maximumTime);
-    for (int index = 0; index < zones.size(); ++index) {
+    for (int index = 0; index < fields.size(); ++index) {
         if (controlsStart.at(index)) {
-            zones[index].startMilliseconds = sharedTime;
+            fields[index].startMilliseconds = sharedTime;
         } else {
-            zones[index].endMilliseconds = sharedTime;
+            fields[index].endMilliseconds = sharedTime;
         }
     }
 
-    return zones;
+    return fields;
 }
 
 } // namespace infalsus

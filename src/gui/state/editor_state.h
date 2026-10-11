@@ -73,7 +73,7 @@ public:
     void pasteCopiedHitObjects();
     void mirrorSelectedHitObjects();
     void flipSelectedHitObjectsVertically();
-    void toggleSelectedZoneGrouping();
+    void toggleSelectedFieldGrouping();
     void resnapAllHitObjects();
     void removeHitObject(int index);
     void removeSelectedHitObjects();

@@ -36,21 +36,21 @@ constexpr double kPlayheadWidth = 6.0;
 constexpr qint64 kTapDurationMilliseconds = 30;
 constexpr qint64 kMinimumHoldDurationMilliseconds = 80;
 constexpr double kHoldEndEdgeHitDistance = 8.0;
-constexpr double kDefaultZoneWidth = 0.18;
+constexpr double kDefaultFieldWidth = 0.18;
 constexpr double kMinimumFlickWidth = 0.06;
 constexpr double kMouseDragDistance = 4.0;
-constexpr int kZoneSamples = 18;
-constexpr int kZoneFillAlpha = 105;
-constexpr double kZoneContourWidth = 1.5;
+constexpr int kFieldSamples = 18;
+constexpr int kFieldFillAlpha = 105;
+constexpr double kFieldContourWidth = 1.5;
 constexpr double kMillisecondsPerSecond = 1000.0;
-constexpr double kZoneControlRadius = 5.0;
-constexpr double kZoneEdgeHitDistance = 10.0;
-constexpr double kMinimumZoneWidth = 0.01;
-constexpr double kZoneSnapCoordinateDistance = 0.035;
+constexpr double kFieldControlRadius = 5.0;
+constexpr double kFieldEdgeHitDistance = 10.0;
+constexpr double kMinimumFieldWidth = 0.01;
+constexpr double kFieldSnapCoordinateDistance = 0.035;
 constexpr double kSkyGridSnapDistancePixels = 8.0;
 constexpr int kFloorLaneCount = 6;
-constexpr qint64 kZoneSnapTimeDistanceMilliseconds = 32;
-constexpr std::uint32_t kZoneLinear = 0x24U;
+constexpr qint64 kFieldSnapTimeDistanceMilliseconds = 32;
+constexpr std::uint32_t kFieldLinear = 0x24U;
 constexpr int kFlickTrailSamples = 18;
 constexpr double kFlickTriangleHeight = 45.0;
 constexpr double kMinimumFlickTrailWidth = 0.06;
@@ -62,7 +62,7 @@ constexpr std::uint32_t kFlickRight = 0x400U;
 constexpr std::uint32_t kFlickLeft = 0x1000U;
 constexpr int kInactiveOpacity = 50;
 
-[[nodiscard]] std::uint64_t nextZoneGroupId(const ChartData& chart) {
+[[nodiscard]] std::uint64_t nextFieldGroupId(const ChartData& chart) {
     QSet<std::uint64_t> usedIds;
     std::uint64_t groupId = 0;
     for (const ChartNote& note : chart.notes) {
@@ -155,23 +155,23 @@ struct SkySpan {
     return clampedProgress;
 }
 
-[[nodiscard]] double zoneLeftEdge(const ChartNote& hitObject, const bool atStart) {
+[[nodiscard]] double fieldLeftEdge(const ChartNote& hitObject, const bool atStart) {
     const double center = atStart ? hitObject.startX : hitObject.endX;
     const double width = atStart ? hitObject.startWidth : hitObject.endWidth;
 
     return center - width * 0.5;
 }
 
-[[nodiscard]] double zoneRightEdge(const ChartNote& hitObject, const bool atStart) {
+[[nodiscard]] double fieldRightEdge(const ChartNote& hitObject, const bool atStart) {
     const double center = atStart ? hitObject.startX : hitObject.endX;
     const double width = atStart ? hitObject.startWidth : hitObject.endWidth;
 
     return center + width * 0.5;
 }
 
-void setZoneEndpoint(ChartNote& hitObject, const bool atStart, const double left, const double right) {
-    const double clampedLeft = std::clamp(left, 0.0, 1.0 - kMinimumZoneWidth);
-    const double clampedRight = std::clamp(right, clampedLeft + kMinimumZoneWidth, 1.0);
+void setFieldEndpoint(ChartNote& hitObject, const bool atStart, const double left, const double right) {
+    const double clampedLeft = std::clamp(left, 0.0, 1.0 - kMinimumFieldWidth);
+    const double clampedRight = std::clamp(right, clampedLeft + kMinimumFieldWidth, 1.0);
     const double center = (clampedLeft + clampedRight) * 0.5;
     const double width = clampedRight - clampedLeft;
     if (atStart) {
@@ -222,7 +222,7 @@ FlatView::~FlatView() {
 
 void FlatView::setChart(const ChartData& chart) {
     m_chart = chart;
-    invalidateZoneGroups();
+    invalidateFieldGroups();
     update();
 }
 
@@ -375,7 +375,7 @@ void FlatView::setDecodedAudio(QByteArray samples, const QAudioFormat& format) {
 void FlatView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
     m_chart.notes.insert(insertionIndex, hitObject);
-    invalidateZoneGroups();
+    invalidateFieldGroups();
     update();
 }
 
@@ -385,7 +385,7 @@ void FlatView::removeHitObject(const int index) {
     }
 
     m_chart.notes.removeAt(index);
-    invalidateZoneGroups();
+    invalidateFieldGroups();
     update();
 }
 
@@ -395,7 +395,7 @@ void FlatView::updateHitObject(const int index, const ChartNote& hitObject) {
     }
 
     m_chart.notes[index] = hitObject;
-    invalidateZoneGroups();
+    invalidateFieldGroups();
     update();
 }
 
@@ -414,7 +414,7 @@ void FlatView::updateHitObjects(const QVector<int>& indexes, const QVector<Chart
         changed = true;
     }
     if (changed) {
-        invalidateZoneGroups();
+        invalidateFieldGroups();
         update();
     }
 }
@@ -560,7 +560,7 @@ int FlatView::holdEndHitObjectAt(const QPointF& position) const {
     return -1;
 }
 
-int FlatView::zoneHitObjectAt(const QPointF& position) const {
+int FlatView::fieldHitObjectAt(const QPointF& position) const {
     const QRectF area = groundArea();
     const auto skyX = [&area](const double coordinate) {
         return area.left() + std::clamp(coordinate, 0.0, 1.0) * area.width();
@@ -574,25 +574,25 @@ int FlatView::zoneHitObjectAt(const QPointF& position) const {
         const qint64 duration = std::max(hitObject.endMilliseconds - hitObject.startMilliseconds, qint64(1));
         QPolygonF leftSide;
         QPolygonF rightSide;
-        leftSide.reserve(kZoneSamples + 1);
-        rightSide.reserve(kZoneSamples + 1);
-        for (int sampleIndex = 0; sampleIndex <= kZoneSamples; ++sampleIndex) {
-            const double progress = static_cast<double>(sampleIndex) / kZoneSamples;
-            const double left = zoneLeftEdge(hitObject, true)
-                + (zoneLeftEdge(hitObject, false) - zoneLeftEdge(hitObject, true))
+        leftSide.reserve(kFieldSamples + 1);
+        rightSide.reserve(kFieldSamples + 1);
+        for (int sampleIndex = 0; sampleIndex <= kFieldSamples; ++sampleIndex) {
+            const double progress = static_cast<double>(sampleIndex) / kFieldSamples;
+            const double left = fieldLeftEdge(hitObject, true)
+                + (fieldLeftEdge(hitObject, false) - fieldLeftEdge(hitObject, true))
                     * easingFor(hitObject.auxiliary, false, progress);
-            const double right = zoneRightEdge(hitObject, true)
-                + (zoneRightEdge(hitObject, false) - zoneRightEdge(hitObject, true))
+            const double right = fieldRightEdge(hitObject, true)
+                + (fieldRightEdge(hitObject, false) - fieldRightEdge(hitObject, true))
                     * easingFor(hitObject.auxiliary, true, progress);
             const qint64 time = hitObject.startMilliseconds + static_cast<qint64>(duration * progress);
             leftSide.append(QPointF(skyX(left), timeToY(time)));
             rightSide.append(QPointF(skyX(right), timeToY(time)));
         }
-        QPolygonF zone = leftSide;
+        QPolygonF field = leftSide;
         for (auto iterator = rightSide.crbegin(); iterator != rightSide.crend(); ++iterator) {
-            zone.append(*iterator);
+            field.append(*iterator);
         }
-        if (zone.containsPoint(position, Qt::OddEvenFill)) {
+        if (field.containsPoint(position, Qt::OddEvenFill)) {
             return index;
         }
     }
@@ -656,12 +656,12 @@ QVector<int> FlatView::hitObjectsAt(const QPointF& position) const {
     QVector<int> indexes;
     if (canInteractSky()) {
         const int flickIndex = flickHitObjectAt(position);
-        const int zoneIndex = zoneHitObjectAt(position);
+        const int fieldIndex = fieldHitObjectAt(position);
         if (flickIndex >= 0) {
             indexes.append(flickIndex);
         }
-        if (zoneIndex >= 0) {
-            indexes.append(zoneIndex);
+        if (fieldIndex >= 0) {
+            indexes.append(fieldIndex);
         }
     }
     if (canInteractGround()) {
@@ -694,8 +694,8 @@ QVector<int> FlatView::hitObjectsInRect(const QRectF& rectangle, const Qt::Keybo
             const SkySpan span = hitObject.kind == NoteKind::Flick
                 ? flickSpan(hitObject)
                 : SkySpan{
-                    .left = std::min(zoneLeftEdge(hitObject, true), zoneLeftEdge(hitObject, false)),
-                    .right = std::max(zoneRightEdge(hitObject, true), zoneRightEdge(hitObject, false)),
+                    .left = std::min(fieldLeftEdge(hitObject, true), fieldLeftEdge(hitObject, false)),
+                    .right = std::max(fieldRightEdge(hitObject, true), fieldRightEdge(hitObject, false)),
                 };
             const double top = hitObject.kind == NoteKind::Flick
                 ? timeToY(hitObject.startMilliseconds) - flickTriangleHeight()
@@ -790,16 +790,16 @@ QVector<ChartNote> FlatView::hitObjectsForSelectionMove(const QPointF& position,
         }
 
         if (original.kind == NoteKind::Sky) {
-            setZoneEndpoint(
+            setFieldEndpoint(
                 hitObject,
                 true,
-                zoneLeftEdge(original, true) + coordinateOffset,
-                zoneRightEdge(original, true) + coordinateOffset);
-            setZoneEndpoint(
+                fieldLeftEdge(original, true) + coordinateOffset,
+                fieldRightEdge(original, true) + coordinateOffset);
+            setFieldEndpoint(
                 hitObject,
                 false,
-                zoneLeftEdge(original, false) + coordinateOffset,
-                zoneRightEdge(original, false) + coordinateOffset);
+                fieldLeftEdge(original, false) + coordinateOffset,
+                fieldRightEdge(original, false) + coordinateOffset);
         } else if (original.kind == NoteKind::Flick) {
             const SkySpan span = flickSpan(original);
             setFlickSpan(hitObject, span.left + coordinateOffset, span.right + coordinateOffset);
@@ -845,7 +845,7 @@ FlatView::FlickControl FlatView::flickControlAt(const QPointF& position) const {
             {FlickControlKind::Right, QPointF(area.left() + span.right * area.width(), y)},
         }};
         for (const auto& [kind, controlPosition] : controls) {
-            if (QLineF(position, controlPosition).length() <= kZoneControlRadius * 1.5) {
+            if (QLineF(position, controlPosition).length() <= kFieldControlRadius * 1.5) {
                 return {.kind = kind, .hitObjectIndex = index};
             }
         }
@@ -854,7 +854,7 @@ FlatView::FlickControl FlatView::flickControlAt(const QPointF& position) const {
     return {};
 }
 
-FlatView::ZoneControl FlatView::zoneControlAt(const QPointF& position) const {
+FlatView::FieldControl FlatView::fieldControlAt(const QPointF& position) const {
     const QRectF area = groundArea();
     const auto skyX = [&area](const double coordinate) {
         return area.left() + std::clamp(coordinate, 0.0, 1.0) * area.width();
@@ -862,28 +862,28 @@ FlatView::ZoneControl FlatView::zoneControlAt(const QPointF& position) const {
 
     for (int index = m_chart.notes.size() - 1; index >= 0; --index) {
         const ChartNote& hitObject = m_chart.notes.at(index);
-        if (hitObject.kind != NoteKind::Sky || !shouldDrawZoneControls(index)) {
+        if (hitObject.kind != NoteKind::Sky || !shouldDrawFieldControls(index)) {
             continue;
         }
         const qint64 duration = std::max(hitObject.endMilliseconds - hitObject.startMilliseconds, qint64(1));
         const double middleProgress = 0.5;
-        const double middleLeft = zoneLeftEdge(hitObject, true)
-            + (zoneLeftEdge(hitObject, false) - zoneLeftEdge(hitObject, true))
+        const double middleLeft = fieldLeftEdge(hitObject, true)
+            + (fieldLeftEdge(hitObject, false) - fieldLeftEdge(hitObject, true))
                 * easingFor(hitObject.auxiliary, false, middleProgress);
-        const double middleRight = zoneRightEdge(hitObject, true)
-            + (zoneRightEdge(hitObject, false) - zoneRightEdge(hitObject, true))
+        const double middleRight = fieldRightEdge(hitObject, true)
+            + (fieldRightEdge(hitObject, false) - fieldRightEdge(hitObject, true))
                 * easingFor(hitObject.auxiliary, true, middleProgress);
         const qint64 middleTime = hitObject.startMilliseconds + duration / 2;
-        const std::array<std::pair<ZoneControlKind, QPointF>, 6> controls{{
-            {ZoneControlKind::StartLeft, QPointF(skyX(zoneLeftEdge(hitObject, true)), timeToY(hitObject.startMilliseconds))},
-            {ZoneControlKind::StartRight, QPointF(skyX(zoneRightEdge(hitObject, true)), timeToY(hitObject.startMilliseconds))},
-            {ZoneControlKind::EndLeft, QPointF(skyX(zoneLeftEdge(hitObject, false)), timeToY(hitObject.endMilliseconds))},
-            {ZoneControlKind::EndRight, QPointF(skyX(zoneRightEdge(hitObject, false)), timeToY(hitObject.endMilliseconds))},
-            {ZoneControlKind::LeftSide, QPointF(skyX(middleLeft), timeToY(middleTime))},
-            {ZoneControlKind::RightSide, QPointF(skyX(middleRight), timeToY(middleTime))},
+        const std::array<std::pair<FieldControlKind, QPointF>, 6> controls{{
+            {FieldControlKind::StartLeft, QPointF(skyX(fieldLeftEdge(hitObject, true)), timeToY(hitObject.startMilliseconds))},
+            {FieldControlKind::StartRight, QPointF(skyX(fieldRightEdge(hitObject, true)), timeToY(hitObject.startMilliseconds))},
+            {FieldControlKind::EndLeft, QPointF(skyX(fieldLeftEdge(hitObject, false)), timeToY(hitObject.endMilliseconds))},
+            {FieldControlKind::EndRight, QPointF(skyX(fieldRightEdge(hitObject, false)), timeToY(hitObject.endMilliseconds))},
+            {FieldControlKind::LeftSide, QPointF(skyX(middleLeft), timeToY(middleTime))},
+            {FieldControlKind::RightSide, QPointF(skyX(middleRight), timeToY(middleTime))},
         }};
         for (const auto& [kind, controlPosition] : controls) {
-            if (QLineF(position, controlPosition).length() <= kZoneControlRadius * 1.5) {
+            if (QLineF(position, controlPosition).length() <= kFieldControlRadius * 1.5) {
                 return {.kind = kind, .hitObjectIndex = index};
             }
         }
@@ -892,7 +892,7 @@ FlatView::ZoneControl FlatView::zoneControlAt(const QPointF& position) const {
     return {};
 }
 
-FlatView::ZoneSegmentAnchor FlatView::zoneSegmentAnchorAt(const QPointF& position) const {
+FlatView::FieldSegmentAnchor FlatView::fieldSegmentAnchorAt(const QPointF& position) const {
     const QRectF area = groundArea();
     const auto skyX = [&area](const double coordinate) {
         return area.left() + std::clamp(coordinate, 0.0, 1.0) * area.width();
@@ -905,13 +905,13 @@ FlatView::ZoneSegmentAnchor FlatView::zoneSegmentAnchorAt(const QPointF& positio
                 continue;
             }
             for (const bool atStart : {true, false}) {
-                const double left = skyX(zoneLeftEdge(hitObject, atStart));
-                const double right = skyX(zoneRightEdge(hitObject, atStart));
+                const double left = skyX(fieldLeftEdge(hitObject, atStart));
+                const double right = skyX(fieldRightEdge(hitObject, atStart));
                 const qint64 time = atStart ? hitObject.startMilliseconds : hitObject.endMilliseconds;
                 const double y = timeToY(time);
-                if (std::abs(position.y() - y) <= kZoneEdgeHitDistance
-                    && position.x() >= left - kZoneEdgeHitDistance
-                    && position.x() <= right + kZoneEdgeHitDistance) {
+                if (std::abs(position.y() - y) <= kFieldEdgeHitDistance
+                    && position.x() >= left - kFieldEdgeHitDistance
+                    && position.x() <= right + kFieldEdgeHitDistance) {
                     return {.hitObjectIndex = index, .atStart = atStart};
                 }
             }
@@ -926,7 +926,7 @@ ChartNote FlatView::hitObjectForPlacement(const QPointF& position, const bool sn
         return flickHitObjectForDrag(position, snapToGrid);
     }
     if (m_pressModifiers & Qt::AltModifier) {
-        return zoneHitObjectForDrag(position, snapToGrid);
+        return fieldHitObjectForDrag(position, snapToGrid);
     }
 
     return floorHitObjectForDrag(position, snapToGrid);
@@ -1087,7 +1087,7 @@ ChartNote FlatView::flickHitObjectForControlMove(const QPointF& position) const 
     return hitObject;
 }
 
-ChartNote FlatView::zoneHitObjectForDrag(const QPointF& position, const bool snapToGrid) const {
+ChartNote FlatView::fieldHitObjectForDrag(const QPointF& position, const bool snapToGrid) const {
     const QRectF area = groundArea();
     const double pressCoordinate = std::clamp((m_pressPosition.x() - area.left()) / area.width(), 0.0, 1.0);
     const double releaseCoordinate = std::clamp((position.x() - area.left()) / area.width(), 0.0, 1.0);
@@ -1098,24 +1098,24 @@ ChartNote FlatView::zoneHitObjectForDrag(const QPointF& position, const bool sna
     hitObject.kind = NoteKind::Sky;
     hitObject.side = FloorSide::Sky;
     hitObject.groupId = m_placingHitObject && m_dragHitObjectIndex >= 0 && m_dragHitObjectIndex < m_chart.notes.size()
-        ? m_chart.notes.at(m_dragHitObjectIndex).groupId : nextZoneGroupId(m_chart);
+        ? m_chart.notes.at(m_dragHitObjectIndex).groupId : nextFieldGroupId(m_chart);
     const bool forward = pressTime <= releaseTime;
     hitObject.startMilliseconds = std::min(pressTime, releaseTime);
     hitObject.endMilliseconds = std::max(pressTime, releaseTime);
     hitObject.startX = forward ? pressCoordinate : releaseCoordinate;
     hitObject.endX = forward ? releaseCoordinate : pressCoordinate;
-    hitObject.startWidth = kDefaultZoneWidth;
-    hitObject.endWidth = kDefaultZoneWidth;
-    hitObject.auxiliary = kZoneLinear;
+    hitObject.startWidth = kDefaultFieldWidth;
+    hitObject.endWidth = kDefaultFieldWidth;
+    hitObject.auxiliary = kFieldLinear;
 
-    if (m_zoneSegmentAnchor.hitObjectIndex >= 0
-        && m_zoneSegmentAnchor.hitObjectIndex < m_chart.notes.size()) {
-        const ChartNote& source = m_chart.notes.at(m_zoneSegmentAnchor.hitObjectIndex);
-        const qint64 anchorTime = m_zoneSegmentAnchor.atStart
+    if (m_fieldSegmentAnchor.hitObjectIndex >= 0
+        && m_fieldSegmentAnchor.hitObjectIndex < m_chart.notes.size()) {
+        const ChartNote& source = m_chart.notes.at(m_fieldSegmentAnchor.hitObjectIndex);
+        const qint64 anchorTime = m_fieldSegmentAnchor.atStart
             ? source.startMilliseconds
             : source.endMilliseconds;
-        const double anchorX = m_zoneSegmentAnchor.atStart ? source.startX : source.endX;
-        const double anchorWidth = m_zoneSegmentAnchor.atStart ? source.startWidth : source.endWidth;
+        const double anchorX = m_fieldSegmentAnchor.atStart ? source.startX : source.endX;
+        const double anchorWidth = m_fieldSegmentAnchor.atStart ? source.startWidth : source.endWidth;
         const bool anchorIsStart = anchorTime <= releaseTime;
         hitObject.startMilliseconds = std::min(anchorTime, releaseTime);
         hitObject.endMilliseconds = std::max(anchorTime, releaseTime);
@@ -1129,18 +1129,18 @@ ChartNote FlatView::zoneHitObjectForDrag(const QPointF& position, const bool sna
     return hitObject;
 }
 
-bool FlatView::zoneExtensionExists(const QPointF& position, const bool snapToGrid) const {
-    if (m_zoneSegmentAnchor.hitObjectIndex < 0
-        || m_zoneSegmentAnchor.hitObjectIndex >= m_chart.notes.size()) {
+bool FlatView::fieldExtensionExists(const QPointF& position, const bool snapToGrid) const {
+    if (m_fieldSegmentAnchor.hitObjectIndex < 0
+        || m_fieldSegmentAnchor.hitObjectIndex >= m_chart.notes.size()) {
         return false;
     }
 
-    const ChartNote& source = m_chart.notes.at(m_zoneSegmentAnchor.hitObjectIndex);
-    const qint64 anchorTime = m_zoneSegmentAnchor.atStart ? source.startMilliseconds : source.endMilliseconds;
+    const ChartNote& source = m_chart.notes.at(m_fieldSegmentAnchor.hitObjectIndex);
+    const qint64 anchorTime = m_fieldSegmentAnchor.atStart ? source.startMilliseconds : source.endMilliseconds;
     const qint64 releaseTime = snapToGrid ? snappedTimeAtY(position.y()) : timeAtY(position.y());
     const bool extendsForward = releaseTime > anchorTime;
-    const double anchorLeft = zoneLeftEdge(source, m_zoneSegmentAnchor.atStart);
-    const double anchorRight = zoneRightEdge(source, m_zoneSegmentAnchor.atStart);
+    const double anchorLeft = fieldLeftEdge(source, m_fieldSegmentAnchor.atStart);
+    const double anchorRight = fieldRightEdge(source, m_fieldSegmentAnchor.atStart);
     constexpr qint64 kTimeToleranceMilliseconds = 1;
     constexpr double kEdgeTolerance = 0.0001;
 
@@ -1153,11 +1153,11 @@ bool FlatView::zoneExtensionExists(const QPointF& position, const bool snapToGri
             continue;
         }
         const bool candidateStartsAtJoint = std::abs(candidate.startMilliseconds - anchorTime) <= kTimeToleranceMilliseconds
-            && std::abs(zoneLeftEdge(candidate, true) - anchorLeft) <= kEdgeTolerance
-            && std::abs(zoneRightEdge(candidate, true) - anchorRight) <= kEdgeTolerance;
+            && std::abs(fieldLeftEdge(candidate, true) - anchorLeft) <= kEdgeTolerance
+            && std::abs(fieldRightEdge(candidate, true) - anchorRight) <= kEdgeTolerance;
         const bool candidateEndsAtJoint = std::abs(candidate.endMilliseconds - anchorTime) <= kTimeToleranceMilliseconds
-            && std::abs(zoneLeftEdge(candidate, false) - anchorLeft) <= kEdgeTolerance
-            && std::abs(zoneRightEdge(candidate, false) - anchorRight) <= kEdgeTolerance;
+            && std::abs(fieldLeftEdge(candidate, false) - anchorLeft) <= kEdgeTolerance
+            && std::abs(fieldRightEdge(candidate, false) - anchorRight) <= kEdgeTolerance;
         if ((extendsForward && candidateStartsAtJoint && candidate.endMilliseconds > anchorTime)
             || (!extendsForward && candidateEndsAtJoint && candidate.startMilliseconds < anchorTime)) {
             return true;
@@ -1167,13 +1167,13 @@ bool FlatView::zoneExtensionExists(const QPointF& position, const bool snapToGri
     return false;
 }
 
-ChartNote FlatView::zoneHitObjectForMove(const QPointF& position, const bool snapToGrid) const {
+ChartNote FlatView::fieldHitObjectForMove(const QPointF& position, const bool snapToGrid) const {
     ChartNote hitObject = m_dragOriginal;
     const QRectF area = groundArea();
     const qint64 timeOffset = timeAtY(position.y()) - timeAtY(m_pressPosition.y());
     const double requestedCoordinateOffset = (position.x() - m_pressPosition.x()) / area.width();
-    const double leftmostEdge = std::min(zoneLeftEdge(hitObject, true), zoneLeftEdge(hitObject, false));
-    const double rightmostEdge = std::max(zoneRightEdge(hitObject, true), zoneRightEdge(hitObject, false));
+    const double leftmostEdge = std::min(fieldLeftEdge(hitObject, true), fieldLeftEdge(hitObject, false));
+    const double rightmostEdge = std::max(fieldRightEdge(hitObject, true), fieldRightEdge(hitObject, false));
     const double coordinateOffset = std::clamp(
         requestedCoordinateOffset,
         -leftmostEdge,
@@ -1183,9 +1183,9 @@ ChartNote FlatView::zoneHitObjectForMove(const QPointF& position, const bool sna
     hitObject.endMilliseconds = std::max(hitObject.startMilliseconds + 1, hitObject.endMilliseconds + timeOffset);
     hitObject.startX += coordinateOffset;
     hitObject.endX += coordinateOffset;
-    bool snappedToZone = false;
-    hitObject = snapZoneToAdjacentSegment(hitObject, &snappedToZone);
-    if (snappedToZone) {
+    bool snappedToField = false;
+    hitObject = snapFieldToAdjacentSegment(hitObject, &snappedToField);
+    if (snappedToField) {
         return hitObject;
     }
     if (snapToGrid) {
@@ -1198,7 +1198,7 @@ ChartNote FlatView::zoneHitObjectForMove(const QPointF& position, const bool sna
     return hitObject;
 }
 
-ChartNote FlatView::snapZoneToAdjacentSegment(ChartNote hitObject, bool* snapped) const {
+ChartNote FlatView::snapFieldToAdjacentSegment(ChartNote hitObject, bool* snapped) const {
     struct Endpoint {
         qint64 timeMilliseconds = 0;
         double left = 0.0;
@@ -1208,8 +1208,8 @@ ChartNote FlatView::snapZoneToAdjacentSegment(ChartNote hitObject, bool* snapped
 
     *snapped = false;
     const std::array<Endpoint, 2> endpoints{{
-        {hitObject.startMilliseconds, zoneLeftEdge(hitObject, true), zoneRightEdge(hitObject, true), true},
-        {hitObject.endMilliseconds, zoneLeftEdge(hitObject, false), zoneRightEdge(hitObject, false), false},
+        {hitObject.startMilliseconds, fieldLeftEdge(hitObject, true), fieldRightEdge(hitObject, true), true},
+        {hitObject.endMilliseconds, fieldLeftEdge(hitObject, false), fieldRightEdge(hitObject, false), false},
     }};
     for (int candidateIndex = 0; candidateIndex < m_chart.notes.size(); ++candidateIndex) {
         if (candidateIndex == m_dragHitObjectIndex) {
@@ -1221,12 +1221,12 @@ ChartNote FlatView::snapZoneToAdjacentSegment(ChartNote hitObject, bool* snapped
         }
         for (const bool candidateAtStart : {true, false}) {
             const qint64 candidateTime = candidateAtStart ? candidate.startMilliseconds : candidate.endMilliseconds;
-            const double candidateLeft = zoneLeftEdge(candidate, candidateAtStart);
-            const double candidateRight = zoneRightEdge(candidate, candidateAtStart);
+            const double candidateLeft = fieldLeftEdge(candidate, candidateAtStart);
+            const double candidateRight = fieldRightEdge(candidate, candidateAtStart);
             for (const Endpoint& endpoint : endpoints) {
-                if (std::abs(endpoint.timeMilliseconds - candidateTime) > kZoneSnapTimeDistanceMilliseconds
-                    || std::abs(endpoint.left - candidateLeft) > kZoneSnapCoordinateDistance
-                    || std::abs(endpoint.right - candidateRight) > kZoneSnapCoordinateDistance) {
+                if (std::abs(endpoint.timeMilliseconds - candidateTime) > kFieldSnapTimeDistanceMilliseconds
+                    || std::abs(endpoint.left - candidateLeft) > kFieldSnapCoordinateDistance
+                    || std::abs(endpoint.right - candidateRight) > kFieldSnapCoordinateDistance) {
                     continue;
                 }
                 const qint64 timeOffset = candidateTime - endpoint.timeMilliseconds;
@@ -1235,7 +1235,7 @@ ChartNote FlatView::snapZoneToAdjacentSegment(ChartNote hitObject, bool* snapped
                 hitObject.endMilliseconds = std::max(hitObject.startMilliseconds + 1, hitObject.endMilliseconds + timeOffset);
                 hitObject.startX += coordinateOffset;
                 hitObject.endX += coordinateOffset;
-                setZoneEndpoint(hitObject, endpoint.atStart, candidateLeft, candidateRight);
+                setFieldEndpoint(hitObject, endpoint.atStart, candidateLeft, candidateRight);
                 hitObject.groupId = candidate.groupId;
                 *snapped = true;
 
@@ -1247,90 +1247,90 @@ ChartNote FlatView::snapZoneToAdjacentSegment(ChartNote hitObject, bool* snapped
     return hitObject;
 }
 
-ChartNote FlatView::zoneHitObjectForControlMove(const QPointF& position) const {
-    const QVector<ChartNote> hitObjects = zoneHitObjectsForControlMove(position, false);
+ChartNote FlatView::fieldHitObjectForControlMove(const QPointF& position) const {
+    const QVector<ChartNote> hitObjects = fieldHitObjectsForControlMove(position, false);
 
     return hitObjects.isEmpty() ? m_dragOriginal : hitObjects.front();
 }
 
-QVector<int> FlatView::linkedZoneIndexes() const {
-    const bool controlsStart = m_dragZoneControl.kind == ZoneControlKind::StartLeft
-        || m_dragZoneControl.kind == ZoneControlKind::StartRight
-        || m_dragZoneControl.kind == ZoneControlKind::StartTime;
-    const bool controlsTime = m_dragZoneControl.kind == ZoneControlKind::StartTime
-        || m_dragZoneControl.kind == ZoneControlKind::EndTime;
+QVector<int> FlatView::linkedFieldIndexes() const {
+    const bool controlsStart = m_dragFieldControl.kind == FieldControlKind::StartLeft
+        || m_dragFieldControl.kind == FieldControlKind::StartRight
+        || m_dragFieldControl.kind == FieldControlKind::StartTime;
+    const bool controlsTime = m_dragFieldControl.kind == FieldControlKind::StartTime
+        || m_dragFieldControl.kind == FieldControlKind::EndTime;
 
-    if (m_dragZoneControl.kind == ZoneControlKind::None
+    if (m_dragFieldControl.kind == FieldControlKind::None
         || m_dragHitObjectIndex < 0) {
         return {m_dragHitObjectIndex};
     }
-    if (m_dragZoneControl.kind == ZoneControlKind::LeftSide
-        || m_dragZoneControl.kind == ZoneControlKind::RightSide) {
+    if (m_dragFieldControl.kind == FieldControlKind::LeftSide
+        || m_dragFieldControl.kind == FieldControlKind::RightSide) {
         return {m_dragHitObjectIndex};
     }
 
-    return linkedZoneEndpointIndexes(m_chart, m_dragHitObjectIndex, controlsStart, !controlsTime);
+    return linkedFieldEndpointIndexes(m_chart, m_dragHitObjectIndex, controlsStart, !controlsTime);
 }
 
-QVector<ChartNote> FlatView::zoneHitObjectsForControlMove(const QPointF& position, const bool snapToGrid) const {
-    QVector<ChartNote> hitObjects = m_dragLinkedZoneOriginals;
+QVector<ChartNote> FlatView::fieldHitObjectsForControlMove(const QPointF& position, const bool snapToGrid) const {
+    QVector<ChartNote> hitObjects = m_dragLinkedFieldOriginals;
     if (hitObjects.isEmpty()) {
         hitObjects.append(m_dragOriginal);
     }
     const QRectF area = groundArea();
     const double coordinate = std::clamp((position.x() - area.left()) / area.width(), 0.0, 1.0);
-    const bool controlsStart = m_dragZoneControl.kind == ZoneControlKind::StartLeft
-        || m_dragZoneControl.kind == ZoneControlKind::StartRight
-        || m_dragZoneControl.kind == ZoneControlKind::StartTime;
-    const bool controlsLeft = m_dragZoneControl.kind == ZoneControlKind::StartLeft
-        || m_dragZoneControl.kind == ZoneControlKind::EndLeft;
+    const bool controlsStart = m_dragFieldControl.kind == FieldControlKind::StartLeft
+        || m_dragFieldControl.kind == FieldControlKind::StartRight
+        || m_dragFieldControl.kind == FieldControlKind::StartTime;
+    const bool controlsLeft = m_dragFieldControl.kind == FieldControlKind::StartLeft
+        || m_dragFieldControl.kind == FieldControlKind::EndLeft;
 
-    switch (m_dragZoneControl.kind) {
-    case ZoneControlKind::StartLeft:
-    case ZoneControlKind::StartRight:
-    case ZoneControlKind::EndLeft:
-    case ZoneControlKind::EndRight: {
-        const double oldLeft = zoneLeftEdge(m_dragOriginal, controlsStart);
-        const double oldRight = zoneRightEdge(m_dragOriginal, controlsStart);
+    switch (m_dragFieldControl.kind) {
+    case FieldControlKind::StartLeft:
+    case FieldControlKind::StartRight:
+    case FieldControlKind::EndLeft:
+    case FieldControlKind::EndRight: {
+        const double oldLeft = fieldLeftEdge(m_dragOriginal, controlsStart);
+        const double oldRight = fieldRightEdge(m_dragOriginal, controlsStart);
         const double newLeft = controlsLeft
-            ? snappedSkyCoordinate(coordinate, 0.0, oldRight - kMinimumZoneWidth)
+            ? snappedSkyCoordinate(coordinate, 0.0, oldRight - kMinimumFieldWidth)
             : oldLeft;
         const double newRight = controlsLeft
             ? oldRight
-            : snappedSkyCoordinate(coordinate, oldLeft + kMinimumZoneWidth, 1.0);
+            : snappedSkyCoordinate(coordinate, oldLeft + kMinimumFieldWidth, 1.0);
         for (int index = 0; index < hitObjects.size(); ++index) {
-            const bool targetIsPrimary = m_dragLinkedZoneIndexes.isEmpty()
-                || m_dragLinkedZoneIndexes.value(index) == m_dragHitObjectIndex;
-            setZoneEndpoint(hitObjects[index], targetIsPrimary ? controlsStart : !controlsStart, newLeft, newRight);
+            const bool targetIsPrimary = m_dragLinkedFieldIndexes.isEmpty()
+                || m_dragLinkedFieldIndexes.value(index) == m_dragHitObjectIndex;
+            setFieldEndpoint(hitObjects[index], targetIsPrimary ? controlsStart : !controlsStart, newLeft, newRight);
         }
         break;
     }
-    case ZoneControlKind::StartTime:
-    case ZoneControlKind::EndTime: {
+    case FieldControlKind::StartTime:
+    case FieldControlKind::EndTime: {
         QVector<bool> endpointStarts;
         const qint64 requestedTime = snapToGrid ? snappedTimeAtY(position.y()) : timeAtY(position.y());
         endpointStarts.reserve(hitObjects.size());
         for (int index = 0; index < hitObjects.size(); ++index) {
-            const bool targetIsPrimary = m_dragLinkedZoneIndexes.isEmpty()
-                || m_dragLinkedZoneIndexes.value(index) == m_dragHitObjectIndex;
+            const bool targetIsPrimary = m_dragLinkedFieldIndexes.isEmpty()
+                || m_dragLinkedFieldIndexes.value(index) == m_dragHitObjectIndex;
             endpointStarts.append(targetIsPrimary ? controlsStart : !controlsStart);
         }
-        hitObjects = moveZoneJointTime(std::move(hitObjects), endpointStarts, requestedTime);
+        hitObjects = moveFieldJointTime(std::move(hitObjects), endpointStarts, requestedTime);
         break;
     }
-    case ZoneControlKind::LeftSide:
-    case ZoneControlKind::RightSide: {
-        const bool rightSide = m_dragZoneControl.kind == ZoneControlKind::RightSide;
+    case FieldControlKind::LeftSide:
+    case FieldControlKind::RightSide: {
+        const bool rightSide = m_dragFieldControl.kind == FieldControlKind::RightSide;
         const std::uint32_t mask = rightSide ? 0xE0U : 0x1CU;
-        const std::uint32_t linear = rightSide ? kZoneLinear & mask : kZoneLinear & mask;
+        const std::uint32_t linear = rightSide ? kFieldLinear & mask : kFieldLinear & mask;
         const std::uint32_t sineOut = rightSide ? kWidthSineOut : kCenterSineOut;
         const std::uint32_t sineIn = rightSide ? kWidthSineIn : kCenterSineIn;
         const double startEdge = rightSide
-            ? zoneRightEdge(m_dragOriginal, true)
-            : zoneLeftEdge(m_dragOriginal, true);
+            ? fieldRightEdge(m_dragOriginal, true)
+            : fieldLeftEdge(m_dragOriginal, true);
         const double endEdge = rightSide
-            ? zoneRightEdge(m_dragOriginal, false)
-            : zoneLeftEdge(m_dragOriginal, false);
+            ? fieldRightEdge(m_dragOriginal, false)
+            : fieldLeftEdge(m_dragOriginal, false);
         const double midpoint = area.left() + (startEdge + endEdge) * area.width() * 0.5;
         const double edgeDirection = endEdge - startEdge;
         const double cursorOffset = position.x() - midpoint;
@@ -1348,7 +1348,7 @@ QVector<ChartNote> FlatView::zoneHitObjectsForControlMove(const QPointF& positio
         }
         break;
     }
-    case ZoneControlKind::None:
+    case FieldControlKind::None:
         break;
     }
 
@@ -1498,8 +1498,8 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
             return;
         }
         const int flickHitObjectIndex = canInteractSky() ? flickHitObjectAt(event->position()) : -1;
-        const int zoneHitObjectIndex = canInteractSky() ? zoneHitObjectAt(event->position()) : -1;
-        const int skyHitObjectIndex = flickHitObjectIndex >= 0 ? flickHitObjectIndex : zoneHitObjectIndex;
+        const int fieldHitObjectIndex = canInteractSky() ? fieldHitObjectAt(event->position()) : -1;
+        const int skyHitObjectIndex = flickHitObjectIndex >= 0 ? flickHitObjectIndex : fieldHitObjectIndex;
         if (canInteractSky() && skyHitObjectIndex >= 0) {
             emit hitObjectRemoveRequested(skyHitObjectIndex);
         } else if (canInteractGround() && groundHitObjectIndex >= 0) {
@@ -1523,11 +1523,11 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         m_dragHitObjectIndex = m_chart.notes.size();
         m_draggingHitObject = false;
         m_placingHitObject = true;
-        m_dragZoneControl = {};
+        m_dragFieldControl = {};
         m_dragFlickControl = {};
-        m_zoneSegmentAnchor = (m_pressModifiers & Qt::AltModifier) && !(m_pressModifiers & Qt::ShiftModifier)
-            ? zoneSegmentAnchorAt(m_pressPosition)
-            : ZoneSegmentAnchor{};
+        m_fieldSegmentAnchor = (m_pressModifiers & Qt::AltModifier) && !(m_pressModifiers & Qt::ShiftModifier)
+            ? fieldSegmentAnchorAt(m_pressPosition)
+            : FieldSegmentAnchor{};
         emit hitObjectAddRequested(hitObjectForPlacement(m_pressPosition, true));
         if (m_dragHitObjectIndex < m_chart.notes.size()) {
             m_dragOriginal = m_chart.notes.at(m_dragHitObjectIndex);
@@ -1536,29 +1536,29 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    m_dragZoneControl = zoneControlAt(event->position());
+    m_dragFieldControl = fieldControlAt(event->position());
     m_dragFlickControl = flickControlAt(event->position());
     if (!canInteractSky()) {
-        m_dragZoneControl = {};
+        m_dragFieldControl = {};
         m_dragFlickControl = {};
     }
-    m_zoneSegmentAnchor = canInteractSky() && (m_pressModifiers & Qt::AltModifier)
-        ? zoneSegmentAnchorAt(event->position())
-        : ZoneSegmentAnchor{};
-    if (m_zoneSegmentAnchor.hitObjectIndex >= 0) {
-        m_dragZoneControl = {};
-    } else if (canInteractSky() && m_dragZoneControl.kind == ZoneControlKind::None) {
-        const ZoneSegmentAnchor timeAnchor = zoneSegmentAnchorAt(event->position());
+    m_fieldSegmentAnchor = canInteractSky() && (m_pressModifiers & Qt::AltModifier)
+        ? fieldSegmentAnchorAt(event->position())
+        : FieldSegmentAnchor{};
+    if (m_fieldSegmentAnchor.hitObjectIndex >= 0) {
+        m_dragFieldControl = {};
+    } else if (canInteractSky() && m_dragFieldControl.kind == FieldControlKind::None) {
+        const FieldSegmentAnchor timeAnchor = fieldSegmentAnchorAt(event->position());
         if (timeAnchor.hitObjectIndex >= 0) {
-            m_dragZoneControl = {
-                .kind = timeAnchor.atStart ? ZoneControlKind::StartTime : ZoneControlKind::EndTime,
+            m_dragFieldControl = {
+                .kind = timeAnchor.atStart ? FieldControlKind::StartTime : FieldControlKind::EndTime,
                 .hitObjectIndex = timeAnchor.hitObjectIndex,
             };
         }
     }
     if (m_dragFlickControl.kind != FlickControlKind::None) {
-        m_dragZoneControl = {};
-        m_zoneSegmentAnchor = {};
+        m_dragFieldControl = {};
+        m_fieldSegmentAnchor = {};
     }
     const QVector<int> clickedIndexes = hitObjectsAt(event->position());
     const bool continuesClickCycle = QLineF(event->position(), m_clickCyclePosition).length() <= kMouseDragDistance
@@ -1571,42 +1571,42 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
     const int cycledHitObjectIndex = m_clickCycleIndexes.isEmpty()
         ? -1
         : m_clickCycleIndexes.at((m_clickCycleIndex + 1) % m_clickCycleIndexes.size());
-    const int zoneHitObjectIndex = m_dragZoneControl.kind == ZoneControlKind::None
-            && m_zoneSegmentAnchor.hitObjectIndex < 0
+    const int fieldHitObjectIndex = m_dragFieldControl.kind == FieldControlKind::None
+            && m_fieldSegmentAnchor.hitObjectIndex < 0
             && !(m_pressModifiers & Qt::AltModifier)
         && cycledHitObjectIndex >= 0
         && m_chart.notes.at(cycledHitObjectIndex).kind == NoteKind::Sky
         ? cycledHitObjectIndex
         : -1;
-    const int flickHitObjectIndex = m_dragZoneControl.kind == ZoneControlKind::None
+    const int flickHitObjectIndex = m_dragFieldControl.kind == FieldControlKind::None
             && m_dragFlickControl.kind == FlickControlKind::None
-            && zoneHitObjectIndex < 0
-            && m_zoneSegmentAnchor.hitObjectIndex < 0
+            && fieldHitObjectIndex < 0
+            && m_fieldSegmentAnchor.hitObjectIndex < 0
             && !(m_pressModifiers & Qt::AltModifier)
         && cycledHitObjectIndex >= 0
         && m_chart.notes.at(cycledHitObjectIndex).kind == NoteKind::Flick
         ? cycledHitObjectIndex
         : -1;
-    const int holdEndHitObjectIndex = m_dragZoneControl.kind == ZoneControlKind::None
+    const int holdEndHitObjectIndex = m_dragFieldControl.kind == FieldControlKind::None
             && m_dragFlickControl.kind == FlickControlKind::None
-            && zoneHitObjectIndex < 0
+            && fieldHitObjectIndex < 0
             && flickHitObjectIndex < 0
-            && m_zoneSegmentAnchor.hitObjectIndex < 0
+            && m_fieldSegmentAnchor.hitObjectIndex < 0
             && canInteractGround()
         ? holdEndHitObjectAt(event->position())
         : -1;
     m_dragHitObjectIndex = m_dragFlickControl.kind != FlickControlKind::None
         ? m_dragFlickControl.hitObjectIndex
-        : m_dragZoneControl.kind != ZoneControlKind::None ? m_dragZoneControl.hitObjectIndex
-        : zoneHitObjectIndex >= 0 ? zoneHitObjectIndex
+        : m_dragFieldControl.kind != FieldControlKind::None ? m_dragFieldControl.hitObjectIndex
+        : fieldHitObjectIndex >= 0 ? fieldHitObjectIndex
         : flickHitObjectIndex >= 0 ? flickHitObjectIndex
-        : m_zoneSegmentAnchor.hitObjectIndex >= 0 ? -1
+        : m_fieldSegmentAnchor.hitObjectIndex >= 0 ? -1
         : holdEndHitObjectIndex >= 0 ? holdEndHitObjectIndex : cycledHitObjectIndex >= 0 ? cycledHitObjectIndex : groundHitObjectIndex;
     m_draggingHoldEnd = holdEndHitObjectIndex >= 0;
     m_draggingHitObject = m_dragHitObjectIndex >= 0;
     m_placingHitObject = m_dragHitObjectIndex < 0;
     if (m_draggingHitObject) {
-        if (m_dragZoneControl.kind == ZoneControlKind::None && m_dragFlickControl.kind == FlickControlKind::None) {
+        if (m_dragFieldControl.kind == FieldControlKind::None && m_dragFlickControl.kind == FlickControlKind::None) {
             m_clickCycleIndex = m_clickCycleIndexes.indexOf(m_dragHitObjectIndex);
         }
         m_selectionOnlyClick = !m_selectedHitObjects.contains(m_dragHitObjectIndex);
@@ -1617,14 +1617,14 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
             event->accept();
             return;
         }
-        if (m_dragZoneControl.kind != ZoneControlKind::None) {
-            m_dragLinkedZoneIndexes = linkedZoneIndexes();
-            m_dragLinkedZoneOriginals.clear();
-            m_dragLinkedZoneOriginals.reserve(m_dragLinkedZoneIndexes.size());
-            for (const int index : m_dragLinkedZoneIndexes) {
-                m_dragLinkedZoneOriginals.append(m_chart.notes.at(index));
+        if (m_dragFieldControl.kind != FieldControlKind::None) {
+            m_dragLinkedFieldIndexes = linkedFieldIndexes();
+            m_dragLinkedFieldOriginals.clear();
+            m_dragLinkedFieldOriginals.reserve(m_dragLinkedFieldIndexes.size());
+            for (const int index : m_dragLinkedFieldIndexes) {
+                m_dragLinkedFieldOriginals.append(m_chart.notes.at(index));
             }
-            emit hitObjectBatchMoveStarted(m_dragLinkedZoneIndexes);
+            emit hitObjectBatchMoveStarted(m_dragLinkedFieldIndexes);
         } else {
             emit hitObjectMoveStarted(m_dragHitObjectIndex);
         }
@@ -1690,14 +1690,14 @@ void FlatView::mouseMoveEvent(QMouseEvent* event) {
     if ((event->position() - m_pressPosition).manhattanLength() >= kMouseDragDistance) {
         m_dragMoved = true;
     }
-    if (m_draggingHitObject && m_dragZoneControl.kind != ZoneControlKind::None) {
-        emit hitObjectBatchMoveRequested(m_dragLinkedZoneIndexes, zoneHitObjectsForControlMove(event->position(), false));
+    if (m_draggingHitObject && m_dragFieldControl.kind != FieldControlKind::None) {
+        emit hitObjectBatchMoveRequested(m_dragLinkedFieldIndexes, fieldHitObjectsForControlMove(event->position(), false));
     } else if (m_draggingHitObject && m_dragFlickControl.kind != FlickControlKind::None) {
         emit hitObjectMoveRequested(m_dragHitObjectIndex, flickHitObjectForControlMove(event->position()));
     } else if (m_draggingHitObject && m_draggingHoldEnd && m_dragMoved) {
         emit hitObjectMoveRequested(m_dragHitObjectIndex, holdHitObjectForEndMove(event->position(), false));
     } else if (m_draggingHitObject && m_dragOriginal.kind == NoteKind::Sky && m_dragMoved) {
-        emit hitObjectMoveRequested(m_dragHitObjectIndex, zoneHitObjectForMove(event->position(), false));
+        emit hitObjectMoveRequested(m_dragHitObjectIndex, fieldHitObjectForMove(event->position(), false));
     } else if (m_draggingHitObject && m_dragOriginal.kind == NoteKind::Flick && m_dragMoved) {
         emit hitObjectMoveRequested(m_dragHitObjectIndex, flickHitObjectForMove(event->position(), false));
     } else if (m_draggingHitObject && m_dragMoved) {
@@ -1777,8 +1777,8 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
     if (m_draggingHitObject) {
         if (m_selectionOnlyClick) {
             // The initial press only establishes selection.
-        } else if (m_dragZoneControl.kind != ZoneControlKind::None) {
-            emit hitObjectBatchMoveRequested(m_dragLinkedZoneIndexes, zoneHitObjectsForControlMove(event->position(), true));
+        } else if (m_dragFieldControl.kind != FieldControlKind::None) {
+            emit hitObjectBatchMoveRequested(m_dragLinkedFieldIndexes, fieldHitObjectsForControlMove(event->position(), true));
             emit hitObjectBatchMoveFinished();
         } else if (m_dragFlickControl.kind != FlickControlKind::None) {
             emit hitObjectMoveRequested(m_dragHitObjectIndex, flickHitObjectForControlMove(event->position()));
@@ -1787,7 +1787,7 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
             emit hitObjectMoveRequested(m_dragHitObjectIndex, holdHitObjectForEndMove(event->position(), true));
             emit hitObjectMoveFinished();
         } else if (m_dragOriginal.kind == NoteKind::Sky && m_dragMoved) {
-            emit hitObjectMoveRequested(m_dragHitObjectIndex, zoneHitObjectForMove(event->position(), true));
+            emit hitObjectMoveRequested(m_dragHitObjectIndex, fieldHitObjectForMove(event->position(), true));
             emit hitObjectMoveFinished();
         } else if (m_dragOriginal.kind == NoteKind::Flick && m_dragMoved) {
             emit hitObjectMoveRequested(m_dragHitObjectIndex, flickHitObjectForMove(event->position(), true));
@@ -1796,14 +1796,14 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
             emit hitObjectMoveRequested(m_dragHitObjectIndex, floorHitObjectForMove(event->position(), true));
             emit hitObjectMoveFinished();
         }
-        if (m_dragZoneControl.kind == ZoneControlKind::None && !m_dragMoved) {
+        if (m_dragFieldControl.kind == FieldControlKind::None && !m_dragMoved) {
             emit hitObjectMoveFinished();
         }
     } else {
         const ChartNote hitObject = hitObjectForPlacement(event->position(), true);
         if (hitObject.kind == NoteKind::Sky
             && (hitObject.endMilliseconds <= hitObject.startMilliseconds
-                || zoneExtensionExists(event->position(), true))) {
+                || fieldExtensionExists(event->position(), true))) {
             emit hitObjectCreationCancelled(m_dragHitObjectIndex);
         } else {
             emit hitObjectMoveRequested(m_dragHitObjectIndex, hitObject);
@@ -1815,11 +1815,11 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
     m_placingHitObject = false;
     m_selectionOnlyClick = false;
     m_draggingHoldEnd = false;
-    m_dragZoneControl = {};
+    m_dragFieldControl = {};
     m_dragFlickControl = {};
-    m_zoneSegmentAnchor = {};
-    m_dragLinkedZoneIndexes.clear();
-    m_dragLinkedZoneOriginals.clear();
+    m_fieldSegmentAnchor = {};
+    m_dragLinkedFieldIndexes.clear();
+    m_dragLinkedFieldOriginals.clear();
     event->accept();
 }
 
@@ -2018,23 +2018,23 @@ void FlatView::drawGround(QPainter& painter, const QRectF& area, const int opaci
     painter.setPen(QPen(palette::gridLine, 1.0));
     painter.setBrush(palette::withAlpha(palette::chrome, opacity));
     painter.drawRect(area);
-    // An OFF event opens a lane-dimming zone and the next ON event for that
+    // An OFF event opens a lane-dimming field and the next ON event for that
     // lane closes it. Draw the chart-time span, rather than treating it as an
-    // immediate full-view state, so the zone reads like a Hold in the editor.
+    // immediate full-view state, so the field reads like a Hold in the editor.
     painter.setPen(Qt::NoPen);
     painter.setBrush(palette::withAlpha(palette::canvasBackground.darker(180), std::min(210, opacity + 90)));
     for (int lane = 0; lane < 6; ++lane) {
         bool dimming = false;
-        qint64 zoneStart = 0;
+        qint64 fieldStart = 0;
         for (const LaneEvent& event : m_laneEvents) {
             if (event.lane != lane) {
                 continue;
             }
             if (!event.enabled && !dimming) {
-                zoneStart = event.timeMilliseconds;
+                fieldStart = event.timeMilliseconds;
                 dimming = true;
             } else if (event.enabled && dimming) {
-                const double firstY = timeToY(zoneStart);
+                const double firstY = timeToY(fieldStart);
                 const double lastY = timeToY(event.timeMilliseconds);
                 painter.drawRect(QRectF(area.left() + lane * laneWidth, std::min(firstY, lastY), laneWidth,
                     std::abs(lastY - firstY)));
@@ -2042,7 +2042,7 @@ void FlatView::drawGround(QPainter& painter, const QRectF& area, const int opaci
             }
         }
         if (dimming) {
-            const double firstY = timeToY(zoneStart);
+            const double firstY = timeToY(fieldStart);
             const double lastY = timeToY(m_chart.durationMilliseconds);
             painter.drawRect(QRectF(area.left() + lane * laneWidth, std::min(firstY, lastY), laneWidth,
                 std::abs(lastY - firstY)));
@@ -2115,26 +2115,26 @@ void FlatView::drawSky(QPainter& painter, const QRectF& area, const int opacity)
     };
     const QTransform transform(area.width(), 0.0, 0.0, -m_pixelsPerSecond, area.left(), timeToY(0));
     const QColor contourColor = palette::withAlpha(palette::skyArea.lighter(115), opacity);
-    const QColor fill = palette::withAlpha(palette::skyArea, std::min(opacity, kZoneFillAlpha));
+    const QColor fill = palette::withAlpha(palette::skyArea, std::min(opacity, kFieldFillAlpha));
 
-    ensureZoneGroups();
+    ensureFieldGroups();
     painter.save();
     painter.setClipRect(area, Qt::IntersectClip);
-    for (int groupIndex = 0; groupIndex < m_zoneGroups.size(); ++groupIndex) {
-        const QPainterPath contour = transform.map(m_zoneGroupContours.at(groupIndex));
+    for (int groupIndex = 0; groupIndex < m_fieldGroups.size(); ++groupIndex) {
+        const QPainterPath contour = transform.map(m_fieldGroupContours.at(groupIndex));
         if (!contour.boundingRect().intersects(area)) {
             continue;
         }
-        painter.setPen(QPen(contourColor, kZoneContourWidth));
+        painter.setPen(QPen(contourColor, kFieldContourWidth));
         painter.setBrush(fill);
         painter.drawPath(contour);
-        painter.setPen(QPen(contourColor, kZoneContourWidth, Qt::DashLine));
+        painter.setPen(QPen(contourColor, kFieldContourWidth, Qt::DashLine));
         painter.setBrush(Qt::NoBrush);
-        painter.drawPath(transform.map(m_zoneGroupJoints.at(groupIndex)));
+        painter.drawPath(transform.map(m_fieldGroupJoints.at(groupIndex)));
     }
     for (int index = 0; index < m_chart.notes.size(); ++index) {
         const ChartNote& note = m_chart.notes.at(index);
-        if (note.kind != NoteKind::Sky || !shouldDrawZoneControls(index)) {
+        if (note.kind != NoteKind::Sky || !shouldDrawFieldControls(index)) {
             continue;
         }
         const double startY = timeToY(note.startMilliseconds);
@@ -2142,7 +2142,7 @@ void FlatView::drawSky(QPainter& painter, const QRectF& area, const int opacity)
         if (std::max(startY, endY) < area.top() || std::min(startY, endY) > area.bottom()) {
             continue;
         }
-        drawZoneControls(painter, area, note);
+        drawFieldControls(painter, area, note);
     }
     painter.restore();
 
@@ -2192,27 +2192,27 @@ void FlatView::drawSky(QPainter& painter, const QRectF& area, const int opacity)
     }
 }
 
-void FlatView::invalidateZoneGroups() {
-    m_zoneGroupsDirty = true;
+void FlatView::invalidateFieldGroups() {
+    m_fieldGroupsDirty = true;
 }
 
-void FlatView::ensureZoneGroups() const {
-    if (!m_zoneGroupsDirty) {
+void FlatView::ensureFieldGroups() const {
+    if (!m_fieldGroupsDirty) {
         return;
     }
-    m_zoneGroups = analyzeZoneGroups(m_chart);
-    m_zoneGroupContours.clear();
-    m_zoneGroupJoints.clear();
-    for (const ZoneGroup& group : m_zoneGroups) {
+    m_fieldGroups = analyzeFieldGroups(m_chart);
+    m_fieldGroupContours.clear();
+    m_fieldGroupJoints.clear();
+    for (const FieldGroup& group : m_fieldGroups) {
         QHash<int, ChartNote> drawingNotes;
-        QMap<qint64, QVector<ZoneSegment>> sharedSegments;
+        QMap<qint64, QVector<FieldSegment>> sharedSegments;
         QPainterPath contour;
         QPainterPath joints;
         contour.setFillRule(Qt::WindingFill);
         for (const int index : group.indexes) {
             drawingNotes.insert(index, m_chart.notes.at(index));
         }
-        for (const ZoneJoint& joint : group.joints) {
+        for (const FieldJoint& joint : group.joints) {
             const ChartNote& source = m_chart.notes.at(joint.firstAtStart ? joint.secondIndex : joint.firstIndex);
             ChartNote& target = drawingNotes[joint.firstAtStart ? joint.firstIndex : joint.secondIndex];
             target.startMilliseconds = source.endMilliseconds;
@@ -2224,7 +2224,7 @@ void FlatView::ensureZoneGroups() const {
         }
         for (auto iterator = sharedSegments.cbegin(); iterator != sharedSegments.cend(); ++iterator) {
             const double time = iterator.key() / kMillisecondsPerSecond;
-            for (const ZoneSegment& segment : mergeZoneSegments(iterator.value())) {
+            for (const FieldSegment& segment : mergeFieldSegments(iterator.value())) {
                 joints.moveTo(std::clamp(segment.left, 0.0, 1.0), time);
                 joints.lineTo(std::clamp(segment.right, 0.0, 1.0), time);
             }
@@ -2234,30 +2234,30 @@ void FlatView::ensureZoneGroups() const {
             QPolygonF leftSide;
             QPolygonF rightSide;
             const qint64 duration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
-            for (int sampleIndex = 0; sampleIndex <= kZoneSamples; ++sampleIndex) {
-                const double progress = static_cast<double>(sampleIndex) / kZoneSamples;
-                const double left = zoneLeftEdge(note, true)
-                    + (zoneLeftEdge(note, false) - zoneLeftEdge(note, true)) * easingFor(note.auxiliary, false, progress);
-                const double right = zoneRightEdge(note, true)
-                    + (zoneRightEdge(note, false) - zoneRightEdge(note, true)) * easingFor(note.auxiliary, true, progress);
+            for (int sampleIndex = 0; sampleIndex <= kFieldSamples; ++sampleIndex) {
+                const double progress = static_cast<double>(sampleIndex) / kFieldSamples;
+                const double left = fieldLeftEdge(note, true)
+                    + (fieldLeftEdge(note, false) - fieldLeftEdge(note, true)) * easingFor(note.auxiliary, false, progress);
+                const double right = fieldRightEdge(note, true)
+                    + (fieldRightEdge(note, false) - fieldRightEdge(note, true)) * easingFor(note.auxiliary, true, progress);
                 const double time = (note.startMilliseconds + static_cast<qint64>(duration * progress)) / kMillisecondsPerSecond;
                 leftSide.append(QPointF(std::clamp(left, 0.0, 1.0), time));
                 rightSide.append(QPointF(std::clamp(right, 0.0, 1.0), time));
             }
-            QPolygonF zone = leftSide;
+            QPolygonF field = leftSide;
             for (auto iterator = rightSide.crbegin(); iterator != rightSide.crend(); ++iterator) {
-                zone.append(*iterator);
+                field.append(*iterator);
             }
-            contour.addPolygon(zone);
+            contour.addPolygon(field);
             contour.closeSubpath();
         }
-        m_zoneGroupContours.append(contour.simplified());
-        m_zoneGroupJoints.append(joints);
+        m_fieldGroupContours.append(contour.simplified());
+        m_fieldGroupJoints.append(joints);
     }
-    m_zoneGroupsDirty = false;
+    m_fieldGroupsDirty = false;
 }
 
-bool FlatView::shouldDrawZoneControls(const int hitObjectIndex) const {
+bool FlatView::shouldDrawFieldControls(const int hitObjectIndex) const {
     if (hitObjectIndex < 0 || hitObjectIndex >= m_chart.notes.size()
         || m_chart.notes.at(hitObjectIndex).kind != NoteKind::Sky) {
         return false;
@@ -2285,29 +2285,29 @@ void FlatView::drawFlickControls(QPainter& painter, const QRectF& area, const Ch
     painter.setPen(QPen(palette::white, 1.0));
     painter.setBrush(palette::floorNoteBlue);
     for (const QPointF& control : controls) {
-        painter.drawRect(QRectF(control.x() - kZoneControlRadius, control.y() - kZoneControlRadius,
-            kZoneControlRadius * 2.0, kZoneControlRadius * 2.0));
+        painter.drawRect(QRectF(control.x() - kFieldControlRadius, control.y() - kFieldControlRadius,
+            kFieldControlRadius * 2.0, kFieldControlRadius * 2.0));
     }
 }
 
-void FlatView::drawZoneControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const {
+void FlatView::drawFieldControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const {
     const auto skyX = [&area](const double coordinate) {
         return area.left() + std::clamp(coordinate, 0.0, 1.0) * area.width();
     };
     const qint64 duration = std::max(hitObject.endMilliseconds - hitObject.startMilliseconds, qint64(1));
     const double middleProgress = 0.5;
-    const double middleLeft = zoneLeftEdge(hitObject, true)
-        + (zoneLeftEdge(hitObject, false) - zoneLeftEdge(hitObject, true))
+    const double middleLeft = fieldLeftEdge(hitObject, true)
+        + (fieldLeftEdge(hitObject, false) - fieldLeftEdge(hitObject, true))
             * easingFor(hitObject.auxiliary, false, middleProgress);
-    const double middleRight = zoneRightEdge(hitObject, true)
-        + (zoneRightEdge(hitObject, false) - zoneRightEdge(hitObject, true))
+    const double middleRight = fieldRightEdge(hitObject, true)
+        + (fieldRightEdge(hitObject, false) - fieldRightEdge(hitObject, true))
             * easingFor(hitObject.auxiliary, true, middleProgress);
     const qint64 middleTime = hitObject.startMilliseconds + duration / 2;
     const std::array<QPointF, 4> edgeControls{{
-        QPointF(skyX(zoneLeftEdge(hitObject, true)), timeToY(hitObject.startMilliseconds)),
-        QPointF(skyX(zoneRightEdge(hitObject, true)), timeToY(hitObject.startMilliseconds)),
-        QPointF(skyX(zoneLeftEdge(hitObject, false)), timeToY(hitObject.endMilliseconds)),
-        QPointF(skyX(zoneRightEdge(hitObject, false)), timeToY(hitObject.endMilliseconds)),
+        QPointF(skyX(fieldLeftEdge(hitObject, true)), timeToY(hitObject.startMilliseconds)),
+        QPointF(skyX(fieldRightEdge(hitObject, true)), timeToY(hitObject.startMilliseconds)),
+        QPointF(skyX(fieldLeftEdge(hitObject, false)), timeToY(hitObject.endMilliseconds)),
+        QPointF(skyX(fieldRightEdge(hitObject, false)), timeToY(hitObject.endMilliseconds)),
     }};
     const std::array<QPointF, 2> sideControls{{
         QPointF(skyX(middleLeft), timeToY(middleTime)),
@@ -2317,12 +2317,12 @@ void FlatView::drawZoneControls(QPainter& painter, const QRectF& area, const Cha
     painter.setPen(QPen(palette::white, 1.0));
     painter.setBrush(palette::skyArea);
     for (const QPointF& control : edgeControls) {
-        painter.drawRect(QRectF(control.x() - kZoneControlRadius, control.y() - kZoneControlRadius,
-            kZoneControlRadius * 2.0, kZoneControlRadius * 2.0));
+        painter.drawRect(QRectF(control.x() - kFieldControlRadius, control.y() - kFieldControlRadius,
+            kFieldControlRadius * 2.0, kFieldControlRadius * 2.0));
     }
     painter.setBrush(palette::guideYellow);
     for (const QPointF& control : sideControls) {
-        painter.drawEllipse(control, kZoneControlRadius, kZoneControlRadius);
+        painter.drawEllipse(control, kFieldControlRadius, kFieldControlRadius);
     }
 }
 

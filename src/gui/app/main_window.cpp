@@ -469,7 +469,7 @@ void MainWindow::buildInterface() {
     auto* selectAllAction = addEditAction(QStringLiteral("Select all visible"), KeyCommand::SelectAll);
     auto* mirrorAction = addEditAction(QStringLiteral("Mirror selection"), KeyCommand::MirrorSelection);
     auto* verticalFlipAction = addEditAction(QStringLiteral("Flip selection vertically"), KeyCommand::FlipSelectionVertically);
-    auto* groupingAction = addEditAction(QStringLiteral("Group selection"), KeyCommand::ToggleZoneGrouping);
+    auto* groupingAction = addEditAction(QStringLiteral("Group selection"), KeyCommand::ToggleFieldGrouping);
     auto* resnapAllAction = addEditAction(QStringLiteral("Resnap all hit objects"), KeyCommand::ResnapAll);
     auto* verifyAction = addEditAction(QStringLiteral("Refresh verification"), KeyCommand::RefreshVerification);
     auto* resetLayoutAction = windowMenu->addAction(QStringLiteral("Reset layout"));
@@ -500,7 +500,7 @@ void MainWindow::buildInterface() {
     connect(selectAllAction, &QAction::triggered, this, &MainWindow::selectAllVisibleHitObjects);
     connect(mirrorAction, &QAction::triggered, m_state, &EditorState::mirrorSelectedHitObjects);
     connect(verticalFlipAction, &QAction::triggered, m_state, &EditorState::flipSelectedHitObjectsVertically);
-    connect(groupingAction, &QAction::triggered, m_state, &EditorState::toggleSelectedZoneGrouping);
+    connect(groupingAction, &QAction::triggered, m_state, &EditorState::toggleSelectedFieldGrouping);
     connect(resnapAllAction, &QAction::triggered, m_state, &EditorState::resnapAllHitObjects);
     connect(verifyAction, &QAction::triggered, this, [this] {
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());

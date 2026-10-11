@@ -2,7 +2,7 @@
 
 #include "gui/state/editor_state.h"
 #include "gui/app/handling_settings.h"
-#include "core/zone_groups.h"
+#include "core/field_groups.h"
 #include "core/waveform.h"
 
 #include <QtCore/QByteArray>
@@ -75,7 +75,7 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
-    enum class ZoneControlKind {
+    enum class FieldControlKind {
         None,
         StartLeft,
         StartRight,
@@ -87,12 +87,12 @@ private:
         RightSide,
     };
 
-    struct ZoneControl {
-        ZoneControlKind kind = ZoneControlKind::None;
+    struct FieldControl {
+        FieldControlKind kind = FieldControlKind::None;
         int hitObjectIndex = -1;
     };
 
-    struct ZoneSegmentAnchor {
+    struct FieldSegmentAnchor {
         int hitObjectIndex = -1;
         bool atStart = true;
     };
@@ -115,15 +115,15 @@ private:
     [[nodiscard]] int laneAt(const QPointF& position) const;
     [[nodiscard]] int hitObjectAt(const QPointF& position) const;
     [[nodiscard]] int holdEndHitObjectAt(const QPointF& position) const;
-    [[nodiscard]] int zoneHitObjectAt(const QPointF& position) const;
+    [[nodiscard]] int fieldHitObjectAt(const QPointF& position) const;
     [[nodiscard]] int flickHitObjectAt(const QPointF& position) const;
     [[nodiscard]] QVector<int> hitObjectsAt(const QPointF& position) const;
     [[nodiscard]] QVector<int> hitObjectsInRect(const QRectF& rectangle, Qt::KeyboardModifiers modifiers) const;
     [[nodiscard]] QVector<int> selectionForClick(int hitObjectIndex, Qt::KeyboardModifiers modifiers) const;
     [[nodiscard]] QVector<ChartNote> hitObjectsForSelectionMove(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] FlickControl flickControlAt(const QPointF& position) const;
-    [[nodiscard]] ZoneControl zoneControlAt(const QPointF& position) const;
-    [[nodiscard]] ZoneSegmentAnchor zoneSegmentAnchorAt(const QPointF& position) const;
+    [[nodiscard]] FieldControl fieldControlAt(const QPointF& position) const;
+    [[nodiscard]] FieldSegmentAnchor fieldSegmentAnchorAt(const QPointF& position) const;
     [[nodiscard]] ChartNote hitObjectForPlacement(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote floorHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote floorHitObjectForMove(const QPointF& position, bool snapToGrid) const;
@@ -131,19 +131,19 @@ private:
     [[nodiscard]] ChartNote flickHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote flickHitObjectForMove(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote flickHitObjectForControlMove(const QPointF& position) const;
-    [[nodiscard]] ChartNote zoneHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
-    [[nodiscard]] ChartNote zoneHitObjectForMove(const QPointF& position, bool snapToGrid) const;
-    [[nodiscard]] ChartNote zoneHitObjectForControlMove(const QPointF& position) const;
-    [[nodiscard]] QVector<int> linkedZoneIndexes() const;
-    [[nodiscard]] QVector<ChartNote> zoneHitObjectsForControlMove(const QPointF& position, bool snapToGrid) const;
-    [[nodiscard]] bool zoneExtensionExists(const QPointF& position, bool snapToGrid) const;
-    [[nodiscard]] ChartNote snapZoneToAdjacentSegment(ChartNote hitObject, bool* snapped) const;
+    [[nodiscard]] ChartNote fieldHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
+    [[nodiscard]] ChartNote fieldHitObjectForMove(const QPointF& position, bool snapToGrid) const;
+    [[nodiscard]] ChartNote fieldHitObjectForControlMove(const QPointF& position) const;
+    [[nodiscard]] QVector<int> linkedFieldIndexes() const;
+    [[nodiscard]] QVector<ChartNote> fieldHitObjectsForControlMove(const QPointF& position, bool snapToGrid) const;
+    [[nodiscard]] bool fieldExtensionExists(const QPointF& position, bool snapToGrid) const;
+    [[nodiscard]] ChartNote snapFieldToAdjacentSegment(ChartNote hitObject, bool* snapped) const;
     [[nodiscard]] bool canInteractGround() const;
     [[nodiscard]] bool canInteractSky() const;
     [[nodiscard]] bool canPlaceGround() const;
     [[nodiscard]] bool canPlaceSky() const;
-    void invalidateZoneGroups();
-    void ensureZoneGroups() const;
+    void invalidateFieldGroups();
+    void ensureFieldGroups() const;
     void beginDragNavigation(const QPointF& position);
     void updateDragNavigation(const QPointF& position);
     void finishDragNavigation();
@@ -156,9 +156,9 @@ private:
     void drawSkyGrid(QPainter& painter, const QRectF& area) const;
     void drawSky(QPainter& painter, const QRectF& area, int opacity) const;
     void drawFlickControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const;
-    void drawZoneControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const;
+    void drawFieldControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const;
     void drawSelectionRectangle(QPainter& painter) const;
-    [[nodiscard]] bool shouldDrawZoneControls(int hitObjectIndex) const;
+    [[nodiscard]] bool shouldDrawFieldControls(int hitObjectIndex) const;
     [[nodiscard]] bool shouldDrawFlickControls(int hitObjectIndex) const;
 
     ChartData m_chart;
@@ -172,10 +172,10 @@ private:
     QVector<LaneEvent> m_laneEvents;
     QVector<int> m_selectedHitObjects;
     QSet<int> m_selectedHitObjectIndexes;
-    mutable QVector<ZoneGroup> m_zoneGroups;
-    mutable QVector<QPainterPath> m_zoneGroupContours;
-    mutable QVector<QPainterPath> m_zoneGroupJoints;
-    mutable bool m_zoneGroupsDirty = true;
+    mutable QVector<FieldGroup> m_fieldGroups;
+    mutable QVector<QPainterPath> m_fieldGroupContours;
+    mutable QVector<QPainterPath> m_fieldGroupJoints;
+    mutable bool m_fieldGroupsDirty = true;
     QVector<QPointF> m_waveformPeaks;
     ChartNote m_dragOriginal;
     QFutureWatcher<WaveformData>* m_waveformWatcher = nullptr;
@@ -188,11 +188,11 @@ private:
     int m_dragHitObjectIndex = -1;
     int m_divisor = 4;
     int m_skyGridDivisor = 1;
-    ZoneControl m_dragZoneControl;
+    FieldControl m_dragFieldControl;
     FlickControl m_dragFlickControl;
-    ZoneSegmentAnchor m_zoneSegmentAnchor;
-    QVector<int> m_dragLinkedZoneIndexes;
-    QVector<ChartNote> m_dragLinkedZoneOriginals;
+    FieldSegmentAnchor m_fieldSegmentAnchor;
+    QVector<int> m_dragLinkedFieldIndexes;
+    QVector<ChartNote> m_dragLinkedFieldOriginals;
     QVector<int> m_dragSelectionIndexes;
     QVector<ChartNote> m_dragSelectionOriginals;
     qint64 m_dragSelectionEarliestStart = 0;

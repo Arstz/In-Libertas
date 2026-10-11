@@ -28,8 +28,8 @@ qt_add_executable(InLibertas WIN32
     src/core/chart_document.cpp
     src/core/chart_document.h
     src/core/chart_types.h
-    src/core/zone_groups.cpp
-    src/core/zone_groups.h
+    src/core/field_groups.cpp
+    src/core/field_groups.h
     src/core/audio_exporter.cpp
     src/core/audio_exporter.h
     src/core/media_assets.cpp
@@ -147,9 +147,9 @@ if(BUILD_TESTING)
         --project "${CMAKE_CURRENT_SOURCE_DIR}/tests/hook/project_pipeline_test.csproj"
         --configuration Release -- "${CMAKE_BINARY_DIR}/pipeline-fixtures")
     set_tests_properties(hook_project_pipeline PROPERTIES FIXTURES_REQUIRED project_assets)
-    qt_add_executable(zone_groups_test
-        tests/core/zone_groups_test.cpp
-        src/core/zone_groups.cpp
+    qt_add_executable(field_groups_test
+        tests/core/field_groups_test.cpp
+        src/core/field_groups.cpp
         src/core/chart_document.cpp
         src/core/chart_project.cpp
         src/core/project_document.cpp
@@ -157,15 +157,15 @@ if(BUILD_TESTING)
         src/gui/state/editor_state.cpp
         src/gui/state/editor_state.h
     )
-    target_include_directories(zone_groups_test PRIVATE src)
-    target_link_libraries(zone_groups_test PRIVATE Qt6::Core)
-    add_dependencies(zone_groups_test InLibertas)
-    add_test(NAME zone_groups COMMAND zone_groups_test)
-    set_tests_properties(zone_groups PROPERTIES FIXTURES_REQUIRED project_assets)
+    target_include_directories(field_groups_test PRIVATE src)
+    target_link_libraries(field_groups_test PRIVATE Qt6::Core)
+    add_dependencies(field_groups_test InLibertas)
+    add_test(NAME field_groups COMMAND field_groups_test)
+    set_tests_properties(field_groups PROPERTIES FIXTURES_REQUIRED project_assets)
     qt_add_executable(batch_properties_test
         tests/core/batch_properties_test.cpp
         src/core/chart_project.cpp
-        src/core/zone_groups.cpp
+        src/core/field_groups.cpp
         src/gui/state/editor_state.cpp
         src/gui/state/editor_state.h
     )

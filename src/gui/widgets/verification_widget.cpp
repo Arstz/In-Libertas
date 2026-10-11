@@ -1,7 +1,7 @@
 #include "gui/widgets/verification_widget.h"
 
 #include "core/timing_grid.h"
-#include "core/zone_groups.h"
+#include "core/field_groups.h"
 #include "gui/app/game_palette.h"
 
 #include <QtGui/QPalette>
@@ -168,7 +168,7 @@ void VerificationWidget::setChart(const ChartData& chart, const QVector<SpeedEve
         &VerificationWidget::verifyOverlappingMultilane,
         &VerificationWidget::verifyOverlappingHolds,
         &VerificationWidget::verifyCentralFloorSpans,
-        &VerificationWidget::verifyZoneGroups,
+        &VerificationWidget::verifyFieldGroups,
     };
     QVector<VerificationIssue> issues;
     for (const VerificationRule rule : kRules) {
@@ -308,11 +308,11 @@ QVector<VerificationIssue> VerificationWidget::verifyCentralFloorSpans(const Cha
     return issues;
 }
 
-QVector<VerificationIssue> VerificationWidget::verifyZoneGroups(const ChartData& chart) {
-    QVector<ZoneGroup> groups = analyzeZoneGroups(chart);
+QVector<VerificationIssue> VerificationWidget::verifyFieldGroups(const ChartData& chart) {
+    QVector<FieldGroup> groups = analyzeFieldGroups(chart);
     QVector<VerificationIssue> issues;
 
-    for (const ZoneGroup& group : groups) {
+    for (const FieldGroup& group : groups) {
         if (group.connected) {
             continue;
         }
@@ -328,7 +328,7 @@ QVector<VerificationIssue> VerificationWidget::verifyZoneGroups(const ChartData&
         issues.append(std::move(issue));
     }
 
-    std::sort(groups.begin(), groups.end(), [](const ZoneGroup& first, const ZoneGroup& second) {
+    std::sort(groups.begin(), groups.end(), [](const FieldGroup& first, const FieldGroup& second) {
         if (first.startMilliseconds != second.startMilliseconds) {
             return first.startMilliseconds < second.startMilliseconds;
         }
@@ -339,7 +339,7 @@ QVector<VerificationIssue> VerificationWidget::verifyZoneGroups(const ChartData&
     qint64 currentStart = 0;
     bool hasEarlierGroup = false;
     for (int index = 0; index < groups.size(); ++index) {
-        const ZoneGroup& group = groups.at(index);
+        const FieldGroup& group = groups.at(index);
         if (index == 0) {
             currentStart = group.startMilliseconds;
         } else if (group.startMilliseconds != currentStart) {

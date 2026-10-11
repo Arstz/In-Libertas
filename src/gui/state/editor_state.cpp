@@ -1,7 +1,7 @@
 #include "gui/state/editor_state.h"
 
 #include "core/timing_grid.h"
-#include "core/zone_groups.h"
+#include "core/field_groups.h"
 
 #include <QtCore/QHash>
 #include <QtCore/QSet>
@@ -18,32 +18,32 @@ namespace infalsus::gui {
 namespace {
 
 constexpr std::array<int, 12> kDivisors{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64};
-constexpr std::uint32_t kZoneLeftEasingMask = 0x1CU;
-constexpr std::uint32_t kZoneRightEasingMask = 0xE0U;
-constexpr std::uint32_t kZoneLeftSineOut = 0x08U;
-constexpr std::uint32_t kZoneLeftSineIn = 0x10U;
-constexpr std::uint32_t kZoneRightSineOut = 0x40U;
-constexpr std::uint32_t kZoneRightSineIn = 0x80U;
+constexpr std::uint32_t kFieldLeftEasingMask = 0x1CU;
+constexpr std::uint32_t kFieldRightEasingMask = 0xE0U;
+constexpr std::uint32_t kFieldLeftSineOut = 0x08U;
+constexpr std::uint32_t kFieldLeftSineIn = 0x10U;
+constexpr std::uint32_t kFieldRightSineOut = 0x40U;
+constexpr std::uint32_t kFieldRightSineIn = 0x80U;
 constexpr std::uint32_t kFlickRight = 0x400U;
 constexpr std::uint32_t kFlickLeft = 0x1000U;
-constexpr qint64 kMinimumZoneDurationMilliseconds = 1;
+constexpr qint64 kMinimumFieldDurationMilliseconds = 1;
 
 [[nodiscard]] bool isSkyHitObject(const ChartNote& hitObject) {
     return hitObject.kind == NoteKind::Sky || hitObject.kind == NoteKind::Flick;
 }
 
-void constrainZoneDuration(ChartNote& hitObject) {
+void constrainFieldDuration(ChartNote& hitObject) {
     if (hitObject.kind == NoteKind::Sky) {
         hitObject.endMilliseconds = std::max(
             hitObject.endMilliseconds,
-            hitObject.startMilliseconds + kMinimumZoneDurationMilliseconds);
+            hitObject.startMilliseconds + kMinimumFieldDurationMilliseconds);
     }
 }
 
 void normalizeHitObject(ChartNote& hitObject) {
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
     hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-    constrainZoneDuration(hitObject);
+    constrainFieldDuration(hitObject);
     hitObject.startX = std::clamp(hitObject.startX, 0.0, 1.0);
     hitObject.endX = std::clamp(hitObject.endX, 0.0, 1.0);
     hitObject.startWidth = std::clamp(hitObject.startWidth, 0.01, 1.0);
@@ -146,10 +146,10 @@ void mirrorGroundHitObject(ChartNote& hitObject) {
     hitObject.endX = kCentralMirrorExtent - hitObject.endX - hitObject.endWidth;
 }
 
-void mirrorZoneEasing(ChartNote& hitObject) {
-    const std::uint32_t otherFlags = hitObject.auxiliary & ~(kZoneLeftEasingMask | kZoneRightEasingMask);
-    const std::uint32_t leftEasing = hitObject.auxiliary & kZoneLeftEasingMask;
-    const std::uint32_t rightEasing = hitObject.auxiliary & kZoneRightEasingMask;
+void mirrorFieldEasing(ChartNote& hitObject) {
+    const std::uint32_t otherFlags = hitObject.auxiliary & ~(kFieldLeftEasingMask | kFieldRightEasingMask);
+    const std::uint32_t leftEasing = hitObject.auxiliary & kFieldLeftEasingMask;
+    const std::uint32_t rightEasing = hitObject.auxiliary & kFieldRightEasingMask;
 
     hitObject.auxiliary = otherFlags | (leftEasing << 3) | (rightEasing >> 3);
 }
@@ -162,16 +162,16 @@ void mirrorFlickDirection(ChartNote& hitObject) {
     hitObject.auxiliary = otherFlags | (pointsRight ? kFlickLeft : kFlickRight);
 }
 
-void reverseZoneEasing(ChartNote& hitObject) {
-    const std::uint32_t otherFlags = hitObject.auxiliary & ~(kZoneLeftEasingMask | kZoneRightEasingMask);
-    const std::uint32_t leftEasing = hitObject.auxiliary & kZoneLeftEasingMask;
-    const std::uint32_t rightEasing = hitObject.auxiliary & kZoneRightEasingMask;
-    const std::uint32_t reversedLeftEasing = (leftEasing & ~(kZoneLeftSineOut | kZoneLeftSineIn))
-        | ((leftEasing & kZoneLeftSineOut) << 1)
-        | ((leftEasing & kZoneLeftSineIn) >> 1);
-    const std::uint32_t reversedRightEasing = (rightEasing & ~(kZoneRightSineOut | kZoneRightSineIn))
-        | ((rightEasing & kZoneRightSineOut) << 1)
-        | ((rightEasing & kZoneRightSineIn) >> 1);
+void reverseFieldEasing(ChartNote& hitObject) {
+    const std::uint32_t otherFlags = hitObject.auxiliary & ~(kFieldLeftEasingMask | kFieldRightEasingMask);
+    const std::uint32_t leftEasing = hitObject.auxiliary & kFieldLeftEasingMask;
+    const std::uint32_t rightEasing = hitObject.auxiliary & kFieldRightEasingMask;
+    const std::uint32_t reversedLeftEasing = (leftEasing & ~(kFieldLeftSineOut | kFieldLeftSineIn))
+        | ((leftEasing & kFieldLeftSineOut) << 1)
+        | ((leftEasing & kFieldLeftSineIn) >> 1);
+    const std::uint32_t reversedRightEasing = (rightEasing & ~(kFieldRightSineOut | kFieldRightSineIn))
+        | ((rightEasing & kFieldRightSineOut) << 1)
+        | ((rightEasing & kFieldRightSineIn) >> 1);
 
     hitObject.auxiliary = otherFlags | reversedLeftEasing | reversedRightEasing;
 }
@@ -186,7 +186,7 @@ void flipHitObjectVertically(ChartNote& hitObject, const qint64 selectionStartMi
     std::swap(hitObject.startX, hitObject.endX);
     std::swap(hitObject.startWidth, hitObject.endWidth);
     if (hitObject.kind == NoteKind::Sky) {
-        reverseZoneEasing(hitObject);
+        reverseFieldEasing(hitObject);
     }
 }
 
@@ -568,7 +568,7 @@ void EditorState::addHitObject(ChartNote hitObject) {
     const QVector<int> selectionBefore = m_selectedHitObjects;
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
     hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-    constrainZoneDuration(hitObject);
+    constrainFieldDuration(hitObject);
     if (hitObject.id == 0) {
         hitObject.id = m_nextHitObjectId++;
     } else {
@@ -767,7 +767,7 @@ void EditorState::mirrorSelectedHitObjects() {
             hitObject.startX = 1.0 - hitObject.startX;
             hitObject.endX = 1.0 - hitObject.endX;
             if (hitObject.kind == NoteKind::Sky) {
-                mirrorZoneEasing(hitObject);
+                mirrorFieldEasing(hitObject);
             } else {
                 mirrorFlickDirection(hitObject);
             }
@@ -810,19 +810,19 @@ void EditorState::flipSelectedHitObjectsVertically() {
     finishHitObjectBatchMove();
 }
 
-void EditorState::toggleSelectedZoneGrouping() {
+void EditorState::toggleSelectedFieldGrouping() {
     QVector<int> indexes;
-    QVector<ChartNote> zones;
+    QVector<ChartNote> fields;
     QSet<std::uint64_t> usedGroupIds;
     std::uint64_t availableGroupId = 0;
 
     for (const int index : m_selectedHitObjects) {
         if (isValidHitObjectIndex(index) && m_chart.notes.at(index).kind == NoteKind::Sky) {
             indexes.append(index);
-            zones.append(m_chart.notes.at(index));
+            fields.append(m_chart.notes.at(index));
         }
     }
-    if (zones.isEmpty()) {
+    if (fields.isEmpty()) {
         return;
     }
     for (const ChartNote& hitObject : m_chart.notes) {
@@ -830,20 +830,20 @@ void EditorState::toggleSelectedZoneGrouping() {
             usedGroupIds.insert(hitObject.groupId);
         }
     }
-    const bool ungroup = zones.size() > 1
-        && std::all_of(zones.cbegin(), zones.cend(), [&zones](const ChartNote& zone) {
-            return zone.groupId == zones.front().groupId;
+    const bool ungroup = fields.size() > 1
+        && std::all_of(fields.cbegin(), fields.cend(), [&fields](const ChartNote& field) {
+            return field.groupId == fields.front().groupId;
         });
-    for (ChartNote& zone : zones) {
+    for (ChartNote& field : fields) {
         while (usedGroupIds.contains(availableGroupId)) {
             ++availableGroupId;
         }
-        zone.groupId = availableGroupId;
+        field.groupId = availableGroupId;
         if (ungroup) {
             usedGroupIds.insert(availableGroupId);
         }
     }
-    editHitObjects(std::move(indexes), std::move(zones));
+    editHitObjects(std::move(indexes), std::move(fields));
 }
 
 void EditorState::resnapAllHitObjects() {
@@ -868,7 +868,7 @@ void EditorState::resnapAllHitObjects() {
             if (snapped.endMilliseconds <= snapped.startMilliseconds) {
                 snapped.endMilliseconds = nextValidDivisorTime(m_timingPoints, snapped.startMilliseconds);
             }
-            constrainZoneDuration(snapped);
+            constrainFieldDuration(snapped);
         }
         if (hitObjectsEqual(original, snapped)) {
             continue;
@@ -1147,7 +1147,7 @@ void EditorState::moveHitObject(const int index, ChartNote hitObject) {
     }
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
     hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-    constrainZoneDuration(hitObject);
+    constrainFieldDuration(hitObject);
     replaceHitObject(index, hitObject);
 }
 
@@ -1232,7 +1232,7 @@ void EditorState::moveHitObjectBatch(const QVector<int> indexes, const QVector<C
         hitObject.id = m_chart.notes.at(chartIndex).id;
         hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
         hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-        constrainZoneDuration(hitObject);
+        constrainFieldDuration(hitObject);
         if (hitObjectsEqual(m_chart.notes.at(chartIndex), hitObject)) {
             continue;
         }
@@ -1529,7 +1529,7 @@ void EditorState::normalizeHistoryGroupIds(HistoryEntry& entry) {
     for (const ChartNote& note : m_chart.notes) {
         currentIds.append(note.groupId);
     }
-    const QVector<std::uint64_t> orderedIds = ascendingZoneGroupIds(m_chart);
+    const QVector<std::uint64_t> orderedIds = ascendingFieldGroupIds(m_chart);
     if (currentIds == orderedIds) {
         if (!entry.groupIdsBefore.isEmpty()) {
             entry.groupIdsAfter = currentIds;

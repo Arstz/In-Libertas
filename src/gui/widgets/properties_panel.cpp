@@ -156,7 +156,7 @@ void addChoiceField(QFormLayout* layout, const QString& label, const QVector<int
     case NoteKind::Tap: return QStringLiteral("Note");
     case NoteKind::Hold: return QStringLiteral("Hold");
     case NoteKind::Flick: return QStringLiteral("Flick");
-    case NoteKind::Sky: return QStringLiteral("Zone");
+    case NoteKind::Sky: return QStringLiteral("Field");
     case NoteKind::Unknown: return QStringLiteral("Unknown");
     }
 
@@ -266,7 +266,7 @@ void PropertiesPanel::addReadOnlyRow(const QString& label, const QString& value)
 
 void PropertiesPanel::showHitObjects() {
     const QVector<QString> types = propertyValues(m_hitObjects, hitObjectName);
-    QVector<ChartNote> zones;
+    QVector<ChartNote> fields;
     QVector<ChartNote> skyObjects;
     QVector<ChartNote> floorObjects;
 
@@ -276,12 +276,12 @@ void PropertiesPanel::showHitObjects() {
     }
     for (const ChartNote& hitObject : m_hitObjects) {
         if (hitObject.kind == NoteKind::Sky) {
-            zones.append(hitObject);
+            fields.append(hitObject);
         }
         (hitObject.side == FloorSide::Sky ? skyObjects : floorObjects).append(hitObject);
     }
-    if (!zones.isEmpty()) {
-        const auto values = propertyValues(zones, [](const ChartNote& hitObject) { return hitObject.groupId; });
+    if (!fields.isEmpty()) {
+        const auto values = propertyValues(fields, [](const ChartNote& hitObject) { return hitObject.groupId; });
         auto* editor = new QLineEdit(this);
         const bool mixed = hasMixedValues(values);
 

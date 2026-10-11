@@ -333,15 +333,15 @@ void appendU16(QByteArray& bytes, const std::uint16_t value) {
 
 [[nodiscard]] QVector<std::uint64_t> exportGroupIds(const ChartData& chart) {
     QVector<std::uint64_t> groupIds(chart.notes.size());
-    QHash<std::uint64_t, std::uint64_t> zoneIds;
+    QHash<std::uint64_t, std::uint64_t> fieldIds;
     std::uint64_t nextGroupId = 0;
     for (int index = 0; index < chart.notes.size(); ++index) {
         const ChartNote& note = chart.notes.at(index);
         if (note.kind == NoteKind::Sky) {
-            if (!zoneIds.contains(note.groupId)) {
-                zoneIds.insert(note.groupId, nextGroupId++);
+            if (!fieldIds.contains(note.groupId)) {
+                fieldIds.insert(note.groupId, nextGroupId++);
             }
-            groupIds[index] = zoneIds.value(note.groupId);
+            groupIds[index] = fieldIds.value(note.groupId);
             continue;
         }
         groupIds[index] = nextGroupId++;
@@ -676,7 +676,7 @@ bool saveEncodedChart(const QString& filePath, const QString& chartName, const C
         const double startWidth = isOuterFloorLane ? kSerializedOuterLaneWidth : note.startWidth;
         const double endWidth = isOuterFloorLane ? kSerializedOuterLaneWidth : note.endWidth;
         // Floor co-ordinates use an explicit quarter grid in the game. Sky
-        // objects retain the editor's high-resolution co-ordinates so zones
+        // objects retain the editor's high-resolution co-ordinates so fields
         // and flicks do not drift when they are saved and re-opened.
         constexpr std::int64_t kFloorGridDenominator = 4;
         constexpr std::int64_t kSkyCoordinateDenominator = 1000000;

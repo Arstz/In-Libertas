@@ -2,7 +2,7 @@
 
 #include "gui/app/game_palette.h"
 #include "gui/canvas/conveyor_geometry.h"
-#include "core/zone_groups.h"
+#include "core/field_groups.h"
 
 #include <QtCore/QLineF>
 #include <QtCore/QRectF>
@@ -64,14 +64,14 @@ struct TimeRange {
     qint64 endMilliseconds = 0;
 };
 
-[[nodiscard]] double zoneLeftEdge(const ChartNote& note, const bool atStart) {
+[[nodiscard]] double fieldLeftEdge(const ChartNote& note, const bool atStart) {
     const double center = atStart ? note.startX : note.endX;
     const double width = atStart ? note.startWidth : note.endWidth;
 
     return center - width * 0.5;
 }
 
-[[nodiscard]] double zoneRightEdge(const ChartNote& note, const bool atStart) {
+[[nodiscard]] double fieldRightEdge(const ChartNote& note, const bool atStart) {
     const double center = atStart ? note.startX : note.endX;
     const double width = atStart ? note.startWidth : note.endWidth;
 
@@ -184,7 +184,7 @@ ConveyorView::ConveyorView(QWidget* parent)
 
 void ConveyorView::setChart(const ChartData& chart) {
     m_chart = chart;
-    m_zoneBoundariesDirty = true;
+    m_fieldBoundariesDirty = true;
     m_playbackPositionMilliseconds = 0;
     update();
 }
@@ -243,7 +243,7 @@ void ConveyorView::setPlaybackPosition(const qint64 positionMilliseconds) {
 void ConveyorView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
     m_chart.notes.insert(insertionIndex, hitObject);
-    m_zoneBoundariesDirty = true;
+    m_fieldBoundariesDirty = true;
     update();
 }
 
@@ -253,7 +253,7 @@ void ConveyorView::removeHitObject(const int index) {
     }
 
     m_chart.notes.removeAt(index);
-    m_zoneBoundariesDirty = true;
+    m_fieldBoundariesDirty = true;
     update();
 }
 
@@ -263,7 +263,7 @@ void ConveyorView::updateHitObject(const int index, const ChartNote& hitObject) 
     }
 
     m_chart.notes[index] = hitObject;
-    m_zoneBoundariesDirty = true;
+    m_fieldBoundariesDirty = true;
     update();
 }
 
@@ -282,7 +282,7 @@ void ConveyorView::updateHitObjects(const QVector<int>& indexes, const QVector<C
         changed = true;
     }
     if (changed) {
-        m_zoneBoundariesDirty = true;
+        m_fieldBoundariesDirty = true;
         update();
     }
 }
@@ -519,14 +519,12 @@ void ConveyorView::drawConveyor(QPainter& painter) {
     painter.setBrush(palette::withAlpha(palette::outerNoteRed, 46));
     painter.drawPolygon(ConveyorGeometry::floorLane(kLaneCount - 1));
 
-    // Render OFF->ON lane intervals as bounded floor zones. They approach the
-    // receiver with their start/end timestamps just like Hold objects.
     painter.setPen(Qt::NoPen);
     painter.setBrush(palette::withAlpha(palette::canvasBackground.darker(180), 180));
     for (int lane = 0; lane < kLaneCount; ++lane) {
         bool dimming = false;
-        qint64 zoneStart = 0;
-        const auto drawZone = [this, &painter, lane](const qint64 start, const qint64 end) {
+        qint64 intervalStart = 0;
+        const auto drawInterval = [this, &painter, lane](const qint64 start, const qint64 end) {
             if (!isVisible(start, end) || end <= start) {
                 return;
             }
@@ -546,15 +544,15 @@ void ConveyorView::drawConveyor(QPainter& painter) {
                 continue;
             }
             if (!event.enabled && !dimming) {
-                zoneStart = event.timeMilliseconds;
+                intervalStart = event.timeMilliseconds;
                 dimming = true;
             } else if (event.enabled && dimming) {
-                drawZone(zoneStart, event.timeMilliseconds);
+                drawInterval(intervalStart, event.timeMilliseconds);
                 dimming = false;
             }
         }
         if (dimming) {
-            drawZone(zoneStart, m_chart.durationMilliseconds);
+            drawInterval(intervalStart, m_chart.durationMilliseconds);
         }
     }
 
@@ -768,34 +766,34 @@ void ConveyorView::drawFlick(QPainter& painter, const ChartNote& note) {
     painter.restore();
 }
 
-void ConveyorView::ensureZoneBoundaries() {
-    if (!m_zoneBoundariesDirty) {
+void ConveyorView::ensureFieldBoundaries() {
+    if (!m_fieldBoundariesDirty) {
         return;
     }
-    m_sharedZoneStarts.clear();
-    m_sharedZoneEnds.clear();
-    for (const infalsus::ZoneGroup& group : infalsus::analyzeZoneGroups(m_chart)) {
-        for (const infalsus::ZoneJoint& joint : group.joints) {
-            (joint.firstAtStart ? m_sharedZoneStarts : m_sharedZoneEnds)[joint.firstIndex].append(joint.segment);
-            (joint.secondAtStart ? m_sharedZoneStarts : m_sharedZoneEnds)[joint.secondIndex].append(joint.segment);
+    m_sharedFieldStarts.clear();
+    m_sharedFieldEnds.clear();
+    for (const infalsus::FieldGroup& group : infalsus::analyzeFieldGroups(m_chart)) {
+        for (const infalsus::FieldJoint& joint : group.joints) {
+            (joint.firstAtStart ? m_sharedFieldStarts : m_sharedFieldEnds)[joint.firstIndex].append(joint.segment);
+            (joint.secondAtStart ? m_sharedFieldStarts : m_sharedFieldEnds)[joint.secondIndex].append(joint.segment);
         }
     }
-    for (QVector<infalsus::ZoneSegment>& segments : m_sharedZoneStarts) {
-        segments = infalsus::mergeZoneSegments(std::move(segments));
+    for (QVector<infalsus::FieldSegment>& segments : m_sharedFieldStarts) {
+        segments = infalsus::mergeFieldSegments(std::move(segments));
     }
-    for (QVector<infalsus::ZoneSegment>& segments : m_sharedZoneEnds) {
-        segments = infalsus::mergeZoneSegments(std::move(segments));
+    for (QVector<infalsus::FieldSegment>& segments : m_sharedFieldEnds) {
+        segments = infalsus::mergeFieldSegments(std::move(segments));
     }
-    m_zoneBoundariesDirty = false;
+    m_fieldBoundariesDirty = false;
 }
 
-void ConveyorView::drawZoneBoundary(QPainter& painter, const double left, const double right,
-    const qint64 timeMilliseconds, const QVector<infalsus::ZoneSegment>& sharedSegments) {
+void ConveyorView::drawFieldBoundary(QPainter& painter, const double left, const double right,
+    const qint64 timeMilliseconds, const QVector<infalsus::FieldSegment>& sharedSegments) {
     const QColor color = palette::skyArea.lighter(115);
     double cursor = left;
 
     painter.setPen(QPen(color, kSkyContourWidth));
-    for (const infalsus::ZoneSegment& segment : sharedSegments) {
+    for (const infalsus::FieldSegment& segment : sharedSegments) {
         const double sharedLeft = std::clamp(segment.left, left, right);
         const double sharedRight = std::clamp(segment.right, left, right);
         if (sharedLeft > cursor) {
@@ -808,7 +806,7 @@ void ConveyorView::drawZoneBoundary(QPainter& painter, const double left, const 
     }
 }
 
-void ConveyorView::drawSkyZone(QPainter& painter, const ChartNote& note, const int index) {
+void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const int index) {
     const qint64 clippedStart = std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
     const qint64 clippedEnd = note.endMilliseconds;
     const qint64 segmentDuration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
@@ -822,20 +820,20 @@ void ConveyorView::drawSkyZone(QPainter& painter, const ChartNote& note, const i
         const double sampleTime = static_cast<double>(clippedStart)
             + static_cast<double>(clippedEnd - clippedStart) * sampleProgress;
         const double segmentProgress = (sampleTime - note.startMilliseconds) / static_cast<double>(segmentDuration);
-        const double left = zoneLeftEdge(note, true)
-            + (zoneLeftEdge(note, false) - zoneLeftEdge(note, true))
+        const double left = fieldLeftEdge(note, true)
+            + (fieldLeftEdge(note, false) - fieldLeftEdge(note, true))
                 * easingFor(note.auxiliary, false, segmentProgress);
-        const double right = zoneRightEdge(note, true)
-            + (zoneRightEdge(note, false) - zoneRightEdge(note, true))
+        const double right = fieldRightEdge(note, true)
+            + (fieldRightEdge(note, false) - fieldRightEdge(note, true))
                 * easingFor(note.auxiliary, true, segmentProgress);
         const qint64 chartTime = static_cast<qint64>(sampleTime);
         leftBoundary.append(skyPointAt(left, chartTime));
         rightBoundary.append(skyPointAt(right, chartTime));
     }
 
-    QPolygonF zone = leftBoundary;
+    QPolygonF field = leftBoundary;
     for (auto iterator = rightBoundary.crbegin(); iterator != rightBoundary.crend(); ++iterator) {
-        zone.append(*iterator);
+        field.append(*iterator);
     }
 
     const QColor color = palette::withAlpha(palette::skyArea, kSkyFillAlpha);
@@ -845,16 +843,16 @@ void ConveyorView::drawSkyZone(QPainter& painter, const ChartNote& note, const i
     painter.setOpacity(painter.opacity() * noteOpacity(clippedStart));
     painter.setPen(Qt::NoPen);
     painter.setBrush(color);
-    painter.drawPolygon(zone);
+    painter.drawPolygon(field);
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(contourColor, kSkyContourWidth));
     painter.drawPolyline(leftBoundary);
     painter.drawPolyline(rightBoundary);
-    drawZoneBoundary(painter, zoneLeftEdge(note, false), zoneRightEdge(note, false), note.endMilliseconds,
-        m_sharedZoneEnds.value(index));
+    drawFieldBoundary(painter, fieldLeftEdge(note, false), fieldRightEdge(note, false), note.endMilliseconds,
+        m_sharedFieldEnds.value(index));
     if (originalStartVisible) {
-        drawZoneBoundary(painter, zoneLeftEdge(note, true), zoneRightEdge(note, true), note.startMilliseconds,
-            m_sharedZoneStarts.value(index));
+        drawFieldBoundary(painter, fieldLeftEdge(note, true), fieldRightEdge(note, true), note.startMilliseconds,
+            m_sharedFieldStarts.value(index));
     } else {
         painter.setPen(QPen(contourColor, kSkyContourWidth));
         painter.drawLine(leftBoundary.front(), rightBoundary.front());
@@ -863,7 +861,7 @@ void ConveyorView::drawSkyZone(QPainter& painter, const ChartNote& note, const i
 }
 
 void ConveyorView::drawChart(QPainter& painter) {
-    ensureZoneBoundaries();
+    ensureFieldBoundaries();
     // Track_BuildVisibleNoteCandidates works independently on the four raw
     // side buffers.  Its coordinate window is signed: a note is accepted only
     // when its start/end span touches [current - range, current + range].
@@ -922,7 +920,7 @@ void ConveyorView::drawChart(QPainter& painter) {
 
     for (const ChartNote* note : visibleNotes) {
         if (note->kind == NoteKind::Sky) {
-            drawSkyZone(painter, *note, static_cast<int>(note - m_chart.notes.constData()));
+            drawSkyField(painter, *note, static_cast<int>(note - m_chart.notes.constData()));
         }
     }
 
