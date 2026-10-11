@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using Il2CppInterop.Runtime.InteropTypes;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using Il2Cppifapp.Game.Data;
 using UnityEngine;
@@ -90,21 +91,27 @@ internal static class CustomJacketOverride
     {
         material = null;
         if (reference is null) throw new InvalidOperationException("The template " + label + " jacket reference is null.");
-        MethodInfo load = null;
-        foreach (MethodInfo candidate in reference.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        var cachedOperation = reference.OperationHandle;
+        object operation = cachedOperation;
+        if (!cachedOperation.IsValid())
         {
-            if (candidate.Name == "LoadAssetAsync" && candidate.GetParameters().Length == 0)
+            MethodInfo load = null;
+            foreach (MethodInfo candidate in reference.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
             {
-                load = candidate;
-                break;
+                if (candidate.Name == "LoadAssetAsync" && candidate.GetParameters().Length == 0)
+                {
+                    load = candidate;
+                    break;
+                }
             }
+            if (load is null) throw new MissingMethodException(reference.GetType().FullName, "LoadAssetAsync");
+            operation = load.Invoke(reference, null)
+                ?? throw new InvalidOperationException("The template " + label + " jacket load returned null.");
         }
-        if (load is null) throw new MissingMethodException(reference.GetType().FullName, "LoadAssetAsync");
-        object operation = load.Invoke(reference, null)
-            ?? throw new InvalidOperationException("The template " + label + " jacket load returned null.");
         MethodInfo wait = operation.GetType().GetMethod("WaitForCompletion", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         object result = wait?.Invoke(operation, null);
-        if (result is Material resolved && resolved.Pointer != IntPtr.Zero)
+        Material resolved = result as Material ?? (result as Il2CppObjectBase)?.TryCast<Material>();
+        if (resolved is not null && resolved.Pointer != IntPtr.Zero)
         {
             material = resolved;
             return true;
