@@ -9,11 +9,19 @@
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtMultimedia/QAudioBuffer>
-#include <QtMultimedia/QAudioBufferInput>
 #include <QtMultimedia/QAudioDecoder>
-#include <QtMultimedia/QMediaCaptureSession>
-#include <QtMultimedia/QMediaFormat>
-#include <QtMultimedia/QMediaRecorder>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/error.h>
+#include <libavutil/mem.h>
+}
+
+#include <algorithm>
+#include <cerrno>
+#include <cstdio>
 
 namespace infalsus {
 
@@ -22,7 +30,7 @@ namespace {
 constexpr int kAudioProbeTimeoutMilliseconds = 10000;
 constexpr int kExportIdleTimeoutMilliseconds = 30000;
 constexpr int kProgressIntervalMilliseconds = 100;
-constexpr int kVorbisBitRate = 320000;
+constexpr int kVorbisQuality = 7;
 constexpr int kExportChannelCount = 2;
 constexpr int kExportSampleRate = 48000;
 constexpr int kOggHeaderSize = 27;
@@ -31,6 +39,210 @@ constexpr int kOggVersionOffset = 4;
 constexpr int kVorbisSignatureSize = 7;
 constexpr int kOggProbeSize = 512;
 constexpr int kAudioCopyChunkSize = 1024 * 1024;
+
+[[nodiscard]] bool reportEncodingError(QString* error, const QString& operation, const int code) {
+    char message[AV_ERROR_MAX_STRING_SIZE]{};
+    av_strerror(code, message, sizeof(message));
+    *error = QStringLiteral("Ogg Vorbis encoding failed: %1: %2").arg(operation, QString::fromUtf8(message));
+    return false;
+}
+
+class VorbisEncoder final {
+public:
+    explicit VorbisEncoder(QIODevice& destination) : m_destination(destination) {}
+
+    ~VorbisEncoder() {
+        av_packet_free(&m_packet);
+        av_frame_free(&m_frame);
+        avcodec_free_context(&m_codec);
+        avformat_free_context(m_format);
+        if (m_io != nullptr) {
+            av_freep(&m_io->buffer);
+            avio_context_free(&m_io);
+        }
+    }
+
+    VorbisEncoder(const VorbisEncoder&) = delete;
+    VorbisEncoder& operator=(const VorbisEncoder&) = delete;
+
+    [[nodiscard]] bool initialize(QString* error) {
+        const AVCodec* encoder = avcodec_find_encoder_by_name("libvorbis");
+        if (encoder == nullptr) {
+            *error = QStringLiteral("Ogg Vorbis encoding is unavailable. Build and deploy FFmpeg with its libvorbis encoder enabled.");
+            return false;
+        }
+        int result = avformat_alloc_output_context2(&m_format, nullptr, "ogg", nullptr);
+        if (result < 0) {
+            return reportEncodingError(error, QStringLiteral("create Ogg stream"), result);
+        }
+        m_codec = avcodec_alloc_context3(encoder);
+        m_frame = av_frame_alloc();
+        m_packet = av_packet_alloc();
+        m_stream = avformat_new_stream(m_format, nullptr);
+        if (m_codec == nullptr || m_frame == nullptr || m_packet == nullptr || m_stream == nullptr) {
+            return reportEncodingError(error, QStringLiteral("allocate encoder"), AVERROR(ENOMEM));
+        }
+        m_codec->sample_rate = kExportSampleRate;
+        m_codec->sample_fmt = AV_SAMPLE_FMT_FLTP;
+        av_channel_layout_default(&m_codec->ch_layout, kExportChannelCount);
+        m_codec->time_base = AVRational{1, kExportSampleRate};
+        m_codec->flags |= AV_CODEC_FLAG_QSCALE;
+        m_codec->global_quality = kVorbisQuality * FF_QP2LAMBDA;
+        if (m_format->oformat->flags & AVFMT_GLOBALHEADER) {
+            m_codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        }
+        result = avcodec_open2(m_codec, encoder, nullptr);
+        if (result < 0) {
+            return reportEncodingError(error, QStringLiteral("open q7 encoder"), result);
+        }
+        m_stream->time_base = m_codec->time_base;
+        result = avcodec_parameters_from_context(m_stream->codecpar, m_codec);
+        if (result < 0) {
+            return reportEncodingError(error, QStringLiteral("set stream parameters"), result);
+        }
+        m_frame->format = m_codec->sample_fmt;
+        m_frame->sample_rate = m_codec->sample_rate;
+        m_frame->nb_samples = m_codec->frame_size;
+        result = av_channel_layout_copy(&m_frame->ch_layout, &m_codec->ch_layout);
+        if (result >= 0) {
+            result = av_frame_get_buffer(m_frame, 0);
+        }
+        if (result < 0) {
+            return reportEncodingError(error, QStringLiteral("allocate audio frame"), result);
+        }
+
+        constexpr int kIoBufferBytes = 32768;
+        auto* buffer = static_cast<unsigned char*>(av_malloc(kIoBufferBytes));
+        if (buffer == nullptr) {
+            return reportEncodingError(error, QStringLiteral("allocate output buffer"), AVERROR(ENOMEM));
+        }
+        m_io = avio_alloc_context(buffer, kIoBufferBytes, 1, &m_destination, nullptr, &writePacket, &seek);
+        if (m_io == nullptr) {
+            av_free(buffer);
+            return reportEncodingError(error, QStringLiteral("create output device"), AVERROR(ENOMEM));
+        }
+        m_format->pb = m_io;
+        m_format->flags |= AVFMT_FLAG_CUSTOM_IO;
+        result = avformat_write_header(m_format, nullptr);
+        return result >= 0 || reportEncodingError(error, QStringLiteral("write Ogg header"), result);
+    }
+
+    [[nodiscard]] bool append(const QAudioBuffer& buffer, QString* error) {
+        const QAudioFormat format = buffer.format();
+        if (format.sampleFormat() != QAudioFormat::Float || format.sampleRate() != kExportSampleRate
+            || format.channelCount() != kExportChannelCount) {
+            *error = QStringLiteral("The decoder did not provide stereo 48 kHz float audio.");
+            return false;
+        }
+        const float* samples = buffer.constData<float>();
+        for (qsizetype offset = 0; offset < buffer.frameCount();) {
+            if (m_pendingSamples == 0) {
+                m_frame->nb_samples = m_codec->frame_size;
+                const int result = av_frame_make_writable(m_frame);
+                if (result < 0) {
+                    return reportEncodingError(error, QStringLiteral("prepare audio frame"), result);
+                }
+            }
+            const int count = static_cast<int>(std::min<qsizetype>(
+                m_codec->frame_size - m_pendingSamples, buffer.frameCount() - offset));
+            for (int channel = 0; channel < kExportChannelCount; ++channel) {
+                auto* output = reinterpret_cast<float*>(m_frame->data[channel]) + m_pendingSamples;
+                for (int sample = 0; sample < count; ++sample) {
+                    output[sample] = samples[(offset + sample) * kExportChannelCount + channel];
+                }
+            }
+            offset += count;
+            m_pendingSamples += count;
+            if (m_pendingSamples == m_codec->frame_size && !submitFrame(error)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool finish(QString* error) {
+        if (m_pendingSamples > 0 && !submitFrame(error)) {
+            return false;
+        }
+        int result = avcodec_send_frame(m_codec, nullptr);
+        if (result < 0) {
+            return reportEncodingError(error, QStringLiteral("flush audio encoder"), result);
+        }
+        if (!writePackets(error)) {
+            return false;
+        }
+        result = av_write_trailer(m_format);
+        if (result < 0) {
+            return reportEncodingError(error, QStringLiteral("finish Ogg stream"), result);
+        }
+        avio_flush(m_io);
+        return m_io->error >= 0 || reportEncodingError(error, QStringLiteral("flush output"), m_io->error);
+    }
+
+private:
+    static int writePacket(void* opaque, const uint8_t* bytes, const int size) {
+        auto* device = static_cast<QIODevice*>(opaque);
+        return device->write(reinterpret_cast<const char*>(bytes), size) == size ? size : AVERROR(EIO);
+    }
+
+    static int64_t seek(void* opaque, const int64_t offset, int whence) {
+        auto* device = static_cast<QIODevice*>(opaque);
+        whence &= ~AVSEEK_FORCE;
+        if (whence == AVSEEK_SIZE) {
+            return device->size();
+        }
+        qint64 position = offset;
+        if (whence == SEEK_CUR) {
+            position += device->pos();
+        } else if (whence == SEEK_END) {
+            position += device->size();
+        } else if (whence != SEEK_SET) {
+            return AVERROR(EINVAL);
+        }
+        return device->seek(position) ? position : AVERROR(EIO);
+    }
+
+    [[nodiscard]] bool submitFrame(QString* error) {
+        m_frame->nb_samples = m_pendingSamples;
+        m_frame->pts = m_encodedSamples;
+        const int result = avcodec_send_frame(m_codec, m_frame);
+        if (result < 0) {
+            return reportEncodingError(error, QStringLiteral("encode audio frame"), result);
+        }
+        m_encodedSamples += m_pendingSamples;
+        m_pendingSamples = 0;
+        return writePackets(error);
+    }
+
+    [[nodiscard]] bool writePackets(QString* error) {
+        for (;;) {
+            int result = avcodec_receive_packet(m_codec, m_packet);
+            if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) {
+                return true;
+            }
+            if (result < 0) {
+                return reportEncodingError(error, QStringLiteral("receive audio packet"), result);
+            }
+            av_packet_rescale_ts(m_packet, m_codec->time_base, m_stream->time_base);
+            m_packet->stream_index = m_stream->index;
+            result = av_interleaved_write_frame(m_format, m_packet);
+            av_packet_unref(m_packet);
+            if (result < 0) {
+                return reportEncodingError(error, QStringLiteral("write audio packet"), result);
+            }
+        }
+    }
+
+    QIODevice& m_destination;
+    AVFormatContext* m_format = nullptr;
+    AVCodecContext* m_codec = nullptr;
+    AVIOContext* m_io = nullptr;
+    AVStream* m_stream = nullptr;
+    AVFrame* m_frame = nullptr;
+    AVPacket* m_packet = nullptr;
+    int m_pendingSamples = 0;
+    qint64 m_encodedSamples = 0;
+};
 
 [[nodiscard]] bool isOggVorbis(const QByteArray& header) {
     if (header.size() < kOggHeaderSize || !header.startsWith("OggS") || header.at(kOggVersionOffset) != 0) {
@@ -59,26 +271,18 @@ constexpr int kAudioCopyChunkSize = 1024 * 1024;
 
 [[nodiscard]] bool transcodeAudio(QIODevice& source, QIODevice& destination, QString* error,
     const AudioExportProgress& progress) {
-    QMediaFormat format(QMediaFormat::Ogg);
-    format.setAudioCodec(QMediaFormat::AudioCodec::Vorbis);
-    if (!format.isSupported(QMediaFormat::Encode)) {
-        *error = QStringLiteral("Ogg Vorbis encoding is unavailable. Build and deploy FFmpeg with its libvorbis encoder enabled.");
+    VorbisEncoder encoder(destination);
+    if (!encoder.initialize(error)) {
         return false;
     }
 
     QEventLoop loop;
     QAudioDecoder decoder;
-    QMediaRecorder recorder;
-    QAudioBufferInput input;
-    QMediaCaptureSession session;
-    QAudioBuffer pending;
     QTimer idleTimeout;
     QTimer progressTimer;
     bool completed = false;
+    bool consuming = false;
     bool decoderFinished = false;
-    bool endSent = false;
-    bool recordingStarted = false;
-    bool pumping = false;
     qint64 decodedFrames = 0;
 
     const auto fail = [&](const QString& message) {
@@ -89,112 +293,80 @@ constexpr int kAudioCopyChunkSize = 1024 * 1024;
         completed = true;
         loop.quit();
     };
-    const auto pump = [&] {
-        if (completed || endSent || pumping) {
+    const auto consume = [&] {
+        if (consuming || completed) {
             return;
         }
-        QScopedValueRollback<bool> pumpingGuard(pumping, true);
-        while (pending.isValid() || decoder.bufferAvailable()) {
-            if (!pending.isValid()) {
-                pending = decoder.read();
-                decodedFrames += pending.frameCount();
-                idleTimeout.start();
-                if (progress && !progress(decoder.position(), decoder.duration())) {
-                    fail(QStringLiteral("Audio export cancelled."));
-                    return;
-                }
-                if (completed) {
-                    return;
-                }
+        const QScopedValueRollback guard(consuming, true);
+        while (!completed && decoder.bufferAvailable()) {
+            const QAudioBuffer buffer = decoder.read();
+            if (!buffer.isValid()) {
+                continue;
             }
-            if (!recordingStarted) {
-                recordingStarted = true;
-                recorder.record();
-            }
-            if (completed || !input.sendAudioBuffer(pending)) {
+            idleTimeout.start();
+            if (progress && !progress(decoder.position(), decoder.duration())) {
+                fail(QStringLiteral("Audio export cancelled."));
                 return;
             }
-            pending = {};
-        }
-        if (decoderFinished) {
-            if (decodedFrames == 0) {
-                fail(QStringLiteral("The song contains no decodable audio."));
-            } else if (input.sendAudioBuffer({})) {
-                endSent = true;
+            if (completed) {
+                return;
             }
+            if (!encoder.append(buffer, error)) {
+                fail(*error);
+                return;
+            }
+            decodedFrames += buffer.frameCount();
         }
+        if (!decoderFinished || completed) {
+            return;
+        }
+        if (decodedFrames == 0) {
+            fail(QStringLiteral("The song contains no decodable audio."));
+            return;
+        }
+        if (!encoder.finish(error)) {
+            fail(*error);
+            return;
+        }
+        completed = true;
+        loop.quit();
     };
 
     idleTimeout.setSingleShot(true);
     idleTimeout.setInterval(kExportIdleTimeoutMilliseconds);
     progressTimer.setInterval(kProgressIntervalMilliseconds);
     QObject::connect(&idleTimeout, &QTimer::timeout, &loop, [&] {
-        fail(QStringLiteral("Audio export timed out while waiting for the decoder or encoder."));
+        fail(QStringLiteral("Audio export timed out while waiting for the decoder."));
     });
     QObject::connect(&progressTimer, &QTimer::timeout, &loop, [&] {
-        if (progress && !progress(decoder.position(), decoder.duration())) {
+        if (!completed && !consuming && progress && !progress(decoder.position(), decoder.duration())) {
             fail(QStringLiteral("Audio export cancelled."));
         }
     });
     QObject::connect(&decoder, qOverload<QAudioDecoder::Error>(&QAudioDecoder::error), &loop,
         [&](QAudioDecoder::Error) { fail(QStringLiteral("The song cannot be decoded: %1").arg(decoder.errorString())); });
-    QObject::connect(&decoder, &QAudioDecoder::bufferReady, &loop, pump);
+    QObject::connect(&decoder, &QAudioDecoder::bufferReady, &loop, consume);
     QObject::connect(&decoder, &QAudioDecoder::finished, &loop, [&] {
         decoderFinished = true;
-        pump();
-    });
-    QObject::connect(&input, &QAudioBufferInput::readyToSendAudioBuffer, &loop, pump);
-    QObject::connect(&recorder, &QMediaRecorder::errorOccurred, &loop,
-        [&](QMediaRecorder::Error, const QString& message) { fail(QStringLiteral("Ogg Vorbis encoding failed: %1").arg(message)); });
-    QObject::connect(&recorder, &QMediaRecorder::recorderStateChanged, &loop,
-        [&](QMediaRecorder::RecorderState state) {
-        if (state != QMediaRecorder::StoppedState || !recordingStarted || completed) {
-            return;
-        }
-        if (!endSent || recorder.error() != QMediaRecorder::NoError
-            || recorder.mediaFormat().fileFormat() != QMediaFormat::Ogg
-            || recorder.mediaFormat().audioCodec() != QMediaFormat::AudioCodec::Vorbis) {
-            fail(QStringLiteral("The encoder did not complete an Ogg Vorbis stream."));
-            return;
-        }
-        completed = true;
-        loop.quit();
+        consume();
     });
 
-    session.setAudioBufferInput(&input);
-    session.setRecorder(&recorder);
-    recorder.setMediaFormat(format);
-    recorder.setEncodingMode(QMediaRecorder::AverageBitRateEncoding);
-    recorder.setAudioBitRate(kVorbisBitRate);
-    recorder.setAudioChannelCount(kExportChannelCount);
-    recorder.setAudioSampleRate(kExportSampleRate);
-    recorder.setAutoStop(true);
-    recorder.setOutputDevice(&destination);
+    QAudioFormat format;
+    format.setSampleRate(kExportSampleRate);
+    format.setChannelCount(kExportChannelCount);
+    format.setSampleFormat(QAudioFormat::Float);
+    decoder.setAudioFormat(format);
     decoder.setSourceDevice(&source);
     idleTimeout.start();
     progressTimer.start();
-    if (!completed) {
-        decoder.start();
-    }
+    decoder.start();
     if (!completed) {
         loop.exec();
     }
     progressTimer.stop();
     idleTimeout.stop();
     decoder.stop();
-    recorder.stop();
-    session.setRecorder(nullptr);
-    session.setAudioBufferInput(nullptr);
-    recorder.setOutputDevice(nullptr);
-    if (!error->isEmpty()) {
-        return false;
-    }
-    if (destination.size() == 0) {
-        *error = QStringLiteral("Could not finish writing the Ogg Vorbis audio.");
-        return false;
-    }
-
-    return true;
+    return error->isEmpty();
 }
 
 [[nodiscard]] bool validateAudio(const QString& path, QIODevice* source, QString* error) {
@@ -252,7 +424,7 @@ bool validateAudioSource(const QString& path, QString* error) {
 namespace {
 
 [[nodiscard]] bool writeOggAudio(const QString& sourcePath, const QByteArray& sourceData,
-    QIODevice& destination, QString* error, const AudioExportProgress& progress) {
+    QIODevice& destination, QString* error, const AudioExportProgress& progress, bool normalize = false) {
     QFile file(sourcePath);
     QBuffer buffer;
     QIODevice* source = sourceData.isEmpty() ? static_cast<QIODevice*>(&file) : &buffer;
@@ -267,7 +439,7 @@ namespace {
         return false;
     }
     const QByteArray header = source->peek(kOggProbeSize);
-    if (isOggVorbis(header) && isProjectVorbisAudio(source->peek(source->size()))) {
+    if (!normalize && isOggVorbis(header) && isProjectVorbisAudio(source->peek(source->size()))) {
         if (!validateAudio({}, source, error)) {
             return false;
         }
@@ -288,7 +460,7 @@ QByteArray encodeOggAudio(const QString& sourcePath, const QByteArray& sourceDat
     QByteArray bytes;
     QBuffer destination(&bytes);
     destination.open(QIODevice::WriteOnly);
-    if (!writeOggAudio(sourcePath, sourceData, destination, error, progress)) {
+    if (!writeOggAudio(sourcePath, sourceData, destination, error, progress, true)) {
         return {};
     }
 

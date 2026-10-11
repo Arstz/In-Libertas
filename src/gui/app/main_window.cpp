@@ -189,9 +189,6 @@ struct ImportedSpcIdentity {
     if (project.metadata.previewStartSeconds == 0.0 || project.metadata.previewEndSeconds == 0.0) {
         warnings.append(QStringLiteral("Preview time is 0 ms."));
     }
-    if (project.metadata.chartDesigner.trimmed().isEmpty()) {
-        warnings.append(QStringLiteral("Charter name is empty."));
-    }
     if (project.metadata.jacketDesigner.trimmed().isEmpty()) {
         warnings.append(QStringLiteral("Jacket designer name is empty."));
     }
@@ -199,6 +196,9 @@ struct ImportedSpcIdentity {
         const DifficultyChart& chart = project.difficulties.at(index);
         if (chart.hitObjects.notes.isEmpty()) {
             continue;
+        }
+        if (chart.metadata.charters.trimmed().isEmpty()) {
+            warnings.append(QStringLiteral("%1 charters are empty.").arg(difficultyName(difficultyForIndex(index))));
         }
         if (chart.metadata.rating > 19) {
             warnings.append(QStringLiteral("%1 rating is higher than 19 and will affect the UI.")
@@ -951,7 +951,7 @@ void MainWindow::buildWorkspace() {
         }
         m_projectJacketData = normalized;
         m_projectJacketImage = std::move(jacket);
-        m_project.jacketPath = QStringLiteral("jacket.png");
+        m_project.jacketPath = QStringLiteral("jacket.webp");
         m_metadata->setJacketAvailable(true);
         updateViewerSongCard();
         markProjectDirty();
@@ -1414,8 +1414,7 @@ void MainWindow::loadProject(const QString& path) {
         return;
     }
     QString backupPath;
-    if (result.sourceVersion == kLegacyProjectVersion) {
-        // Deprecated compatibility path; remove in a future project-format revision.
+    if (result.sourceVersion < kProjectVersion) {
         if (!normalizeAssets(&result.project, &result.songData, &result.jacketData)
             || !requireChartId(&result.project)) {
             return;
@@ -1602,7 +1601,7 @@ bool MainWindow::normalizeAssets(ChartProject* project, QByteArray* audio, QByte
     *audio = assets.songData;
     *jacket = assets.jacketData;
     project->songPath = QStringLiteral("audio.ogg");
-    project->jacketPath = QStringLiteral("jacket.png");
+    project->jacketPath = QStringLiteral("jacket.webp");
 
     return true;
 }

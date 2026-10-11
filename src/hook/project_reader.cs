@@ -17,7 +17,7 @@ internal sealed class ProjectPackage {
 }
 
 internal static class ProjectReader {
-    internal const int kVersion = 3;
+    internal const int kVersion = 4;
     internal const int kMaximumManifestBytes = 32 * 1024 * 1024;
     internal const long kMaximumJacketPixels = 67108864;
     internal static readonly string[] DifficultyNames = { "minimal", "evolved", "ultimate", "forbidden" };
@@ -31,7 +31,7 @@ internal static class ProjectReader {
         if (source.Length < 26 || Encoding.ASCII.GetString(reader.ReadBytes(4)) != "10NO")
             throw new InvalidDataException("Not a .10no project.");
         ushort version = reader.ReadUInt16();
-        if (version == 2)
+        if (version == 2 || version == 3)
             throw new InvalidDataException("Legacy .10no: open it in the updated In Libertas editor to migrate it first.");
         if (version != kVersion) throw new InvalidDataException("Unsupported .10no version: " + version);
         uint manifestLength = reader.ReadUInt32();
@@ -49,12 +49,13 @@ internal static class ProjectReader {
         string chartId = Text(manifest, "chart_id");
         if (!ValidChartId(chartId)) throw new InvalidDataException("A valid user-entered Chart ID is required.");
         JsonElement assets = manifest.GetProperty("assets");
-        if (Text(assets, "song_file_name") != "audio.ogg" || Text(assets, "jacket_file_name") != "jacket.png")
-            throw new InvalidDataException("Version-3 projects require audio.ogg and jacket.png assets.");
+        if (Text(assets, "song_file_name") != "audio.ogg" || Text(assets, "jacket_file_name") != "jacket.webp")
+            throw new InvalidDataException("Version-4 projects require audio.ogg and jacket.webp assets.");
         byte[] audio = ReadExactly(reader, (int)audioLength);
         byte[] jacket = ReadExactly(reader, (int)jacketLength);
         ProjectMedia.Validate(audio, jacket);
         JsonElement[] difficulties = DifficultyNames.Select(name => manifest.GetProperty("difficulties").GetProperty(name).Clone()).ToArray();
+        foreach (JsonElement chart in difficulties) Text(chart.GetProperty("metadata"), "charters");
         JsonElement metadata = manifest.GetProperty("metadata").Clone();
         double previewStart = Number(metadata, "preview_start_seconds");
         double previewEnd = Number(metadata, "preview_end_seconds");
@@ -97,8 +98,7 @@ internal static class ProjectMedia {
 
     internal static void Validate(byte[] audio, byte[] jacket) {
         ValidateVorbis(audio);
-        ValidatePng(jacket);
-        PngDecoder.Decode(jacket);
+        JacketCodec.DecodeWebP(jacket);
     }
 
     internal static void ValidateVorbis(byte[] audio) {

@@ -124,6 +124,7 @@ constexpr char kProjectMagic[] = "10NO";
         {QStringLiteral("duration_ms"), difficulty.hitObjects.durationMilliseconds},
         {QStringLiteral("metadata"), QJsonObject{
             {QStringLiteral("rating"), difficulty.metadata.rating},
+            {QStringLiteral("charters"), difficulty.metadata.charters},
         }},
         {QStringLiteral("notes"), notes},
         {QStringLiteral("timing_events"), timingPoints},
@@ -138,6 +139,7 @@ constexpr char kProjectMagic[] = "10NO";
     const QJsonObject metadata = object.value(QStringLiteral("metadata")).toObject();
     chart.metadata = {
         .rating = metadata.value(QStringLiteral("rating")).toInt(1),
+        .charters = metadata.value(QStringLiteral("charters")).toString(),
     };
     chart.hitObjects.name = object.value(QStringLiteral("name")).toString();
     chart.hitObjects.durationMilliseconds = object.value(QStringLiteral("duration_ms")).toInteger();
@@ -173,7 +175,6 @@ constexpr char kProjectMagic[] = "10NO";
         {QStringLiteral("metadata"), QJsonObject{
             {QStringLiteral("artist_name"), project.metadata.artistName},
             {QStringLiteral("song_name"), project.metadata.songName},
-            {QStringLiteral("chart_designer"), project.metadata.chartDesigner},
             {QStringLiteral("jacket_designer"), project.metadata.jacketDesigner},
             {QStringLiteral("preview_start_seconds"), project.metadata.previewStartSeconds},
             {QStringLiteral("preview_end_seconds"), project.metadata.previewEndSeconds},
@@ -205,7 +206,6 @@ constexpr char kProjectMagic[] = "10NO";
     loaded.metadata = {
         .artistName = metadata.value(QStringLiteral("artist_name")).toString(),
         .songName = metadata.value(QStringLiteral("song_name")).toString(),
-        .chartDesigner = metadata.value(QStringLiteral("chart_designer")).toString(),
         .jacketDesigner = metadata.value(QStringLiteral("jacket_designer")).toString(),
         .previewStartSeconds = metadata.value(QStringLiteral("preview_start_seconds")).toDouble(),
         .previewEndSeconds = metadata.value(QStringLiteral("preview_end_seconds")).toDouble(),
@@ -217,7 +217,16 @@ constexpr char kProjectMagic[] = "10NO";
     loaded.jacketPath = assets.value(QStringLiteral("jacket_file_name")).toString();
     for (int index = 0; index < 4; ++index) {
         const Difficulty difficulty = difficultyForIndex(index);
-        loaded.difficulties.at(index) = chartFromJson(difficulty, difficulties.value(difficultyName(difficulty)).toObject());
+        const QJsonObject chart = difficulties.value(difficultyName(difficulty)).toObject();
+        if (version == kProjectVersion && !chart.value(QStringLiteral("metadata")).toObject()
+            .value(QStringLiteral("charters")).isString()) {
+            *error = QStringLiteral("Each difficulty requires a charters string in its metadata.");
+            return false;
+        }
+        loaded.difficulties.at(index) = chartFromJson(difficulty, chart);
+        if (version < kProjectVersion) {
+            loaded.difficulties.at(index).metadata.charters = metadata.value(QStringLiteral("chart_designer")).toString();
+        }
     }
     *project = std::move(loaded);
 
@@ -233,7 +242,7 @@ bool ProjectDocument::LoadResult::succeeded() const {
 bool ProjectDocument::save(const QString& filePath, const ChartProject& project,
     const QByteArray& songData, const QByteArray& jacketData, QString* error) {
     if (!isValidProjectChartId(project.chartId) || project.songPath != QStringLiteral("audio.ogg")
-        || project.jacketPath != QStringLiteral("jacket.png")) {
+        || project.jacketPath != QStringLiteral("jacket.webp")) {
         *error = QStringLiteral("A project requires a valid Chart ID and normalized assets before saving.");
         return false;
     }
@@ -303,8 +312,7 @@ ProjectDocument::LoadResult ProjectDocument::load(const QString& filePath) {
     }
     stream >> version >> manifestSize >> songSize >> jacketSize;
     const quint64 remainingBytes = static_cast<quint64>(std::max<qint64>(0, file.size() - file.pos()));
-    // Deprecated compatibility path; remove in a future project-format revision.
-    if ((version != kProjectVersion && version != kLegacyProjectVersion) || manifestSize > kMaximumProjectManifestBytes
+    if ((version < kLegacyProjectVersion || version > kProjectVersion) || manifestSize > kMaximumProjectManifestBytes
         || manifestSize > remainingBytes || songSize > remainingBytes - manifestSize
         || jacketSize != remainingBytes - manifestSize - songSize || stream.status() != QDataStream::Ok
         || songSize > static_cast<quint64>(std::numeric_limits<qsizetype>::max())
@@ -339,11 +347,13 @@ ProjectDocument::LoadResult ProjectDocument::load(const QString& filePath) {
     result.jacketFileName = result.project.jacketPath;
     result.songData = std::move(songData);
     result.jacketData = std::move(jacketData);
-    if (version == kProjectVersion && (!isValidProjectChartId(result.project.chartId)
-        || result.songFileName != QStringLiteral("audio.ogg") || result.jacketFileName != QStringLiteral("jacket.png")
-        || !validateProjectMedia(result.songData, result.jacketData, &result.error))) {
+    if (version >= 3 && (!isValidProjectChartId(result.project.chartId)
+        || result.songFileName != QStringLiteral("audio.ogg")
+        || result.jacketFileName != (version == 3 ? QStringLiteral("jacket.png") : QStringLiteral("jacket.webp"))
+        || !(version == 3 ? validateLegacyProjectMedia(result.songData, result.jacketData, &result.error)
+                         : validateProjectMedia(result.songData, result.jacketData, &result.error)))) {
         if (result.error.isEmpty()) {
-            result.error = QStringLiteral("The version-3 project identity or asset names are invalid.");
+            result.error = QStringLiteral("The project identity or asset names are invalid.");
         }
     }
 
@@ -354,7 +364,8 @@ bool ProjectDocument::migrate(const QString& filePath, const LoadResult& normali
     QFile original(filePath);
     QCryptographicHash hash(QCryptographicHash::Sha256);
     error->clear();
-    if (normalized.sourceVersion != kLegacyProjectVersion || normalized.sourceSha256.isEmpty()
+    if (normalized.sourceVersion < kLegacyProjectVersion || normalized.sourceVersion >= kProjectVersion
+        || normalized.sourceSha256.isEmpty()
         || !original.open(QIODevice::ReadOnly) || !hash.addData(&original) || hash.result() != normalized.sourceSha256) {
         *error = QStringLiteral("The legacy project changed during migration. Open it again before migrating.");
         return false;
@@ -362,14 +373,15 @@ bool ProjectDocument::migrate(const QString& filePath, const LoadResult& normali
     original.close();
     if (!isValidProjectChartId(normalized.project.chartId)
         || normalized.project.songPath != QStringLiteral("audio.ogg")
-        || normalized.project.jacketPath != QStringLiteral("jacket.png")
+        || normalized.project.jacketPath != QStringLiteral("jacket.webp")
         || !validateProjectMedia(normalized.songData, normalized.jacketData, error)) {
         if (error->isEmpty()) {
             *error = QStringLiteral("Migration requires a valid Chart ID and normalized assets.");
         }
         return false;
     }
-    const QString backup = filePath + QStringLiteral(".v2-%1.bak").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const QString backup = filePath + QStringLiteral(".v%1-%2.bak")
+        .arg(normalized.sourceVersion).arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     if (!QFile::copy(filePath, backup)) {
         *error = QStringLiteral("Could not back up the legacy project. The original was not changed.");
         return false;

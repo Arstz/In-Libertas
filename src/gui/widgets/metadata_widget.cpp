@@ -55,7 +55,7 @@ MetadataWidget::MetadataWidget(QWidget* parent)
     m_chartId = new QLineEdit(this);
     m_rating = new QSpinBox(this);
     m_rating->setRange(0, 99);
-    m_chartDesigner = new QLineEdit(this);
+    m_charters = new QLineEdit(this);
     m_jacketDesigner = new QLineEdit(this);
     m_jacketButton = new QPushButton(this);
     for (int index = 0; index < 4; ++index) {
@@ -82,11 +82,11 @@ MetadataWidget::MetadataWidget(QWidget* parent)
     layout->addRow(QStringLiteral("Preview start"), previewStartRow);
     layout->addRow(QStringLiteral("Preview end"), previewEndRow);
     layout->addRow(QStringLiteral("Gameplay background"), m_gameplayBackground);
-    layout->addRow(QStringLiteral("Chart designer"), m_chartDesigner);
     layout->addRow(QStringLiteral("Jacket designer"), m_jacketDesigner);
     layout->addRow(QStringLiteral("Difficulty"), m_difficulty);
     layout->addRow(QStringLiteral("Chart ID"), m_chartId);
     layout->addRow(QStringLiteral("Rating"), m_rating);
+    layout->addRow(QStringLiteral("Charters"), m_charters);
     layout->addRow(QStringLiteral("Jacket"), m_jacketButton);
     setJacketAvailable(false);
     setJacketEditingEnabled(false);
@@ -96,7 +96,7 @@ MetadataWidget::MetadataWidget(QWidget* parent)
     connect(m_previewStartMilliseconds, qOverload<int>(&QSpinBox::valueChanged), this, [this] { emitMetadata(); });
     connect(m_previewEndMilliseconds, qOverload<int>(&QSpinBox::valueChanged), this, [this] { emitMetadata(); });
     connect(m_gameplayBackground, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { emitMetadata(); });
-    connect(m_chartDesigner, &QLineEdit::editingFinished, this, &MetadataWidget::emitMetadata);
+    connect(m_charters, &QLineEdit::editingFinished, this, &MetadataWidget::emitDifficultyMetadata);
     connect(m_jacketDesigner, &QLineEdit::editingFinished, this, &MetadataWidget::emitMetadata);
     connect(m_chartId, &QLineEdit::editingFinished, this, [this] { emit chartIdEdited(m_chartId->text().trimmed()); });
     connect(m_rating, qOverload<int>(&QSpinBox::valueChanged), this, [this] { emitDifficultyMetadata(); });
@@ -119,11 +119,9 @@ void MetadataWidget::setMetadata(const ChartMetadata& metadata) {
     const QSignalBlocker previewStartBlocker(m_previewStartMilliseconds);
     const QSignalBlocker previewEndBlocker(m_previewEndMilliseconds);
     const QSignalBlocker backgroundBlocker(m_gameplayBackground);
-    const QSignalBlocker chartDesignerBlocker(m_chartDesigner);
     const QSignalBlocker jacketDesignerBlocker(m_jacketDesigner);
     m_songName->setText(metadata.songName);
     m_artistName->setText(metadata.artistName);
-    m_chartDesigner->setText(metadata.chartDesigner);
     m_jacketDesigner->setText(metadata.jacketDesigner);
     m_previewStartMilliseconds->setValue(static_cast<int>(metadata.previewStartSeconds * 1000.0));
     m_previewEndMilliseconds->setValue(static_cast<int>(metadata.previewEndSeconds * 1000.0));
@@ -141,7 +139,9 @@ void MetadataWidget::setMetadata(const ChartMetadata& metadata) {
 void MetadataWidget::setDifficultyMetadata(const DifficultyMetadata& metadata) {
     m_loading = true;
     const QSignalBlocker ratingBlocker(m_rating);
+    const QSignalBlocker chartersBlocker(m_charters);
     m_rating->setValue(metadata.rating);
+    m_charters->setText(metadata.charters);
     m_loading = false;
 }
 
@@ -180,7 +180,6 @@ void MetadataWidget::emitMetadata() {
     emit metadataEdited({
         .artistName = m_artistName->text(),
         .songName = m_songName->text(),
-        .chartDesigner = m_chartDesigner->text(),
         .jacketDesigner = m_jacketDesigner->text(),
         // The hook's JSON contract uses seconds, but editor input and the
         // playback clock use integral milliseconds.
@@ -197,6 +196,7 @@ void MetadataWidget::emitDifficultyMetadata() {
     }
     emit difficultyMetadataEdited({
         .rating = m_rating->value(),
+        .charters = m_charters->text(),
     });
 }
 

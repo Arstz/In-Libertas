@@ -47,7 +47,7 @@ private:
     QComboBox* m_difficulty = nullptr;
     QLineEdit* m_chartId = nullptr;
     QSpinBox* m_rating = nullptr;
-    QLineEdit* m_chartDesigner = nullptr;
+    QLineEdit* m_charters = nullptr;
     QLineEdit* m_jacketDesigner = nullptr;
     QPushButton* m_jacketButton = nullptr;
     QPushButton* m_previewStartCurrentTimeButton = nullptr;

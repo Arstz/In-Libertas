@@ -1,4 +1,5 @@
 #include "core/project_format.h"
+#include "core/jacket_codec.h"
 
 #include <QtCore/QRegularExpression>
 #include <QtCore/QtEndian>
@@ -144,6 +145,21 @@ bool isProjectVorbisAudio(const QByteArray& audio) {
 }
 
 bool validateProjectMedia(const QByteArray& audio, const QByteArray& jacket, QString* error) {
+    if (!validVorbis(audio)) {
+        *error = QStringLiteral("The project audio must be a complete Ogg Vorbis stream.");
+        return false;
+    }
+    int width = 0, height = 0;
+    auto* pixels = JacketDecode(reinterpret_cast<const std::uint8_t*>(jacket.constData()), jacket.size(), &width, &height);
+    if (pixels == nullptr) {
+        *error = QStringLiteral("The project jacket must be a still lossless WebP within 2048 by 2048 pixels.");
+        return false;
+    }
+    JacketFree(pixels);
+    return true;
+}
+
+bool validateLegacyProjectMedia(const QByteArray& audio, const QByteArray& jacket, QString* error) {
     if (!validVorbis(audio)) {
         *error = QStringLiteral("The project audio must be a complete Ogg Vorbis stream.");
         return false;

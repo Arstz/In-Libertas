@@ -1,10 +1,10 @@
 #include "core/media_assets.h"
+#include "core/jacket_codec.h"
 
 #include <QtCore/QBuffer>
 #include <QtCore/QSaveFile>
 #include <QtGui/QColorSpace>
 #include <QtGui/QImageReader>
-#include <QtGui/QImageWriter>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -47,11 +47,18 @@ constexpr AudioFileFormat kAudioFileFormats[]{
 }
 
 [[nodiscard]] QImage normalizedJacket(const QImage& image) {
+    QImage normalized;
     if (image.colorSpace().isValid()) {
-        return image.convertedToColorSpace(QColorSpace::SRgb, QImage::Format_RGBA8888);
+        normalized = image.convertedToColorSpace(QColorSpace::SRgb, QImage::Format_RGBA8888);
+    } else {
+        normalized = image.convertToFormat(QImage::Format_RGBA8888);
     }
-
-    return image.convertToFormat(QImage::Format_RGBA8888);
+    if (normalized.width() > 2048 || normalized.height() > 2048) {
+        normalized = normalized.convertToFormat(QImage::Format_ARGB32_Premultiplied)
+            .scaled(2048, 2048, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+            .convertToFormat(QImage::Format_RGBA8888);
+    }
+    return normalized;
 }
 
 [[nodiscard]] bool readJacket(QImageReader& reader, QImage* image, QString* error) {
@@ -134,16 +141,16 @@ bool readJacketImage(const QByteArray& data, QImage* image, QString* error) {
 }
 
 QByteArray encodeJacketImage(const QImage& image, QString* error) {
-    QByteArray data;
-    QBuffer buffer(&data);
     const QImage normalized = normalizedJacket(image);
-    buffer.open(QIODevice::WriteOnly);
-    QImageWriter writer(&buffer, "png");
-    if (normalized.isNull() || !writer.write(normalized)) {
-        *error = QStringLiteral("Could not encode the jacket PNG: %1").arg(writer.errorString());
+    std::size_t size = 0;
+    auto* encoded = JacketEncode(normalized.constBits(), normalized.width(), normalized.height(),
+        normalized.bytesPerLine(), &size);
+    if (encoded == nullptr) {
+        *error = QStringLiteral("Could not encode the lossless WebP jacket.");
         return {};
     }
-
+    const QByteArray data(reinterpret_cast<const char*>(encoded), static_cast<qsizetype>(size));
+    JacketFree(encoded);
     return data;
 }
 
@@ -151,11 +158,11 @@ bool writeJacketImage(const QImage& image, const QString& path, QString* error) 
     QSaveFile file(path);
     const QByteArray data = encodeJacketImage(image, error);
     if (data.isEmpty() || !file.open(QIODevice::WriteOnly)) {
-        *error = QStringLiteral("Could not write the jacket PNG: %1").arg(file.errorString());
+        *error = QStringLiteral("Could not write the jacket WebP: %1").arg(file.errorString());
         return false;
     }
     if (file.write(data) != data.size() || !file.commit()) {
-        *error = QStringLiteral("Could not write the jacket PNG: %1").arg(file.errorString());
+        *error = QStringLiteral("Could not write the jacket WebP: %1").arg(file.errorString());
         return false;
     }
 

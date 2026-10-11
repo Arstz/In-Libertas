@@ -10,8 +10,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Multimedia OpenGL OpenGLWidgets Widgets)
-find_package(FFmpeg REQUIRED COMPONENTS AVCODEC AVFORMAT)
+find_package(FFmpeg REQUIRED COMPONENTS AVCODEC AVFORMAT AVUTIL)
+find_package(WebP CONFIG REQUIRED)
 find_path(SIGNALSMITH_STRETCH_INCLUDE_DIR signalsmith-stretch/signalsmith-stretch.h REQUIRED)
+
+add_library(InLibertasJacketCodec SHARED src/core/jacket_codec.cpp)
+set_target_properties(InLibertasJacketCodec PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+target_compile_definitions(InLibertasJacketCodec PRIVATE INLIBERTAS_JACKET_CODEC_BUILD)
+target_link_libraries(InLibertasJacketCodec PRIVATE WebP::webp)
+add_custom_command(TARGET InLibertasJacketCodec POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/Mods"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:InLibertasJacketCodec>" "$<TARGET_FILE:WebP::webp>" "$<TARGET_FILE:WebP::sharpyuv>"
+        "${CMAKE_BINARY_DIR}/Mods"
+    VERBATIM
+)
 
 qt_add_executable(InLibertas WIN32
     src/main.cpp
@@ -79,6 +92,7 @@ set_target_properties(InLibertas PROPERTIES OUTPUT_NAME "In Libertas")
 target_include_directories(InLibertas PRIVATE src ${FFMPEG_INCLUDE_DIRS} ${SIGNALSMITH_STRETCH_INCLUDE_DIR})
 
 target_link_libraries(InLibertas PRIVATE
+    InLibertasJacketCodec
     Qt6::Core
     Qt6::Gui
     Qt6::Multimedia
@@ -87,6 +101,7 @@ target_link_libraries(InLibertas PRIVATE
     Qt6::Widgets
     FFmpeg::avcodec
     FFmpeg::avformat
+    FFmpeg::avutil
 )
 
 add_custom_command(TARGET InLibertas POST_BUILD
@@ -121,8 +136,9 @@ if(BUILD_TESTING)
     )
     target_include_directories(media_assets_test PRIVATE src ${FFMPEG_INCLUDE_DIRS})
     target_link_libraries(media_assets_test PRIVATE
+        InLibertasJacketCodec
         Qt6::Core Qt6::Gui Qt6::Multimedia
-        FFmpeg::avcodec FFmpeg::avformat
+        FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil
     )
     add_dependencies(media_assets_test InLibertas)
     add_test(NAME media_assets COMMAND media_assets_test)
@@ -138,7 +154,7 @@ if(BUILD_TESTING)
         src/core/media_assets.cpp
     )
     target_include_directories(project_pipeline_test PRIVATE src ${FFMPEG_INCLUDE_DIRS})
-    target_link_libraries(project_pipeline_test PRIVATE Qt6::Core Qt6::Gui Qt6::Multimedia FFmpeg::avcodec FFmpeg::avformat)
+    target_link_libraries(project_pipeline_test PRIVATE InLibertasJacketCodec Qt6::Core Qt6::Gui Qt6::Multimedia FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil)
     add_dependencies(project_pipeline_test InLibertas)
     add_test(NAME project_pipeline COMMAND project_pipeline_test "${CMAKE_BINARY_DIR}/pipeline-fixtures")
     set_tests_properties(project_pipeline PROPERTIES FIXTURES_SETUP project_assets)
@@ -158,7 +174,7 @@ if(BUILD_TESTING)
         src/gui/state/editor_state.h
     )
     target_include_directories(field_groups_test PRIVATE src)
-    target_link_libraries(field_groups_test PRIVATE Qt6::Core)
+    target_link_libraries(field_groups_test PRIVATE InLibertasJacketCodec Qt6::Core)
     add_dependencies(field_groups_test InLibertas)
     add_test(NAME field_groups COMMAND field_groups_test)
     set_tests_properties(field_groups PROPERTIES FIXTURES_REQUIRED project_assets)

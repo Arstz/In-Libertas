@@ -67,6 +67,7 @@ QJsonObject projectExportConfig(const ChartProject& project) {
         difficulties.append(chart.hitObjects.notes.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonObject{
             {QStringLiteral("externalChartId"), project.chartId + QString::number(index)},
             {QStringLiteral("rating"), chart.metadata.rating},
+            {QStringLiteral("chartDesigner"), chart.metadata.charters},
             {QStringLiteral("levelSectionIndicator"), QString::number(chart.metadata.rating)},
         }));
     }
@@ -75,11 +76,10 @@ QJsonObject projectExportConfig(const ChartProject& project) {
         {QStringLiteral("enabled"), true}, {QStringLiteral("templateSongId"), 2},
         {QStringLiteral("chartId"), project.chartId}, {QStringLiteral("baseName"), project.chartId},
         {QStringLiteral("audioFile"), QStringLiteral("audio.ogg")},
-        {QStringLiteral("jacketLargeFile"), QStringLiteral("jacketLarge.png")},
-        {QStringLiteral("jacketSmallFile"), QStringLiteral("jacketSmall.png")},
+        {QStringLiteral("jacketLargeFile"), QStringLiteral("jacketLarge.webp")},
+        {QStringLiteral("jacketSmallFile"), QStringLiteral("jacketSmall.webp")},
         {QStringLiteral("enableLoosePngJackets"), true},
         {QStringLiteral("songTitle"), project.metadata.songName}, {QStringLiteral("artist"), project.metadata.artistName},
-        {QStringLiteral("chartDesigner"), project.metadata.chartDesigner},
         {QStringLiteral("jacketDesigner"), project.metadata.jacketDesigner},
         {QStringLiteral("previewStartSeconds"), project.metadata.previewStartSeconds},
         {QStringLiteral("previewEndSeconds"), project.metadata.previewEndSeconds},
@@ -94,8 +94,8 @@ bool writeProjectExport(const QString& directoryPath, const ChartProject& projec
     const QDir directory(directoryPath);
     QJsonObject inventory;
     QByteArray smallJacket;
-    QStringList names{QStringLiteral("audio.ogg"), QStringLiteral("jacketLarge.png"),
-        QStringLiteral("jacketSmall.png"), QStringLiteral("config.json")};
+    QStringList names{QStringLiteral("audio.ogg"), QStringLiteral("jacketLarge.webp"),
+        QStringLiteral("jacketSmall.webp"), QStringLiteral("config.json")};
     *error = projectExportError(project);
     if (!error->isEmpty() || !validateProjectMedia(audio, jacket, error)) {
         return false;

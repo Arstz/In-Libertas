@@ -9,12 +9,6 @@ using UnityEngine.AddressableAssets;
 
 namespace InFalsusCustomSongHook;
 
-/// <summary>
-/// Creates loose PNG material clones from the game's existing jacket assets.
-/// The matching completed operations are returned by the private native jacket
-/// builder; no ResourceManager provider, catalog, bundle, or runtime patch is
-/// involved.
-/// </summary>
 internal static class CustomJacketOverride
 {
     private static readonly object Gate = new();
@@ -162,21 +156,21 @@ internal static class CustomJacketOverride
         return true;
     }
 
-    private static RuntimeJacket LoadMaterial(Material template, string pngPath)
+    private static RuntimeJacket LoadMaterial(Material template, string jacketPath)
     {
         if (template is null || template.Pointer == IntPtr.Zero)
             throw new InvalidOperationException("The template jacket material is unavailable.");
-        if (string.IsNullOrWhiteSpace(pngPath) || !File.Exists(pngPath))
-            throw new FileNotFoundException("Loose jacket PNG is unavailable.", pngPath);
+        if (string.IsNullOrWhiteSpace(jacketPath) || !File.Exists(jacketPath))
+            throw new FileNotFoundException("Loose jacket is unavailable.", jacketPath);
 
-        DecodedPng png = PngDecoder.Decode(File.ReadAllBytes(pngPath));
-        Texture2D texture = new(png.Width, png.Height, TextureFormat.RGBA32, false);
+        DecodedJacket image = JacketCodec.Decode(File.ReadAllBytes(jacketPath));
+        Texture2D texture = new(image.Width, image.Height, TextureFormat.RGBA32, false);
         try
         {
             unsafe
             {
-                fixed (byte* bytes = png.RgbaBottomUp)
-                    texture.LoadRawTextureData((IntPtr)bytes, png.RgbaBottomUp.Length);
+                fixed (byte* bytes = image.RgbaBottomUp)
+                    texture.LoadRawTextureData((IntPtr)bytes, image.RgbaBottomUp.Length);
             }
             texture.Apply(false, true);
             Material material = new(template);

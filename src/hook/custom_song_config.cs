@@ -47,15 +47,8 @@ internal sealed class CustomSongConfig
     // A normal FMOD-supported file, stored in this song's content directory.
     // It is opened directly; this is not a StreamingAssets/sam payload.
     public string AudioFile { get; set; } = "audio.ogg";
-    // Loose PNGs are cloned into template materials. The native resolver
-    // companion returns completed material operations for marker references,
-    // so stock consumers retain their normal ownership path without a
-    // provider, catalog, or AssetBundle.
     public string JacketLargeFile { get; set; } = "jacketLarge.png";
     public string JacketSmallFile { get; set; } = "jacketSmall.png";
-    // Uses the hook's native jacket resolver companion. Raw config defaults
-    // to false; the chart-folder loader enables it only after validating both
-    // declared PNG files.
     public bool EnableLoosePngJackets { get; set; }
     public string SongTitle { get; set; } = "Custom Song";
     public string Artist { get; set; } = "Custom Artist";
@@ -110,7 +103,7 @@ internal sealed class CustomSongConfig
                 EnableLoosePngJackets = EnableLoosePngJackets,
                 SongTitle = SongTitle,
                 Artist = Artist,
-                ChartDesigner = string.IsNullOrWhiteSpace(difficulty.ChartDesigner) ? ChartDesigner : difficulty.ChartDesigner,
+                ChartDesigner = difficulty.ChartDesigner ?? ChartDesigner,
                 JacketDesigner = string.IsNullOrWhiteSpace(difficulty.JacketDesigner) ? JacketDesigner : difficulty.JacketDesigner,
                 PreviewStartSeconds = PreviewStartSeconds,
                 PreviewEndSeconds = PreviewEndSeconds,
@@ -348,7 +341,7 @@ internal sealed class CustomSongConfig
         }
         if (!File.Exists(song.JacketLargePath) || !File.Exists(song.JacketSmallPath))
         {
-            message = "jacket PNG file not found: " + song.JacketLargePath + " or " + song.JacketSmallPath;
+            message = "jacket file not found: " + song.JacketLargePath + " or " + song.JacketSmallPath;
             return false;
         }
         message = "ok";

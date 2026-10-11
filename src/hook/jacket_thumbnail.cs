@@ -1,16 +1,10 @@
 using System;
-using System.Buffers.Binary;
-using System.IO;
-using System.IO.Compression;
-using System.Text;
 
 namespace InFalsusCustomSongHook;
 
 internal static class JacketThumbnail {
     internal const int kExtent = 256;
     private const int kChannels = 4;
-    private const uint kPngPolynomial = 3988292384;
-    private static readonly byte[] kSignature = { 137, 80, 78, 71, 13, 10, 26, 10 };
 
     private readonly struct SampleRange {
         internal readonly int First;
@@ -42,7 +36,7 @@ internal static class JacketThumbnail {
     }
 
     internal static byte[] Create(byte[] jacket) {
-        DecodedPng source = PngDecoder.Decode(jacket);
+        DecodedJacket source = JacketCodec.Decode(jacket);
         byte[] pixels = new byte[kExtent * kExtent * kChannels];
         SampleRange[] horizontal = new SampleRange[kExtent];
         SampleRange[] vertical = new SampleRange[kExtent];
@@ -75,56 +69,12 @@ internal static class JacketThumbnail {
             }
         }
 
-        return Encode(new DecodedPng(kExtent, kExtent, pixels));
+        return Encode(new DecodedJacket(kExtent, kExtent, pixels));
     }
 
     private static byte ToByte(double value) {
         return (byte)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), 0, byte.MaxValue);
     }
 
-    internal static byte[] Encode(DecodedPng image) {
-        using MemoryStream output = new();
-        using MemoryStream compressed = new();
-        byte[] header = new byte[13];
-        int stride = checked(image.Width * kChannels);
-        if (image.Width <= 0 || image.Height <= 0 || image.RgbaBottomUp.Length != checked(stride * image.Height))
-            throw new InvalidDataException("Invalid jacket pixel dimensions.");
-        BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(0, 4), image.Width);
-        BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(4, 4), image.Height);
-        header[8] = 8;
-        header[9] = 6;
-        using (ZLibStream zlib = new(compressed, CompressionLevel.Optimal, true)) {
-            for (int row = image.Height - 1; row >= 0; row--) {
-                zlib.WriteByte(0);
-                zlib.Write(image.RgbaBottomUp, row * stride, stride);
-            }
-        }
-        output.Write(kSignature);
-        WriteChunk(output, "IHDR", header);
-        WriteChunk(output, "IDAT", compressed.ToArray());
-        WriteChunk(output, "IEND", Array.Empty<byte>());
-
-        return output.ToArray();
-    }
-
-    private static void WriteChunk(Stream output, string name, byte[] data) {
-        byte[] type = Encoding.ASCII.GetBytes(name);
-        Span<byte> number = stackalloc byte[4];
-        uint crc = uint.MaxValue;
-        BinaryPrimitives.WriteInt32BigEndian(number, data.Length);
-        output.Write(number);
-        output.Write(type);
-        output.Write(data);
-        foreach (byte value in type) crc = UpdateCrc(crc, value);
-        foreach (byte value in data) crc = UpdateCrc(crc, value);
-        BinaryPrimitives.WriteUInt32BigEndian(number, ~crc);
-        output.Write(number);
-    }
-
-    private static uint UpdateCrc(uint crc, byte value) {
-        crc ^= value;
-        for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ ((crc & 1) == 0 ? 0 : kPngPolynomial);
-
-        return crc;
-    }
+    internal static byte[] Encode(DecodedJacket image) => JacketCodec.Encode(image);
 }

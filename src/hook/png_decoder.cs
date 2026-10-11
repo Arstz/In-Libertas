@@ -5,9 +5,9 @@ using System.IO.Compression;
 
 namespace InFalsusCustomSongHook;
 
-internal sealed class DecodedPng
+internal sealed class DecodedJacket
 {
-    internal DecodedPng(int width, int height, byte[] rgbaBottomUp)
+    internal DecodedJacket(int width, int height, byte[] rgbaBottomUp)
     { Width = width; Height = height; RgbaBottomUp = rgbaBottomUp; }
     internal int Width { get; }
     internal int Height { get; }
@@ -19,7 +19,7 @@ internal static class PngDecoder
 {
     private static readonly byte[] Signature = { 137, 80, 78, 71, 13, 10, 26, 10 };
 
-    internal static DecodedPng Decode(byte[] source)
+    internal static DecodedJacket Decode(byte[] source)
     {
         if (source is null || source.Length < Signature.Length + 12)
             throw new InvalidDataException("PNG is empty or truncated.");
@@ -86,7 +86,7 @@ internal static class PngDecoder
             for (int x = 0; x < width; x++) WritePixel(current, x * channels, rgba, (targetRow * width + x) * 4, colorType, palette, paletteAlpha);
             (previous, current) = (current, previous);
         }
-        return new DecodedPng(width, height, rgba);
+        return new DecodedJacket(width, height, rgba);
     }
 
     private static byte[] Inflate(byte[] compressed, int expectedLength)

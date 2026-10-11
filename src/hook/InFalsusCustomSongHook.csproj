@@ -20,6 +20,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="$(MSBuildProjectDirectory)\..\..\build\Mods\InLibertasJacketCodec.dll" CopyToOutputDirectory="PreserveNewest" Link="InLibertasJacketCodec.dll" />
+    <None Include="$(MSBuildProjectDirectory)\..\..\build\Mods\libwebp*.dll" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
+    <None Include="$(MSBuildProjectDirectory)\..\..\build\Mods\libsharpyuv*.dll" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
     <Reference Include="MelonLoader"><HintPath>$(MlDir)\MelonLoader.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="0Harmony"><HintPath>$(MlDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppInterop.Runtime"><HintPath>$(BridgeRuntime)</HintPath><Private>false</Private></Reference>
@@ -44,6 +47,10 @@
   <Target Name="CopyToGameMods" AfterTargets="Build" Condition="'$(Deploy)' == 'true' and Exists('$(GameDir)\MelonLoader')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\Mods" />
     <Copy SourceFiles="$(NativeResolverBridge)" DestinationFolder="$(GameDir)\Mods" Condition="Exists('$(NativeResolverBridge)')" />
+    <ItemGroup>
+      <JacketCodecRuntime Include="$(TargetDir)InLibertasJacketCodec.dll;$(TargetDir)libwebp*.dll;$(TargetDir)libsharpyuv*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(JacketCodecRuntime)" DestinationFolder="$(GameDir)\Mods" />
     <Message Importance="high" Text="[InFalsusCustomSongHook] copied $(TargetFileName) to Mods" />
   </Target>
 </Project>

@@ -19,7 +19,6 @@ enum class Difficulty {
 struct ChartMetadata {
     QString artistName;
     QString songName;
-    QString chartDesigner;
     QString jacketDesigner;
     double previewStartSeconds = 0.0;
     double previewEndSeconds = 0.0;
@@ -29,6 +28,7 @@ struct ChartMetadata {
 
 struct DifficultyMetadata {
     int rating = 1;
+    QString charters;
 };
 
 struct TimingPoint {

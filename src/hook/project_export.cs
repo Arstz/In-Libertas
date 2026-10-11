@@ -15,13 +15,13 @@ internal sealed class ExportOwnership {
 }
 
 internal static class ProjectExport {
-    internal const int kConverterRevision = 3;
+    internal const int kConverterRevision = 5;
     internal const string kOwnershipFile = ".inlibertas-export.json";
     internal static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
 
     internal static void Write(string directory, ProjectPackage package, string sourceHash) {
         Dictionary<string, byte[]> output = new(StringComparer.OrdinalIgnoreCase) {
-            ["audio.ogg"] = package.Audio, ["jacketLarge.png"] = package.Jacket, ["jacketSmall.png"] = JacketThumbnail.Create(package.Jacket),
+            ["audio.ogg"] = package.Audio, ["jacketLarge.webp"] = package.Jacket, ["jacketSmall.webp"] = JacketThumbnail.Create(package.Jacket),
         };
         object[] difficulties = new object[4];
         for (int index = 0; index < 4; index++) {
@@ -31,14 +31,16 @@ internal static class ProjectExport {
             if (rating < 1) throw new InvalidDataException("Difficulty rating must be positive.");
             string stem = package.ChartId + index;
             output[stem + ".spc"] = ProjectChartEncoder.Encode(chart, stem + ".spc");
-            difficulties[index] = new { externalChartId = stem, rating, levelSectionIndicator = rating.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            difficulties[index] = new { externalChartId = stem, rating,
+                chartDesigner = ProjectReader.Text(chart.GetProperty("metadata"), "charters"),
+                levelSectionIndicator = rating.ToString(System.Globalization.CultureInfo.InvariantCulture) };
         }
         JsonElement metadata = package.Metadata;
         output["config.json"] = JsonSerializer.SerializeToUtf8Bytes(new {
             enabled = true, templateSongId = 2, chartId = package.ChartId, baseName = package.ChartId,
-            audioFile = "audio.ogg", jacketLargeFile = "jacketLarge.png", jacketSmallFile = "jacketSmall.png", enableLoosePngJackets = true,
+            audioFile = "audio.ogg", jacketLargeFile = "jacketLarge.webp", jacketSmallFile = "jacketSmall.webp", enableLoosePngJackets = true,
             songTitle = ProjectReader.Text(metadata, "song_name"), artist = ProjectReader.Text(metadata, "artist_name"),
-            chartDesigner = ProjectReader.Text(metadata, "chart_designer"), jacketDesigner = ProjectReader.Text(metadata, "jacket_designer"),
+            jacketDesigner = ProjectReader.Text(metadata, "jacket_designer"),
             previewStartSeconds = ProjectReader.Number(metadata, "preview_start_seconds"), previewEndSeconds = ProjectReader.Number(metadata, "preview_end_seconds"),
             characterIdentifier = OptionalText(metadata, "character_identifier"), gameplayBackground = OptionalText(metadata, "gameplay_background"), difficulties,
         }, JsonOptions);
@@ -65,7 +67,10 @@ internal static class ProjectExport {
         foreach (var entry in ownership.Files)
             if (!inventory.TryAdd(entry.Key, entry.Value)) throw new InvalidDataException("Duplicate export inventory filename.");
         ownership.Files = inventory;
-        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase) { "audio.ogg", "jacketLarge.png", "jacketSmall.png", "config.json" };
+        bool webp = ownership.ConverterRevision >= 5;
+        string largeName = webp ? "jacketLarge.webp" : "jacketLarge.png";
+        string smallName = webp ? "jacketSmall.webp" : "jacketSmall.png";
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase) { "audio.ogg", largeName, smallName, "config.json" };
         for (int index = 0; index < 4; index++) names.Add(chartId + index + ".spc");
         foreach (var entry in ownership.Files) {
             if (!names.Contains(entry.Key) || entry.Value is null || entry.Value.Length != 64)
@@ -75,7 +80,7 @@ internal static class ProjectExport {
             if (!string.Equals(HashFile(path), entry.Value, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Export inventory mismatch: " + entry.Key);
         }
-        foreach (string required in new[] { "audio.ogg", "jacketLarge.png", "jacketSmall.png", "config.json" })
+        foreach (string required in new[] { "audio.ogg", largeName, smallName, "config.json" })
             if (!ownership.Files.ContainsKey(required)) throw new InvalidDataException("Incomplete export inventory.");
         foreach (string path in Directory.EnumerateFileSystemEntries(directory)) {
             string name = Path.GetFileName(path);
@@ -87,8 +92,8 @@ internal static class ProjectExport {
             throw new InvalidDataException("Export configuration identity mismatch.");
         JsonElement settings = config.RootElement;
         if (ProjectReader.Text(settings, "audioFile") != "audio.ogg"
-            || ProjectReader.Text(settings, "jacketLargeFile") != "jacketLarge.png"
-            || ProjectReader.Text(settings, "jacketSmallFile") != "jacketSmall.png"
+            || ProjectReader.Text(settings, "jacketLargeFile") != largeName
+            || ProjectReader.Text(settings, "jacketSmallFile") != smallName
             || !settings.GetProperty("enabled").GetBoolean() || !settings.GetProperty("enableLoosePngJackets").GetBoolean())
             throw new InvalidDataException("Invalid managed media configuration.");
         double previewStart = ProjectReader.Number(settings, "previewStartSeconds"), previewEnd = ProjectReader.Number(settings, "previewEndSeconds");
@@ -107,22 +112,28 @@ internal static class ProjectExport {
             if (!present || ProjectReader.Text(difficulty, "externalChartId") != stem
                 || difficulty.GetProperty("rating").GetInt32() < 1)
                 throw new InvalidDataException("Invalid export difficulty configuration.");
+            if (webp) ProjectReader.Text(difficulty, "chartDesigner");
             VerifyChart(Path.Combine(directory, stem + ".spc"));
             charts++;
         }
         if (charts == 0) throw new InvalidDataException("No exported charts.");
-        byte[] jacket = File.ReadAllBytes(Path.Combine(directory, "jacketLarge.png"));
-        byte[] smallJacket = File.ReadAllBytes(Path.Combine(directory, "jacketSmall.png"));
+        byte[] jacket = File.ReadAllBytes(Path.Combine(directory, largeName));
+        byte[] smallJacket = File.ReadAllBytes(Path.Combine(directory, smallName));
         if (ownership.ConverterRevision == 1) {
             if (!Hash(jacket).Equals(Hash(smallJacket), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Managed jacket files differ.");
         } else {
-            ProjectMedia.ValidatePng(smallJacket);
-            DecodedPng thumbnail = PngDecoder.Decode(smallJacket);
+            if (!webp) ProjectMedia.ValidatePng(smallJacket);
+            DecodedJacket thumbnail = webp ? JacketCodec.DecodeWebP(smallJacket) : PngDecoder.Decode(smallJacket);
             if (thumbnail.Width != JacketThumbnail.kExtent || thumbnail.Height != JacketThumbnail.kExtent)
                 throw new InvalidDataException("Managed small jacket must be 256 by 256 pixels.");
         }
-        ProjectMedia.Validate(File.ReadAllBytes(Path.Combine(directory, "audio.ogg")), jacket);
+        ProjectMedia.ValidateVorbis(File.ReadAllBytes(Path.Combine(directory, "audio.ogg")));
+        if (webp) JacketCodec.DecodeWebP(jacket);
+        else {
+            ProjectMedia.ValidatePng(jacket);
+            PngDecoder.Decode(jacket);
+        }
 
         return ownership;
     }
