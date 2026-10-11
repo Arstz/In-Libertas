@@ -23,7 +23,8 @@
 #include "gui/state/playback_controller.h"
 
 #include <QtCore/QDir>
-#include <QtCore/QBuffer>
+#include <QtCore/QPromise>
+#include <QtCore/QThreadPool>
 #include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
 #include <QtCore/QFile>
@@ -33,8 +34,7 @@
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
-#include <QtMultimedia/QAudioBuffer>
-#include <QtMultimedia/QAudioDecoder>
+#include <QtMultimedia/QAudioFormat>
 #include <QtGui/QActionGroup>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QImage>
@@ -65,6 +65,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -230,12 +231,40 @@ struct ImportedSpcIdentity {
     return project;
 }
 
-[[nodiscard]] bool hasDefaultInitialTiming(const QVector<TimingPoint>& timingPoints) {
-    return timingPoints.size() == 1
-        && timingPoints.front().timeMilliseconds == 0
-        && std::abs(timingPoints.front().beatsPerMinute - 120.0) < 0.0001
-        && timingPoints.front().timeSignatureNumerator == 4
-        && timingPoints.front().timeSignatureDenominator == 4;
+void analyzeDecodedTiming(QPromise<TimingEstimate>& promise, const QByteArray& samples,
+    const QAudioFormat& format) {
+    constexpr qint64 kMinimumAnalysisDurationSeconds = 60;
+    constexpr qint64 kMaximumAnalysisDurationSeconds = 180;
+    const int sampleRate = format.sampleRate();
+    const int channels = format.channelCount();
+    const qsizetype frameCount = std::min<qint64>(samples.size() / format.bytesPerFrame(),
+        static_cast<qint64>(sampleRate) * kMaximumAnalysisDurationSeconds);
+    const float* audio = reinterpret_cast<const float*>(samples.constData());
+    InitialTimingAnalyzer analyzer(sampleRate);
+    QVector<float> monoSamples(sampleRate);
+
+    for (qsizetype firstFrame = 0; firstFrame < frameCount; firstFrame += sampleRate) {
+        if (promise.isCanceled()) {
+            return;
+        }
+        const qsizetype count = std::min<qsizetype>(sampleRate, frameCount - firstFrame);
+        for (qsizetype frame = 0; frame < count; ++frame) {
+            float sample = -1.0F;
+            for (int channel = 0; channel < channels; ++channel) {
+                sample = std::max(sample, audio[(firstFrame + frame) * channels + channel]);
+            }
+            monoSamples[frame] = std::isfinite(sample) ? sample : 0.0F;
+        }
+        analyzer.appendSamples(monoSamples.constData(), count);
+        if (analyzer.sampleCount() >= static_cast<qint64>(sampleRate) * kMinimumAnalysisDurationSeconds) {
+            const TimingEstimate estimate = analyzer.estimate();
+            if (estimate.supportingIntervals >= 24 && estimate.confidence() >= 0.15) {
+                promise.addResult(estimate);
+                return;
+            }
+        }
+    }
+    promise.addResult(analyzer.estimate());
 }
 
 [[nodiscard]] QWidget* createPanel(
@@ -272,23 +301,6 @@ MainWindow::MainWindow(QWidget* parent)
     m_state = new EditorState(this);
     m_keyBindings = new KeyBindingRouter(this);
     m_playback = new PlaybackController(this);
-    m_timingDecoder = new QAudioDecoder(this);
-    connect(m_timingDecoder, &QAudioDecoder::bufferReady, this, [this] {
-        while (m_timingDecoder->bufferAvailable()) {
-            appendInitialTimingAudio(m_timingDecoder->read());
-            if (initialTimingAnalysisShouldFinish()) {
-                m_timingDecoder->stop();
-                QTimer::singleShot(0, this, &MainWindow::finishInitialTimingAnalysis);
-                break;
-            }
-        }
-    });
-    connect(m_timingDecoder, qOverload<QAudioDecoder::Error>(&QAudioDecoder::error), this,
-        [this](const QAudioDecoder::Error) {
-        m_timingAnalysisFailed = true;
-        m_timingAnalysisError = m_timingDecoder->errorString();
-    });
-    connect(m_timingDecoder, &QAudioDecoder::finished, this, &MainWindow::finishInitialTimingAnalysis);
     buildInterface();
     buildWorkspace();
     buildToolBar();
@@ -523,6 +535,7 @@ void MainWindow::buildInterface() {
     connect(m_playback, &PlaybackController::positionChanged, m_state, &EditorState::setPlaybackPosition);
     connect(m_playback, &PlaybackController::audioSourceChanged, m_flatView, &FlatView::clearWaveform);
     connect(m_playback, &PlaybackController::audioDecoded, m_flatView, &FlatView::setDecodedAudio);
+    connect(m_playback, &PlaybackController::audioDecoded, this, &MainWindow::analyzeInitialTimingAudio);
     connect(m_playbackControls, &PlaybackControls::togglePlaybackRequested, this, &MainWindow::togglePlayback);
     connect(m_playbackControls, &PlaybackControls::playbackRateRequested, m_playback, &PlaybackController::setPlaybackRate);
     connect(m_playback, &PlaybackController::playbackChanged, m_playbackControls, &PlaybackControls::setPlaying);
@@ -532,6 +545,11 @@ void MainWindow::buildInterface() {
         updateStatus();
     });
     connect(m_playback, &PlaybackController::audioError, this, [this](const QString& message) {
+        if (m_timingAnalysisInProgress) {
+            cancelInitialTimingAnalysis();
+            m_statusLabel->setText(QStringLiteral("New project created; timing detection failed: %1").arg(message));
+            return;
+        }
         m_statusLabel->setText(QStringLiteral("Audio fallback clock: %1").arg(message));
     });
     connect(m_flatView, &FlatView::waveformError, this, [this](const QString& message) {
@@ -1111,6 +1129,7 @@ void MainWindow::loadChartFile(const QString& chartPath) {
     m_projectSongData.clear();
     m_projectJacketData.clear();
     m_projectJacketImage = {};
+    cancelInitialTimingAnalysis();
     m_project = blankProject(identity.songName);
     m_project.songPath = audioPath;
     m_project.jacketPath = jacketPathForImportedSpc(chartFileInfo, identity.songName);
@@ -1210,144 +1229,69 @@ QString MainWindow::audioPathForFolder(const QString& folderPath) const {
     return audioFiles.isEmpty() ? QString() : audioFiles.front().absoluteFilePath();
 }
 
-void MainWindow::startInitialTimingAnalysis(const QString& audioPath) {
-    if (m_timingDecoder->isDecoding()) {
-        m_timingDecoder->stop();
-    }
-    m_timingAnalysisSource = audioPath;
-    m_timingAnalysisSampleRate = 0;
-    m_timingAnalyzer.reset();
-    m_timingAnalysisError.clear();
-    m_timingAnalysisFailed = !m_timingDecoder->isSupported();
-    m_timingAnalysisInProgress = !m_timingAnalysisFailed;
-    if (m_timingAnalysisFailed) {
-        m_statusLabel->setText(QStringLiteral("New project created; timing analysis is unavailable."));
-        return;
-    }
-
+void MainWindow::startInitialTimingAnalysis() {
+    cancelInitialTimingAnalysis();
+    m_timingAnalysisInProgress = true;
     m_statusLabel->setText(QStringLiteral("New project created. Detecting initial BPM and offset…"));
-    if (m_timingAudioBuffer != nullptr) {
-        m_timingDecoder->setSourceDevice(nullptr);
-        delete m_timingAudioBuffer;
-        m_timingAudioBuffer = nullptr;
-    }
-    if (!m_projectSongData.isEmpty()) {
-        m_timingAudioBuffer = new QBuffer(this);
-        m_timingAudioBuffer->setData(m_projectSongData);
-        m_timingAudioBuffer->open(QIODevice::ReadOnly);
-        m_timingDecoder->setSourceDevice(m_timingAudioBuffer);
-    } else {
-        m_timingDecoder->setSource(QUrl::fromLocalFile(audioPath));
-    }
-    m_timingDecoder->start();
 }
 
-void MainWindow::appendInitialTimingAudio(const QAudioBuffer& buffer) {
-    if (!m_timingAnalysisInProgress || !buffer.isValid()) {
+void MainWindow::analyzeInitialTimingAudio(QByteArray samples, const QAudioFormat& format) {
+    if (!m_timingAnalysisInProgress || m_timingWatcher != nullptr) {
+        return;
+    }
+    if (samples.isEmpty() || format.sampleRate() <= 0 || format.channelCount() <= 0
+        || format.sampleFormat() != QAudioFormat::Float) {
+        cancelInitialTimingAnalysis();
+        m_statusLabel->setText(QStringLiteral("New project created; timing detection failed: invalid decoded audio."));
         return;
     }
 
-    constexpr qint64 kMaximumAnalysisDurationSeconds = 180;
-    const QAudioFormat format = buffer.format();
-    const int sampleRate = format.sampleRate();
-    const int channels = format.channelCount();
-    if (sampleRate <= 0 || channels <= 0) {
-        m_timingAnalysisFailed = true;
-        m_timingAnalysisError = QStringLiteral("The decoder returned an invalid audio format.");
-        return;
-    }
-    if (m_timingAnalysisSampleRate == 0) {
-        m_timingAnalysisSampleRate = sampleRate;
-        m_timingAnalyzer = std::make_unique<InitialTimingAnalyzer>(sampleRate);
-    } else if (m_timingAnalysisSampleRate != sampleRate) {
-        m_timingAnalysisFailed = true;
-        m_timingAnalysisError = QStringLiteral("The decoded audio changed sample rates.");
-        return;
-    }
-
-    const qint64 maximumSamples = static_cast<qint64>(sampleRate) * kMaximumAnalysisDurationSeconds;
-    const qint64 remainingSamples = maximumSamples - m_timingAnalyzer->sampleCount();
-    if (remainingSamples <= 0) {
-        return;
-    }
-    const qsizetype frameCount = std::min<qint64>(buffer.frameCount(), remainingSamples);
-    if (frameCount <= 0) {
-        return;
-    }
-
-    const auto sampleAt = [&format, &buffer, channels](const qsizetype frame, const int channel) -> float {
-        const qsizetype index = frame * channels + channel;
-        switch (format.sampleFormat()) {
-        case QAudioFormat::UInt8:
-            return (static_cast<float>(buffer.constData<quint8>()[index]) - 128.0F) / 128.0F;
-        case QAudioFormat::Int16:
-            return static_cast<float>(buffer.constData<qint16>()[index]) / 32768.0F;
-        case QAudioFormat::Int32:
-            return static_cast<float>(buffer.constData<qint32>()[index]) / 2147483648.0F;
-        case QAudioFormat::Float:
-            return buffer.constData<float>()[index];
-        default:
-            return 0.0F;
+    QPromise<TimingEstimate> promise;
+    m_timingWatcher = new QFutureWatcher<TimingEstimate>(this);
+    connect(m_timingWatcher, &QFutureWatcher<TimingEstimate>::finished, this, [this] {
+        if (m_timingWatcher->isCanceled()) {
+            cancelInitialTimingAnalysis();
+            return;
         }
-    };
-
-    QVector<float> monoSamples(frameCount);
-    for (qsizetype frame = 0; frame < frameCount; ++frame) {
-        // TimingAnalyz chooses the strongest channel sample in each analysis
-        // window. Retaining the strongest source channel before filtering
-        // preserves that emphasis without keeping multichannel PCM in memory.
-        float sample = -1.0F;
-        for (int channel = 0; channel < channels; ++channel) {
-            sample = std::max(sample, sampleAt(frame, channel));
+        try {
+            const TimingEstimate estimate = m_timingWatcher->result();
+            cancelInitialTimingAnalysis();
+            finishInitialTimingAnalysis(estimate);
+        } catch (const std::exception& error) {
+            cancelInitialTimingAnalysis();
+            m_statusLabel->setText(QStringLiteral("New project created; timing detection failed: %1")
+                .arg(QString::fromUtf8(error.what())));
         }
-        monoSamples[frame] = std::isfinite(sample) ? sample : 0.0F;
-    }
-    m_timingAnalyzer->appendSamples(monoSamples.constData(), monoSamples.size());
+    });
+    m_timingWatcher->setFuture(promise.future());
+    QThreadPool::globalInstance()->start(
+        [promise = std::move(promise), samples = std::move(samples), format]() mutable {
+        promise.start();
+        try {
+            analyzeDecodedTiming(promise, samples, format);
+        } catch (...) {
+            promise.setException(std::current_exception());
+        }
+        promise.finish();
+    });
 }
 
-bool MainWindow::initialTimingAnalysisShouldFinish() const {
-    if (!m_timingAnalysisInProgress || m_timingAnalysisFailed || m_timingAnalyzer == nullptr
-        || m_timingAnalysisSampleRate <= 0) {
-        return false;
-    }
-
-    constexpr qint64 kMinimumAnalysisDurationSeconds = 60;
-    constexpr qint64 kMaximumAnalysisDurationSeconds = 180;
-    const qint64 analyzedSamples = m_timingAnalyzer->sampleCount();
-    if (analyzedSamples >= static_cast<qint64>(m_timingAnalysisSampleRate) * kMaximumAnalysisDurationSeconds) {
-        return true;
-    }
-    if (analyzedSamples < static_cast<qint64>(m_timingAnalysisSampleRate) * kMinimumAnalysisDurationSeconds) {
-        return false;
-    }
-
-    const TimingEstimate estimate = m_timingAnalyzer->estimate();
-    return estimate.supportingIntervals >= 24 && estimate.confidence() >= 0.15;
-}
-
-void MainWindow::finishInitialTimingAnalysis() {
-    while (m_timingDecoder->bufferAvailable()) {
-        appendInitialTimingAudio(m_timingDecoder->read());
-    }
-    if (!m_timingAnalysisInProgress) {
-        return;
-    }
+void MainWindow::cancelInitialTimingAnalysis() {
     m_timingAnalysisInProgress = false;
-    const QString sourcePath = m_timingAnalysisSource;
-    if (m_timingAnalysisFailed) {
-        m_statusLabel->setText(QStringLiteral("New project created; timing detection failed: %1")
-            .arg(m_timingAnalysisError.isEmpty() ? QStringLiteral("the audio could not be decoded")
-                                                    : m_timingAnalysisError));
+    if (m_timingWatcher != nullptr) {
+        m_timingWatcher->cancel();
+        m_timingWatcher->disconnect(this);
+        m_timingWatcher->deleteLater();
+        m_timingWatcher = nullptr;
+    }
+}
+
+void MainWindow::finishInitialTimingAnalysis(const TimingEstimate& estimate) {
+    if (!m_hasProject) {
         return;
     }
-
-    const TimingEstimate estimate = m_timingAnalyzer != nullptr ? m_timingAnalyzer->estimate() : TimingEstimate{};
-    m_timingAnalyzer.reset();
     if (!estimate.isValid()) {
         m_statusLabel->setText(QStringLiteral("New project created; timing detection found no reliable BPM."));
-        return;
-    }
-    if (!m_hasProject || m_project.songPath != sourcePath) {
         return;
     }
 
@@ -1357,22 +1301,12 @@ void MainWindow::finishInitialTimingAnalysis() {
         .timeSignatureNumerator = 4,
         .timeSignatureDenominator = 4,
     }};
-    bool applied = false;
     for (DifficultyChart& difficulty : m_project.difficulties) {
-        if (hasDefaultInitialTiming(difficulty.timingPoints)) {
-            difficulty.timingPoints = detectedTiming;
-            applied = true;
-        }
+        difficulty.timingPoints = detectedTiming;
     }
-    if (!applied) {
-        return;
-    }
-
-    if (hasDefaultInitialTiming(m_state->timingPoints())) {
-        m_loadingProject = true;
-        m_state->setTimingPoints(detectedTiming);
-        m_loadingProject = false;
-    }
+    m_loadingProject = true;
+    m_state->setTimingPoints(detectedTiming);
+    m_loadingProject = false;
     m_projectDirty = true;
     m_statusLabel->setText(QStringLiteral("Initial timing detected: %1 BPM, %2 ms offset (%3 interval votes).")
         .arg(estimate.beatsPerMinute, 0, 'f', 0)
@@ -1440,9 +1374,9 @@ void MainWindow::createProject() {
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = true;
-    m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
     updateViewerSongCard();
-    startInitialTimingAnalysis(songPath);
+    startInitialTimingAnalysis();
+    m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
 }
 
 void MainWindow::openProject() {
@@ -1500,8 +1434,7 @@ void MainWindow::loadProject(const QString& path) {
         QMessageBox::warning(this, QStringLiteral("Open project"), assetError);
         return;
     }
-    m_timingDecoder->stop();
-    m_timingAnalysisInProgress = false;
+    cancelInitialTimingAnalysis();
     m_project = result.project;
     loadProjectAssets(result.songFileName, result.songData, result.jacketFileName, result.jacketData);
     if (m_project.songPath.isEmpty()) {

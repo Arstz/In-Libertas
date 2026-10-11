@@ -6,16 +6,13 @@
 #include "gui/app/handling_settings.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QFutureWatcher>
 #include <QtGui/QImage>
 #include <QtWidgets/QMainWindow>
 
-#include <memory>
-
 class ConveyorView;
 class PlaybackController;
-class QAudioBuffer;
-class QAudioDecoder;
-class QBuffer;
+class QAudioFormat;
 class QButtonGroup;
 class QComboBox;
 class QDoubleSpinBox;
@@ -91,10 +88,10 @@ private:
     void updateViewerSongCard();
     void togglePlayback();
     void adjustFlatZoom(double steps);
-    void startInitialTimingAnalysis(const QString& audioPath);
-    void appendInitialTimingAudio(const QAudioBuffer& buffer);
-    void finishInitialTimingAnalysis();
-    [[nodiscard]] bool initialTimingAnalysisShouldFinish() const;
+    void startInitialTimingAnalysis();
+    void analyzeInitialTimingAudio(QByteArray samples, const QAudioFormat& format);
+    void finishInitialTimingAnalysis(const TimingEstimate& estimate);
+    void cancelInitialTimingAnalysis();
     [[nodiscard]] QString audioPathForFolder(const QString& folderPath) const;
 
     EditorState* m_state = nullptr;
@@ -102,8 +99,7 @@ private:
     HandlingSettings m_handlingSettings;
     KeyBindingRouter* m_keyBindings = nullptr;
     PlaybackController* m_playback = nullptr;
-    QAudioDecoder* m_timingDecoder = nullptr;
-    QBuffer* m_timingAudioBuffer = nullptr;
+    QFutureWatcher<TimingEstimate>* m_timingWatcher = nullptr;
     ConveyorView* m_viewer = nullptr;
     FlatView* m_flatView = nullptr;
     QWidget* m_contentHost = nullptr;
@@ -138,13 +134,8 @@ private:
     bool m_projectDirty = false;
     bool m_loadingProject = false;
     bool m_timingAnalysisInProgress = false;
-    bool m_timingAnalysisFailed = false;
     bool m_selectingEventInWidget = false;
     bool m_splittersArranged = false;
-    QString m_timingAnalysisSource;
-    QString m_timingAnalysisError;
-    int m_timingAnalysisSampleRate = 0;
-    std::unique_ptr<InitialTimingAnalyzer> m_timingAnalyzer;
 };
 
 } // namespace infalsus::gui
