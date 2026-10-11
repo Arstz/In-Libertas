@@ -1,7 +1,9 @@
 #include "gui/state/editor_state.h"
 
 #include "core/timing_grid.h"
+#include "core/zone_groups.h"
 
+#include <QtCore/QHash>
 #include <QtCore/QSet>
 
 #include <algorithm>
@@ -590,6 +592,28 @@ void EditorState::copyHitObjects(QVector<ChartNote> hitObjects) {
         return;
     }
 
+    QSet<std::uint64_t> usedGroupIds;
+    for (const ChartNote& note : m_chart.notes) {
+        if (note.kind == NoteKind::Sky) {
+            usedGroupIds.insert(note.groupId);
+        }
+    }
+    QHash<std::uint64_t, std::uint64_t> copiedGroupIds;
+    std::uint64_t nextGroupId = 0;
+    for (ChartNote& note : hitObjects) {
+        if (note.kind != NoteKind::Sky) {
+            continue;
+        }
+        if (!copiedGroupIds.contains(note.groupId)) {
+            while (usedGroupIds.contains(nextGroupId)) {
+                ++nextGroupId;
+            }
+            copiedGroupIds.insert(note.groupId, nextGroupId);
+            usedGroupIds.insert(nextGroupId++);
+        }
+        note.groupId = copiedGroupIds.value(note.groupId);
+    }
+
     const QVector<int> selectionBefore = m_selectedHitObjects;
     HistoryEntry entry;
     entry.operation = HistoryOperation::AddBatch;
@@ -917,7 +941,9 @@ void EditorState::cancelAddedHitObject(const int index) {
         return;
     }
 
+    const QVector<std::uint64_t> groupIdsBefore = m_undoHistory.constLast().groupIdsBefore;
     eraseHitObject(index);
+    restoreGroupIds(groupIdsBefore);
     m_undoHistory.removeLast();
     m_pendingAddedHitObjectIndex = -1;
     if (m_activeMoveIndex == index) {
@@ -1140,6 +1166,7 @@ void EditorState::finishHitObjectMove() {
             && m_undoHistory.constLast().operation == HistoryOperation::Add
             && m_undoHistory.constLast().index == m_activeMoveIndex) {
             m_undoHistory.last().after = hitObject;
+            normalizeHistoryGroupIds(m_undoHistory.last());
             emit historyChanged(true, !m_redoHistory.isEmpty());
         } else {
             appendHistory({
@@ -1290,6 +1317,7 @@ void EditorState::undo() {
     case HistoryOperation::Events:
         break;
         }
+        restoreGroupIds(entry.groupIdsBefore);
         setSelectedHitObjects(entry.selectionBefore);
     }
     m_redoHistory.append(entry);
@@ -1331,6 +1359,7 @@ void EditorState::redo() {
     case HistoryOperation::Events:
         break;
         }
+        restoreGroupIds(entry.groupIdsAfter);
         setSelectedHitObjects(entry.selectionAfter);
     }
     m_undoHistory.append(entry);
@@ -1486,9 +1515,78 @@ void EditorState::appendEventHistory(EventSnapshot before) {
 }
 
 void EditorState::appendHistory(HistoryEntry entry) {
+    if (entry.operation != HistoryOperation::Events) {
+        normalizeHistoryGroupIds(entry);
+    }
     m_undoHistory.append(std::move(entry));
     m_redoHistory.clear();
     emit historyChanged(!m_undoHistory.isEmpty(), false);
+}
+
+void EditorState::normalizeHistoryGroupIds(HistoryEntry& entry) {
+    QVector<std::uint64_t> currentIds;
+    currentIds.reserve(m_chart.notes.size());
+    for (const ChartNote& note : m_chart.notes) {
+        currentIds.append(note.groupId);
+    }
+    const QVector<std::uint64_t> orderedIds = ascendingZoneGroupIds(m_chart);
+    if (currentIds == orderedIds) {
+        if (!entry.groupIdsBefore.isEmpty()) {
+            entry.groupIdsAfter = currentIds;
+        }
+        return;
+    }
+    if (entry.groupIdsBefore.isEmpty()) {
+        QVector<std::uint64_t> before = currentIds;
+        switch (entry.operation) {
+        case HistoryOperation::Add:
+            before.removeAt(entry.index);
+            break;
+        case HistoryOperation::AddBatch:
+            for (auto position = entry.batchIndexes.crbegin(); position != entry.batchIndexes.crend(); ++position) {
+                before.removeAt(*position);
+            }
+            break;
+        case HistoryOperation::Remove:
+            before.insert(entry.index, entry.before.groupId);
+            break;
+        case HistoryOperation::RemoveBatch:
+            for (int index = 0; index < entry.batchIndexes.size(); ++index) {
+                before.insert(entry.batchIndexes.at(index), entry.batchBefore.at(index).groupId);
+            }
+            break;
+        case HistoryOperation::Move:
+            before[entry.index] = entry.before.groupId;
+            break;
+        case HistoryOperation::MoveBatch:
+            for (int index = 0; index < entry.batchIndexes.size(); ++index) {
+                before[entry.batchIndexes.at(index)] = entry.batchBefore.at(index).groupId;
+            }
+            break;
+        case HistoryOperation::Events:
+            return;
+        }
+        entry.groupIdsBefore = std::move(before);
+    }
+    entry.groupIdsAfter = orderedIds;
+    restoreGroupIds(orderedIds);
+}
+
+void EditorState::restoreGroupIds(const QVector<std::uint64_t>& ids) {
+    if (ids.size() != m_chart.notes.size()) {
+        return;
+    }
+    QVector<int> indexes;
+    QVector<ChartNote> notes;
+    for (int index = 0; index < ids.size(); ++index) {
+        ChartNote note = m_chart.notes.at(index);
+        if (note.groupId != ids.at(index)) {
+            note.groupId = ids.at(index);
+            indexes.append(index);
+            notes.append(note);
+        }
+    }
+    replaceHitObjectsBatch(indexes, notes);
 }
 
 void EditorState::insertHitObject(const int index, const ChartNote& hitObject) {

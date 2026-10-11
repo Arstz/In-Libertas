@@ -3,8 +3,8 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QHash>
 #include <QtCore/QSaveFile>
-#include <QtCore/QSet>
 #include <QtCore/QtEndian>
 
 #include <algorithm>
@@ -333,24 +333,18 @@ void appendU16(QByteArray& bytes, const std::uint16_t value) {
 
 [[nodiscard]] QVector<std::uint64_t> exportGroupIds(const ChartData& chart) {
     QVector<std::uint64_t> groupIds(chart.notes.size());
-    QSet<std::uint64_t> usedIds;
+    QHash<std::uint64_t, std::uint64_t> zoneIds;
     std::uint64_t nextGroupId = 0;
-    for (const ChartNote& note : chart.notes) {
-        if (note.kind == NoteKind::Sky) {
-            usedIds.insert(note.groupId);
-        }
-    }
     for (int index = 0; index < chart.notes.size(); ++index) {
         const ChartNote& note = chart.notes.at(index);
         if (note.kind == NoteKind::Sky) {
-            groupIds[index] = note.groupId;
+            if (!zoneIds.contains(note.groupId)) {
+                zoneIds.insert(note.groupId, nextGroupId++);
+            }
+            groupIds[index] = zoneIds.value(note.groupId);
             continue;
         }
-        while (usedIds.contains(nextGroupId)) {
-            ++nextGroupId;
-        }
-        groupIds[index] = nextGroupId;
-        usedIds.insert(nextGroupId++);
+        groupIds[index] = nextGroupId++;
     }
 
     return groupIds;

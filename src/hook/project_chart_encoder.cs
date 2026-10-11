@@ -92,7 +92,7 @@ internal static class ProjectChartEncoder {
         Note[] notes = chart.GetProperty("notes").EnumerateArray().Select(ReadNote).OrderBy(note => note.Start).ThenBy(note => note.End).ToArray();
         JsonElement[] timing = chart.GetProperty("timing_events").EnumerateArray().OrderBy(point => ProjectReader.Time(point, "time_ms")).ToArray();
         List<Event> events = new();
-        HashSet<ulong> usedGroups = notes.Where(note => note.Kind == 3).Select(note => note.GroupId).ToHashSet();
+        Dictionary<ulong, ulong> zoneGroups = new();
         ulong nextGroup = 0;
         double initialBpm = timing.Length == 0 ? 120 : ValidBpm(timing[0]);
         int initialMeter = timing.Length == 0 ? 4 : ValidMeter(timing[0]);
@@ -123,11 +123,14 @@ internal static class ProjectChartEncoder {
                 Ratio[] ratios = { MakeRatio(note.Side == 2 ? 1.25 : note.StartX, denominator),
                     MakeRatio(note.Side == 2 ? 1.25 : note.EndX, denominator), MakeRatio(outer ? 0.25 : note.StartWidth, denominator),
                     MakeRatio(outer ? 0.25 : note.EndWidth, denominator) };
-                ulong groupId = note.GroupId;
-                if (note.Kind != 3) {
-                    while (usedGroups.Contains(nextGroup)) nextGroup++;
-                    groupId = nextGroup;
-                    usedGroups.Add(nextGroup++);
+                ulong groupId;
+                if (note.Kind == 3) {
+                    if (!zoneGroups.TryGetValue(note.GroupId, out groupId)) {
+                        groupId = nextGroup++;
+                        zoneGroups.Add(note.GroupId, groupId);
+                    }
+                } else {
+                    groupId = nextGroup++;
                 }
                 uint type = note.Kind switch { 0 => 1, 1 => 2, 2 => 4, 3 => 5, _ => 0U };
                 ulong[] fields = { index, groupId, note.Start, note.End, (uint)(note.Side + 1) | type << 8, note.Auxiliary,

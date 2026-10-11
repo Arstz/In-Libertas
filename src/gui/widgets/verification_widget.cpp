@@ -309,7 +309,7 @@ QVector<VerificationIssue> VerificationWidget::verifyCentralFloorSpans(const Cha
 }
 
 QVector<VerificationIssue> VerificationWidget::verifyZoneGroups(const ChartData& chart) {
-    const QVector<ZoneGroup> groups = analyzeZoneGroups(chart);
+    QVector<ZoneGroup> groups = analyzeZoneGroups(chart);
     QVector<VerificationIssue> issues;
 
     for (const ZoneGroup& group : groups) {
@@ -323,6 +323,39 @@ QVector<VerificationIssue> VerificationWidget::verifyZoneGroups(const ChartData&
             const ChartNote& note = chart.notes.at(index);
             issue.timestampMilliseconds = std::min(issue.timestampMilliseconds, note.startMilliseconds);
             issue.hitObjectIds.append(note.id);
+        }
+        std::sort(issue.hitObjectIds.begin(), issue.hitObjectIds.end());
+        issues.append(std::move(issue));
+    }
+
+    std::sort(groups.begin(), groups.end(), [](const ZoneGroup& first, const ZoneGroup& second) {
+        if (first.startMilliseconds != second.startMilliseconds) {
+            return first.startMilliseconds < second.startMilliseconds;
+        }
+        return first.groupId < second.groupId;
+    });
+    std::uint64_t previousMaximumId = 0;
+    std::uint64_t currentMaximumId = 0;
+    qint64 currentStart = 0;
+    bool hasEarlierGroup = false;
+    for (int index = 0; index < groups.size(); ++index) {
+        const ZoneGroup& group = groups.at(index);
+        if (index == 0) {
+            currentStart = group.startMilliseconds;
+        } else if (group.startMilliseconds != currentStart) {
+            previousMaximumId = currentMaximumId;
+            currentStart = group.startMilliseconds;
+            hasEarlierGroup = true;
+        }
+        currentMaximumId = std::max(currentMaximumId, group.groupId);
+        if (!hasEarlierGroup || group.groupId >= previousMaximumId) {
+            continue;
+        }
+        VerificationIssue issue;
+        issue.timestampMilliseconds = group.startMilliseconds;
+        issue.message = QStringLiteral("Group ID is not ascending, will cause combo break");
+        for (const int noteIndex : group.indexes) {
+            issue.hitObjectIds.append(chart.notes.at(noteIndex).id);
         }
         std::sort(issue.hitObjectIds.begin(), issue.hitObjectIds.end());
         issues.append(std::move(issue));

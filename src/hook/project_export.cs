@@ -15,7 +15,7 @@ internal sealed class ExportOwnership {
 }
 
 internal static class ProjectExport {
-    internal const int kConverterRevision = 2;
+    internal const int kConverterRevision = 3;
     internal const string kOwnershipFile = ".inlibertas-export.json";
     internal static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
 

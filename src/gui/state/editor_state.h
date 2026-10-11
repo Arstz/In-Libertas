@@ -153,6 +153,8 @@ private:
         QVector<int> batchIndexes;
         QVector<ChartNote> batchBefore;
         QVector<ChartNote> batchAfter;
+        QVector<std::uint64_t> groupIdsBefore;
+        QVector<std::uint64_t> groupIdsAfter;
         QVector<int> selectionBefore;
         QVector<int> selectionAfter;
         EventSnapshot eventsBefore;
@@ -167,6 +169,8 @@ private:
     void restoreEventSnapshot(const EventSnapshot& snapshot);
     void appendEventHistory(EventSnapshot before);
     void appendHistory(HistoryEntry entry);
+    void normalizeHistoryGroupIds(HistoryEntry& entry);
+    void restoreGroupIds(const QVector<std::uint64_t>& ids);
     void insertHitObject(int index, const ChartNote& hitObject);
     void eraseHitObject(int index);
     void replaceHitObject(int index, const ChartNote& hitObject);

@@ -62,6 +62,8 @@ QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart) {
         const ChartNote& note = chart.notes.at(index);
         if (note.kind == NoteKind::Sky) {
             ZoneGroup& group = groups[note.groupId];
+            group.startMilliseconds = group.indexes.isEmpty() ? note.startMilliseconds
+                : std::min(group.startMilliseconds, note.startMilliseconds);
             group.groupId = note.groupId;
             group.indexes.append(index);
         }
@@ -107,6 +109,42 @@ QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart) {
     }
 
     return result;
+}
+
+QVector<std::uint64_t> chronologicalZoneGroupIds(const ChartData& chart) {
+    QMap<std::uint64_t, qint64> starts;
+    for (const ChartNote& note : chart.notes) {
+        if (note.kind != NoteKind::Sky) {
+            continue;
+        }
+        auto position = starts.find(note.groupId);
+        if (position == starts.end()) {
+            starts.insert(note.groupId, note.startMilliseconds);
+        } else {
+            position.value() = std::min(position.value(), note.startMilliseconds);
+        }
+    }
+    QVector<std::uint64_t> ids = starts.keys();
+    std::stable_sort(ids.begin(), ids.end(), [&starts](const std::uint64_t first, const std::uint64_t second) {
+        return starts.value(first) < starts.value(second);
+    });
+    return ids;
+}
+
+QVector<std::uint64_t> ascendingZoneGroupIds(const ChartData& chart) {
+    const QVector<std::uint64_t> chronologicalIds = chronologicalZoneGroupIds(chart);
+    QVector<std::uint64_t> sortedIds = chronologicalIds;
+    std::sort(sortedIds.begin(), sortedIds.end());
+    QHash<std::uint64_t, std::uint64_t> replacements;
+    for (int index = 0; index < chronologicalIds.size(); ++index) {
+        replacements.insert(chronologicalIds.at(index), sortedIds.at(index));
+    }
+    QVector<std::uint64_t> ids;
+    ids.reserve(chart.notes.size());
+    for (const ChartNote& note : chart.notes) {
+        ids.append(note.kind == NoteKind::Sky ? replacements.value(note.groupId) : note.groupId);
+    }
+    return ids;
 }
 
 QVector<ZoneSegment> mergeZoneSegments(QVector<ZoneSegment> segments) {

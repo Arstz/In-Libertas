@@ -165,6 +165,7 @@ if(BUILD_TESTING)
     qt_add_executable(batch_properties_test
         tests/core/batch_properties_test.cpp
         src/core/chart_project.cpp
+        src/core/zone_groups.cpp
         src/gui/state/editor_state.cpp
         src/gui/state/editor_state.h
     )

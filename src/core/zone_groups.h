@@ -22,10 +22,13 @@ struct ZoneGroup {
     QVector<int> indexes;
     QVector<ZoneJoint> joints;
     std::uint64_t groupId = 0;
+    qint64 startMilliseconds = 0;
     bool connected = true;
 };
 
 [[nodiscard]] QVector<ZoneGroup> analyzeZoneGroups(const ChartData& chart);
+[[nodiscard]] QVector<std::uint64_t> chronologicalZoneGroupIds(const ChartData& chart);
+[[nodiscard]] QVector<std::uint64_t> ascendingZoneGroupIds(const ChartData& chart);
 [[nodiscard]] QVector<ZoneSegment> mergeZoneSegments(QVector<ZoneSegment> segments);
 [[nodiscard]] QVector<int> linkedZoneEndpointIndexes(const ChartData& chart, int zoneIndex, bool atStart,
     bool fullySharedOnly);

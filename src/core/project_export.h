@@ -6,7 +6,7 @@
 
 namespace infalsus {
 
-inline constexpr int kProjectConverterRevision = 2;
+inline constexpr int kProjectConverterRevision = 3;
 inline constexpr int kProjectSmallJacketExtent = 256;
 inline constexpr char kProjectOwnershipFile[] = ".inlibertas-export.json";
 
