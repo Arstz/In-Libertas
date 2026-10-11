@@ -7,6 +7,7 @@
 #include <QtGui/QPainterPath>
 #include <QtGui/QCursor>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QResizeEvent>
 #include <QtGui/QWheelEvent>
 #include <QtCore/QLineF>
 #include <QtCore/QHash>
@@ -19,7 +20,9 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <numbers>
+#include <utility>
 
 namespace infalsus::gui {
 
@@ -28,8 +31,8 @@ namespace {
 constexpr double kMinimumPixelsPerSecond = 48.0;
 constexpr double kMaximumPixelsPerSecond = kWaveformPointsPerSecond;
 constexpr double kZoomStepFactor = 1.35;
-constexpr double kWaveformWidth = 184.0;
-constexpr double kWaveformWidthFraction = 0.45;
+constexpr double kWaveformDividerWidth = 6.0;
+constexpr double kMinimumChartWidth = 120.0;
 constexpr double kWaveformDividerOpacity = 0.35;
 constexpr double kMargin = 12.0;
 constexpr double kPlayheadWidth = 6.0;
@@ -61,6 +64,91 @@ constexpr std::uint32_t kWidthSineIn = 0x80U;
 constexpr std::uint32_t kFlickRight = 0x400U;
 constexpr std::uint32_t kFlickLeft = 0x1000U;
 constexpr int kInactiveOpacity = 50;
+
+class WaveformDivider final : public QWidget {
+public:
+    WaveformDivider(QWidget* parent, std::function<void(double)> resize)
+        : QWidget(parent), m_resize(std::move(resize)) {
+        setCursor(Qt::SplitHCursor);
+        setToolTip(QStringLiteral("Drag to resize or fold the waveform"));
+    }
+
+protected:
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::WindowDeactivate || event->type() == QEvent::UngrabMouse
+            || event->type() == QEvent::Hide) {
+            m_dragging = false;
+        }
+        return QWidget::event(event);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override {
+        if (m_dragging) {
+            event->accept();
+            return;
+        }
+        if (event->button() != Qt::LeftButton) {
+            event->ignore();
+            return;
+        }
+        m_pressOffset = event->position().x();
+        m_pressGlobalX = event->globalPosition().x();
+        m_dragging = true;
+        m_dragMoved = false;
+        event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!m_dragging || !(event->buttons() & Qt::LeftButton)) {
+            m_dragging = false;
+            event->ignore();
+            return;
+        }
+        m_dragMoved = m_dragMoved || event->globalPosition().x() != m_pressGlobalX;
+        if (m_dragMoved) {
+            resizeAt(event->globalPosition());
+        }
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if (!m_dragging) {
+            event->ignore();
+            return;
+        }
+        if (event->button() != Qt::LeftButton) {
+            event->accept();
+            return;
+        }
+        if (m_dragMoved || event->globalPosition().x() != m_pressGlobalX) {
+            resizeAt(event->globalPosition());
+        }
+        m_dragging = false;
+        event->accept();
+    }
+
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), palette::panel);
+        painter.setPen(palette::gridLine);
+        painter.drawLine(width() / 2, 0, width() / 2, height());
+        painter.setPen(palette::textMuted);
+        for (const int offset : {-4, 0, 4}) {
+            painter.drawLine(1, height() / 2 + offset, width() - 2, height() / 2 + offset);
+        }
+    }
+
+private:
+    void resizeAt(const QPointF& globalPosition) {
+        m_resize(parentWidget()->mapFromGlobal(globalPosition.toPoint()).x() - m_pressOffset);
+    }
+
+    std::function<void(double)> m_resize;
+    double m_pressOffset = 0.0;
+    double m_pressGlobalX = 0.0;
+    bool m_dragging = false;
+    bool m_dragMoved = false;
+};
 
 [[nodiscard]] std::uint64_t nextFieldGroupId(const ChartData& chart) {
     QSet<std::uint64_t> usedIds;
@@ -212,6 +300,12 @@ FlatView::FlatView(QWidget* parent)
     : QOpenGLWidget(parent) {
     setMinimumSize(240, 300);
     setFocusPolicy(Qt::StrongFocus);
+    m_waveformDivider = new WaveformDivider(this, [this](const double position) {
+        const double maximumWidth = std::max(0.0,
+            width() - 2.0 * kMargin - kWaveformDividerWidth - kMinimumChartWidth);
+        setWaveformWidth(std::clamp(position - kMargin, 0.0, maximumWidth));
+    });
+    updateWaveformDividerGeometry();
 }
 
 FlatView::~FlatView() {
@@ -435,15 +529,51 @@ int FlatView::playheadViewportY() const {
     return static_cast<int>(std::lround(playheadY()));
 }
 
+void FlatView::setWaveformWidth(const double width) {
+    if (!std::isfinite(width)) {
+        return;
+    }
+    const double requestedWidth = std::max(0.0, width);
+    if (m_waveformWidth == requestedWidth) {
+        return;
+    }
+    m_waveformWidth = requestedWidth;
+    updateWaveformDividerGeometry();
+    update();
+}
+
+double FlatView::waveformWidth() const {
+    return m_waveformWidth;
+}
+
+QRectF FlatView::waveformArea() const {
+    const QRectF content = rect().adjusted(kMargin, kMargin, -kMargin, -kMargin);
+    const double maximumWidth = std::max(0.0,
+        content.width() - kWaveformDividerWidth - kMinimumChartWidth);
+    return QRectF(content.left(), content.top(), std::min(m_waveformWidth, maximumWidth), content.height());
+}
+
 QRectF FlatView::groundArea() const {
     const QRectF content = rect().adjusted(kMargin, kMargin, -kMargin, -kMargin);
-    const double waveformWidth = std::min(kWaveformWidth, content.width() * kWaveformWidthFraction);
+    const double waveformWidth = waveformArea().width();
 
     return QRectF(
-        content.left() + waveformWidth + 6.0,
+        content.left() + waveformWidth + kWaveformDividerWidth,
         content.top(),
-        content.width() - waveformWidth - 6.0,
+        content.width() - waveformWidth - kWaveformDividerWidth,
         content.height());
+}
+
+void FlatView::updateWaveformDividerGeometry() {
+    if (m_waveformDivider) {
+        const QRectF area = waveformArea();
+        m_waveformDivider->setGeometry(QRectF(area.right(), area.top(), kWaveformDividerWidth, area.height()).toRect());
+    }
+}
+
+void FlatView::resizeEvent(QResizeEvent* event) {
+    QOpenGLWidget::resizeEvent(event);
+    updateWaveformDividerGeometry();
 }
 
 qint64 FlatView::timeAtY(const double y) const {
@@ -1830,8 +1960,7 @@ void FlatView::paintGL() {
 
     const QRectF content = rect().adjusted(kMargin, kMargin, -kMargin, -kMargin);
     const QRectF laneArea = groundArea();
-    const QRectF waveformArea(content.left(), content.top(), laneArea.left() - content.left() - 6.0, content.height());
-    drawWaveform(painter, waveformArea);
+    drawWaveform(painter, waveformArea());
 
     const int groundOpacity = m_mode == FlatViewMode::Sky ? kInactiveOpacity : 255;
     const int skyOpacity = m_mode == FlatViewMode::Ground ? kInactiveOpacity : 255;
@@ -1900,6 +2029,9 @@ void FlatView::drawSelectionRectangle(QPainter& painter) const {
 }
 
 void FlatView::drawWaveform(QPainter& painter, const QRectF& area) const {
+    if (area.isEmpty()) {
+        return;
+    }
     painter.setPen(QPen(palette::gridLine, 1.0));
     painter.setBrush(palette::panel);
     painter.drawRect(area);

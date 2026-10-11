@@ -15,6 +15,7 @@
 
 class QPainter;
 class QMouseEvent;
+class QResizeEvent;
 class QWheelEvent;
 
 namespace infalsus::gui {
@@ -23,6 +24,8 @@ class FlatView final : public QOpenGLWidget {
     Q_OBJECT
 
 public:
+    static constexpr double kDefaultWaveformWidth = 184.0;
+
     explicit FlatView(QWidget* parent = nullptr);
     ~FlatView() override;
 
@@ -40,6 +43,8 @@ public:
     void setLaneEvents(QVector<LaneEvent> laneEvents);
     void setSelectedHitObjects(QVector<int> indexes);
     void clearWaveform();
+    void setWaveformWidth(double width);
+    [[nodiscard]] double waveformWidth() const;
     void setDecodedAudio(QByteArray samples, const QAudioFormat& format);
     void zoom(double steps);
     [[nodiscard]] int playheadViewportY() const;
@@ -72,6 +77,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void paintGL() override;
+    void resizeEvent(QResizeEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
 private:
@@ -109,6 +115,8 @@ private:
     };
 
     [[nodiscard]] QRectF groundArea() const;
+    [[nodiscard]] QRectF waveformArea() const;
+    void updateWaveformDividerGeometry();
     [[nodiscard]] qint64 timeAtY(double y) const;
     [[nodiscard]] qint64 snappedTimeAtY(double y) const;
     [[nodiscard]] double snappedSkyCoordinate(double coordinate, double minimum, double maximum) const;
@@ -177,6 +185,8 @@ private:
     mutable QVector<QPainterPath> m_fieldGroupJoints;
     mutable bool m_fieldGroupsDirty = true;
     QVector<QPointF> m_waveformPeaks;
+    QWidget* m_waveformDivider = nullptr;
+    double m_waveformWidth = kDefaultWaveformWidth;
     ChartNote m_dragOriginal;
     QFutureWatcher<WaveformData>* m_waveformWatcher = nullptr;
     QPointF m_pressPosition;

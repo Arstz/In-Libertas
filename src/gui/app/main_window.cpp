@@ -619,6 +619,8 @@ void MainWindow::arrangeSplitters() {
 
 void MainWindow::restoreLayout() {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
+    m_flatView->setWaveformWidth(settings.value(QStringLiteral("layout/waveform_width"),
+        FlatView::kDefaultWaveformWidth).toDouble());
     restoreGeometry(settings.value(QStringLiteral("layout/geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("layout/window_state")).toByteArray());
     const auto restoreSplitter = [&settings](QSplitter* splitter, const QString& key) {
@@ -643,11 +645,13 @@ void MainWindow::saveLayout() const {
     settings.setValue(QStringLiteral("layout/main_splitter"), m_mainSplitter->saveState());
     settings.setValue(QStringLiteral("layout/viewer_splitter"), m_viewerSplitter->saveState());
     settings.setValue(QStringLiteral("layout/bottom_splitter"), m_bottomSplitter->saveState());
+    settings.setValue(QStringLiteral("layout/waveform_width"), m_flatView->waveformWidth());
 }
 
 void MainWindow::resetLayout() {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.remove(QStringLiteral("layout"));
+    m_flatView->setWaveformWidth(FlatView::kDefaultWaveformWidth);
     resize(1540, 980);
     arrangeSplitters();
     m_splittersArranged = true;
