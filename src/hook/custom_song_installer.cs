@@ -39,7 +39,7 @@ internal static class CustomSongInstaller
     private static bool _installing;
     private static bool _earlyBoundaryUnavailableReported;
     private static bool _libraryInstalled;
-    private static bool _collectionAssetsApplied;
+    private static bool _collectionAssetProbeComplete;
     private static int _stockPackCount;
     private static int[] _collectionStylePackIds;
     private static int _collectionAssetProbeFrames;
@@ -72,7 +72,7 @@ internal static class CustomSongInstaller
 
     internal static void Tick()
     {
-        if (!_libraryInstalled || _collectionAssetsApplied || ++_collectionAssetProbeFrames % 30 != 0)
+        if (!_libraryInstalled || _collectionAssetProbeComplete || ++_collectionAssetProbeFrames % 30 != 0)
             return;
         try
         {
@@ -591,14 +591,15 @@ internal static class CustomSongInstaller
     }
 
     internal static void ApplyCollectionAssets(PackSelectSceneAssets assets) {
-        if (!_libraryInstalled || _collectionAssetsApplied || assets?.packToAssets is null) return;
+        if (!_libraryInstalled || assets?.packToAssets is null) return;
+        _collectionAssetProbeComplete = false;
         try
         {
             var oldAssets = assets.packToAssets;
             if (oldAssets.Length < _stockPackCount)
                 throw new InvalidOperationException($"pack style table shrank to {oldAssets.Length}; expected at least {_stockPackCount}.");
             assets.packToAssets = AssignCollectionStyles(oldAssets, _collectionStylePackIds, _stockPackCount);
-            _collectionAssetsApplied = true;
+            _collectionAssetProbeComplete = true;
             CustomSongMod.Log.Msg($"[CustomSong] assigned collection visual styles by PackId: {oldAssets.Length}->{assets.packToAssets.Length}; customStart={_stockPackCount}; count={_collectionStylePackIds.Length}");
         }
         catch (Exception exception)
@@ -607,17 +608,19 @@ internal static class CustomSongInstaller
         }
     }
 
-    private static Il2CppReferenceArray<T> AssignCollectionStyles<T>(
-        Il2CppReferenceArray<T> source, int[] sourcePackIds, int firstCustomPackId)
-        where T : Il2CppObjectBase {
-        Il2CppReferenceArray<T> next = new(Math.Max(source.Length, firstCustomPackId + sourcePackIds.Length));
+    private static Il2CppReferenceArray<PackSelectSceneAssets.SongSelectPackAssets> AssignCollectionStyles(
+        Il2CppReferenceArray<PackSelectSceneAssets.SongSelectPackAssets> source, int[] sourcePackIds, int firstCustomPackId) {
+        Il2CppReferenceArray<PackSelectSceneAssets.SongSelectPackAssets> next =
+            new(Math.Max(source.Length, firstCustomPackId + sourcePackIds.Length));
 
         for (int index = 0; index < source.Length; index++) next[index] = source[index];
         for (int index = 0; index < sourcePackIds.Length; index++) {
             int sourcePackId = sourcePackIds[index];
             if (sourcePackId < 0 || sourcePackId >= source.Length)
                 throw new IndexOutOfRangeException($"style PackId {sourcePackId} is outside {source.Length} visual assets.");
-            next[firstCustomPackId + index] = source[sourcePackId];
+            PackSelectSceneAssets.SongSelectPackAssets style = source[sourcePackId];
+            CustomPackJacketOverride.Apply(style, sourcePackId);
+            next[firstCustomPackId + index] = style;
         }
 
         return next;

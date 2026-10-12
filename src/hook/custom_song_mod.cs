@@ -58,6 +58,7 @@ public sealed class CustomSongMod : MelonMod
 
     public override void OnDeinitializeMelon() {
         CustomSongAudioOverride.Dispose();
+        CustomPackJacketOverride.Dispose();
         CustomJacketOverride.Dispose();
     }
 }

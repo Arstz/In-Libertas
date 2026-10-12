@@ -6,6 +6,10 @@ Please read this guide in full before using the editor, this would answer many o
 
 Start by creating a new project file via `File->New project...` or importing spc with `File->Import SPC...`. When creating new project the editor will ask to provide a valid audio file and a jacket (2048x2048 is preferred), if importing instead, place them in the same folder as the spc itself (if you are importing spc, the files should be already named and arranged as needed and editor will recognize them). After you have created a project you can save it with `File->Save project...` and it will be written on disk as a .10no file (remember to save periodically), which you can then open later, a single instance of an editor can open one project file at the time. To export a project use `File->Export project...` and select CustomCharts folder in your game installation, make sure to have Melon Loader configured and hook dlls installed.
 
+## Handling files
+
+In Libertas primary format is .10no - a zlib container with json metadata and packed assets (audio - ogg vorbis, image - webp). .10no files are also the prefered method of distribution of the charts, to import .10no file use `File->Open project...` in the GUI, to load it ingame drop into `CustomCharts` folder in your game installation and hook will unpack it into a exported folder on next run. Unpacked charts will stay like this as folders, it is not advised to edit the exported files directly, better use the GUI and re-export if you dont know what you are doing. If you want to override the default Custom Charts pack jacket place packLarge (2048x512) and packSmall (1024x256) png or webp directly into `CustomCharts` folder.
+
 ## GUI
 
 The editor is arranged into resizable widgets with dividers, a toolbar on the left is the only exception.

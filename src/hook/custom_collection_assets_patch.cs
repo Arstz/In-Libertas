@@ -1,5 +1,6 @@
 using HarmonyLib;
 using Il2Cppifapp.Game;
+using Il2Cppifapp.Game.Scenes;
 
 namespace InFalsusCustomSongHook;
 
@@ -15,6 +16,16 @@ internal static class CustomCollectionAssetsPatch
     {
         // The scene is the final safe opportunity before it snapshots the
         // parallel pack-style array. It also guarantees DataAccess exists.
+        if (!CustomSongInstaller.IsComplete)
+            CustomSongInstaller.ProbeForReadyData();
+        CustomSongInstaller.ApplyCollectionAssets(__instance?.packSelectSceneAssets);
+    }
+}
+
+[HarmonyPatch(typeof(PackSelectButtonContainer), nameof(PackSelectButtonContainer.Start))]
+internal static class CustomSongSelectPackAssetsPatch {
+    [HarmonyPrefix]
+    private static void Prefix(PackSelectButtonContainer __instance) {
         if (!CustomSongInstaller.IsComplete)
             CustomSongInstaller.ProbeForReadyData();
         CustomSongInstaller.ApplyCollectionAssets(__instance?.packSelectSceneAssets);
