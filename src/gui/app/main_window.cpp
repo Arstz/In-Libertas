@@ -1,5 +1,6 @@
 #include "gui/app/main_window.h"
 #include "gui/app/settings_dialog.h"
+#include "gui/app/chartbox_dialog.h"
 #include "gui/key_bindings.h"
 
 #include "core/chart_project.h"
@@ -457,6 +458,7 @@ void MainWindow::buildInterface() {
     auto* editMenu = menuBar()->addMenu(QStringLiteral("Edit"));
     auto* windowMenu = menuBar()->addMenu(QStringLiteral("Window"));
     auto* settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
+    auto* chartboxAction = menuBar()->addAction(QStringLiteral("Chartbox"));
     auto* newProjectAction = fileMenu->addAction(QStringLiteral("New project..."));
     auto* openProjectAction = fileMenu->addAction(QStringLiteral("Open project..."));
     m_recentProjectMenu = fileMenu->addMenu(QStringLiteral("Open recent project"));
@@ -519,6 +521,7 @@ void MainWindow::buildInterface() {
     });
     connect(resetLayoutAction, &QAction::triggered, this, &MainWindow::resetLayout);
     connect(settingsAction, &QAction::triggered, this, &MainWindow::openSettings);
+    connect(chartboxAction, &QAction::triggered, this, &MainWindow::openChartbox);
     connect(m_state, &EditorState::historyChanged, this, [undoAction, redoAction](const bool canUndo, const bool canRedo) {
         undoAction->setEnabled(canUndo);
         redoAction->setEnabled(canRedo);
@@ -804,6 +807,20 @@ void MainWindow::openSettings() {
         m_handlingSettings = dialog.selectedHandlingSettings();
         m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
     }
+}
+
+void MainWindow::openChartbox() {
+    ChartboxDialog dialog(m_hasProject ? m_project.chartboxId : QString(), m_hasProject, this);
+    if (m_hasProject) {
+        dialog.setUploadHandlers([this] {
+            return saveProject() && !m_projectPath.isEmpty() ? m_projectPath : QString();
+        }, [this](const QString& reference) {
+            m_project.chartboxId = reference;
+            markProjectDirty();
+            return saveProject();
+        });
+    }
+    dialog.exec();
 }
 
 void MainWindow::updateVolumeSliderPlacement() {
@@ -1415,7 +1432,7 @@ void MainWindow::loadProject(const QString& path) {
     }
     QString backupPath;
     if (result.sourceVersion < kProjectVersion) {
-        if (!normalizeAssets(&result.project, &result.songData, &result.jacketData)
+        if ((result.sourceVersion < 4 && !normalizeAssets(&result.project, &result.songData, &result.jacketData))
             || !requireChartId(&result.project)) {
             return;
         }
@@ -1518,7 +1535,7 @@ bool MainWindow::saveProject() {
     }
     if (m_projectPath.isEmpty()) {
         saveProjectAs();
-        return !m_projectDirty;
+        return !m_projectPath.isEmpty() && !m_projectDirty;
     }
     storeLoadedDifficulty();
     if (!requireChartId(&m_project)) {

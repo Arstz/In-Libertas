@@ -66,6 +66,7 @@ struct ChartProject {
     QString jacketPath;
     QString songPath;
     QString chartId;
+    QString chartboxId;
     std::array<DifficultyChart, 4> difficulties;
 };
 

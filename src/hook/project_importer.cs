@@ -67,7 +67,7 @@ internal sealed class ProjectImporter {
         if (file.Length < 26 || Encoding.ASCII.GetString(reader.ReadBytes(4)) != "10NO") throw new InvalidDataException("Not a .10no project.");
         int version = reader.ReadUInt16();
         if (version == 2) throw new InvalidDataException("Open this legacy project in the updated editor to migrate it.");
-        if (version != ProjectReader.kVersion) throw new InvalidDataException("Unsupported project version.");
+        if (version < 4 || version > ProjectReader.kVersion) throw new InvalidDataException("Unsupported project version.");
         uint length = reader.ReadUInt32();
         reader.ReadUInt64(); reader.ReadUInt64();
         if (length > ProjectReader.kMaximumManifestBytes || length > file.Length - file.Position) throw new InvalidDataException("Invalid manifest length.");

@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Multimedia OpenGL OpenGLWidgets Widgets)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui Multimedia Network OpenGL OpenGLWidgets Widgets)
 find_package(FFmpeg REQUIRED COMPONENTS AVCODEC AVFORMAT AVUTIL)
 find_package(WebP CONFIG REQUIRED)
 find_path(SIGNALSMITH_STRETCH_INCLUDE_DIR signalsmith-stretch/signalsmith-stretch.h REQUIRED)
@@ -53,6 +53,8 @@ qt_add_executable(InLibertas WIN32
     src/gui/app/main_window.h
     src/gui/app/settings_dialog.cpp
     src/gui/app/settings_dialog.h
+    src/gui/app/chartbox_dialog.cpp
+    src/gui/app/chartbox_dialog.h
     src/gui/app/visual_settings.h
     src/gui/app/handling_settings.h
     src/gui/key_bindings.cpp
@@ -96,6 +98,7 @@ target_link_libraries(InLibertas PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Multimedia
+    Qt6::Network
     Qt6::OpenGL
     Qt6::OpenGLWidgets
     Qt6::Widgets

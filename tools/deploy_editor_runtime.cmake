@@ -11,6 +11,7 @@ endif()
 set(plugins
     platforms/qwindows
     multimedia/ffmpegmediaplugin
+    tls/qschannelbackend
     imageformats/qjpeg
     imageformats/qgif
     imageformats/qwebp

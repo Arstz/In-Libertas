@@ -56,6 +56,7 @@ private:
     void registerNavigationKeybinds();
     void setSkyGridSize(int divisor);
     void openSettings();
+    void openChartbox();
     void updateVolumeSliderPlacement();
     void buildWorkspace();
     void arrangeSplitters();

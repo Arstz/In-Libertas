@@ -10,6 +10,7 @@ namespace InFalsusCustomSongHook;
 
 internal sealed class ProjectPackage {
     internal string ChartId { get; init; }
+    internal string ChartboxId { get; init; }
     internal JsonElement Metadata { get; init; }
     internal JsonElement[] Difficulties { get; init; }
     internal byte[] Audio { get; init; }
@@ -17,7 +18,7 @@ internal sealed class ProjectPackage {
 }
 
 internal static class ProjectReader {
-    internal const int kVersion = 4;
+    internal const int kVersion = 5;
     internal const int kMaximumManifestBytes = 32 * 1024 * 1024;
     internal const long kMaximumJacketPixels = 67108864;
     internal static readonly string[] DifficultyNames = { "minimal", "evolved", "ultimate", "forbidden" };
@@ -33,7 +34,7 @@ internal static class ProjectReader {
         ushort version = reader.ReadUInt16();
         if (version == 2 || version == 3)
             throw new InvalidDataException("Legacy .10no: open it in the updated In Libertas editor to migrate it first.");
-        if (version != kVersion) throw new InvalidDataException("Unsupported .10no version: " + version);
+        if (version < 4 || version > kVersion) throw new InvalidDataException("Unsupported .10no version: " + version);
         uint manifestLength = reader.ReadUInt32();
         ulong audioLength = reader.ReadUInt64();
         ulong jacketLength = reader.ReadUInt64();
@@ -47,10 +48,11 @@ internal static class ProjectReader {
         if (Text(manifest, "format") != "in_libertas_project" || manifest.GetProperty("version").GetInt32() != version)
             throw new InvalidDataException("Invalid project manifest format or version.");
         string chartId = Text(manifest, "chart_id");
+        string chartboxId = version >= 5 ? Text(manifest, "chartbox_id") : string.Empty;
         if (!ValidChartId(chartId)) throw new InvalidDataException("A valid user-entered Chart ID is required.");
         JsonElement assets = manifest.GetProperty("assets");
         if (Text(assets, "song_file_name") != "audio.ogg" || Text(assets, "jacket_file_name") != "jacket.webp")
-            throw new InvalidDataException("Version-4 projects require audio.ogg and jacket.webp assets.");
+            throw new InvalidDataException("Projects require audio.ogg and jacket.webp assets.");
         byte[] audio = ReadExactly(reader, (int)audioLength);
         byte[] jacket = ReadExactly(reader, (int)jacketLength);
         ProjectMedia.Validate(audio, jacket);
@@ -64,7 +66,8 @@ internal static class ProjectReader {
         if (!difficulties.Any(chart => chart.GetProperty("notes").GetArrayLength() > 0))
             throw new InvalidDataException("Project has no populated difficulties.");
 
-        return new ProjectPackage { ChartId = chartId, Metadata = metadata, Difficulties = difficulties, Audio = audio, Jacket = jacket };
+        return new ProjectPackage { ChartId = chartId, ChartboxId = chartboxId, Metadata = metadata,
+            Difficulties = difficulties, Audio = audio, Jacket = jacket };
     }
 
     internal static byte[] ReadExactly(BinaryReader reader, int count) {

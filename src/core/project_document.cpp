@@ -182,6 +182,7 @@ constexpr char kProjectMagic[] = "10NO";
             {QStringLiteral("gameplay_background"), project.metadata.gameplayBackground},
         }},
         {QStringLiteral("chart_id"), project.chartId},
+        {QStringLiteral("chartbox_id"), project.chartboxId},
         {QStringLiteral("assets"), QJsonObject{
             {QStringLiteral("song_file_name"), QFileInfo(project.songPath).fileName()},
             {QStringLiteral("jacket_file_name"), QFileInfo(project.jacketPath).fileName()},
@@ -213,18 +214,25 @@ constexpr char kProjectMagic[] = "10NO";
         .gameplayBackground = metadata.value(QStringLiteral("gameplay_background")).toString(QStringLiteral("0")),
     };
     loaded.chartId = object.value(QStringLiteral("chart_id")).toString();
+    if (version >= 5) {
+        if (!object.value(QStringLiteral("chartbox_id")).isString()) {
+            *error = QStringLiteral("The project requires a Chartbox ID string.");
+            return false;
+        }
+        loaded.chartboxId = object.value(QStringLiteral("chartbox_id")).toString();
+    }
     loaded.songPath = assets.value(QStringLiteral("song_file_name")).toString();
     loaded.jacketPath = assets.value(QStringLiteral("jacket_file_name")).toString();
     for (int index = 0; index < 4; ++index) {
         const Difficulty difficulty = difficultyForIndex(index);
         const QJsonObject chart = difficulties.value(difficultyName(difficulty)).toObject();
-        if (version == kProjectVersion && !chart.value(QStringLiteral("metadata")).toObject()
+        if (version >= 4 && !chart.value(QStringLiteral("metadata")).toObject()
             .value(QStringLiteral("charters")).isString()) {
             *error = QStringLiteral("Each difficulty requires a charters string in its metadata.");
             return false;
         }
         loaded.difficulties.at(index) = chartFromJson(difficulty, chart);
-        if (version < kProjectVersion) {
+        if (version < 4) {
             loaded.difficulties.at(index).metadata.charters = metadata.value(QStringLiteral("chart_designer")).toString();
         }
     }
