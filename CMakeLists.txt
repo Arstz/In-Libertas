@@ -82,6 +82,8 @@ qt_add_executable(InLibertas WIN32
     src/gui/state/playback_controller.h
     src/gui/state/audio_playback_stream.cpp
     src/gui/state/audio_playback_stream.h
+    src/gui/state/hitsound_bank.cpp
+    src/gui/state/hitsound_bank.h
     src/gui/state/playback_rates.h
     src/gui/canvas/conveyor_view.cpp
     src/gui/canvas/conveyor_view.h
@@ -90,6 +92,13 @@ qt_add_executable(InLibertas WIN32
 )
 
 set_target_properties(InLibertas PROPERTIES OUTPUT_NAME "In Libertas")
+
+add_custom_target(InLibertasAssets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:InLibertas>/assets"
+    VERBATIM
+)
+add_dependencies(InLibertas InLibertasAssets)
 
 target_include_directories(InLibertas PRIVATE src ${FFMPEG_INCLUDE_DIRS} ${SIGNALSMITH_STRETCH_INCLUDE_DIR})
 
@@ -124,6 +133,8 @@ if(BUILD_TESTING)
             src/gui/state/audio_playback_stream.cpp
             src/gui/state/playback_controller.cpp
             src/gui/state/playback_controller.h
+            src/gui/state/hitsound_bank.cpp
+            src/gui/state/hitsound_bank.h
             src/core/waveform.cpp
         )
         target_include_directories(audio_playback_stream_test PRIVATE src ${SIGNALSMITH_STRETCH_INCLUDE_DIR})

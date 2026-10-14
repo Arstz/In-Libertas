@@ -21,6 +21,12 @@ using infalsus::gui::kPlaybackRates;
 
 PlaybackController::PlaybackController(QObject* parent)
     : QObject(parent) {
+    m_audioFormat = QMediaDevices::defaultAudioOutput().preferredFormat();
+    if (!m_audioFormat.isValid()) {
+        m_audioFormat.setSampleRate(kDefaultSampleRate);
+        m_audioFormat.setChannelCount(kDefaultChannelCount);
+    }
+    m_audioFormat.setSampleFormat(QAudioFormat::Float);
     m_clockUpdateTimer.setInterval(kClockUpdateIntervalMilliseconds);
     m_clockUpdateTimer.setTimerType(Qt::PreciseTimer);
 
@@ -28,6 +34,7 @@ PlaybackController::PlaybackController(QObject* parent)
 }
 
 PlaybackController::~PlaybackController() {
+    stopHitsoundPreview();
     m_audioDecoder.reset();
     resetAudioPlayback();
 }
@@ -45,7 +52,56 @@ qreal PlaybackController::playbackRate() const {
 }
 
 qreal PlaybackController::volume() const {
-    return m_volume;
+    return m_mix->songVolume.load();
+}
+
+qreal PlaybackController::effectsVolume() const {
+    return m_mix->effectsVolume.load();
+}
+
+const QAudioFormat& PlaybackController::audioFormat() const {
+    return m_audioFormat;
+}
+
+void PlaybackController::setHitsoundMix(std::shared_ptr<AudioMixData> mix) {
+    mix->songVolume = volume();
+    mix->effectsVolume = effectsVolume();
+    m_mix = std::move(mix);
+}
+
+void PlaybackController::setHitObjects(const ChartData& chart) {
+    const qint64 currentPosition = m_playbackActive ? clockPosition() : m_positionMilliseconds;
+    m_hitsoundEvents = hitsoundEventsForChart(chart);
+    resetAudioPlayback();
+    publishPosition(currentPosition);
+    if (m_playbackActive && !m_usingFallbackClock) {
+        startAudioPlayback();
+    }
+}
+
+void PlaybackController::previewHitsound(const QByteArray& samples) {
+    if (samples.isEmpty()) {
+        return;
+    }
+    if (m_playbackActive && m_audioStream) {
+        m_audioStream->preview(samples);
+        return;
+    }
+    stopHitsoundPreview();
+    const qint64 duration = (m_audioFormat.durationForBytes(samples.size()) + 999) / 1000;
+    m_previewStream = std::make_unique<AudioPlaybackStream>(QByteArray(), m_audioFormat, 0, duration, kFullPlaybackRate);
+    m_previewStream->setMix(m_mix, {});
+    m_previewStream->preview(samples);
+    m_previewSink = std::make_unique<QAudioSink>(m_audioFormat);
+    m_previewSink->start(m_previewStream.get());
+}
+
+void PlaybackController::stopHitsoundPreview() {
+    if (m_previewSink) {
+        m_previewSink->reset();
+        m_previewSink.reset();
+    }
+    m_previewStream.reset();
 }
 
 void PlaybackController::setChartDuration(const qint64 durationMilliseconds) {
@@ -135,10 +191,11 @@ void PlaybackController::setPlaybackRate(const qreal playbackRate) {
 }
 
 void PlaybackController::setVolume(const qreal volume) {
-    m_volume = std::clamp(volume, qreal(0.0), qreal(1.0));
-    if (m_audioSink) {
-        m_audioSink->setVolume(m_volume);
-    }
+    m_mix->songVolume = std::clamp(volume, qreal(0.0), qreal(1.0));
+}
+
+void PlaybackController::setEffectsVolume(const qreal volume) {
+    m_mix->effectsVolume = std::clamp(volume, qreal(0.0), qreal(1.0));
 }
 
 void PlaybackController::togglePlayback() {
@@ -159,7 +216,8 @@ void PlaybackController::togglePlayback() {
         setPosition(0);
     }
     m_playbackActive = true;
-    m_usingFallbackClock = !m_hasAudioSource || m_audioFailed;
+    stopHitsoundPreview();
+    m_usingFallbackClock = m_audioFailed;
     if (m_usingFallbackClock) {
         restartClock(m_positionMilliseconds);
     } else if (m_audioSink) {
@@ -279,7 +337,6 @@ void PlaybackController::resetAudioSource() {
     m_audioBuffer.setBuffer(nullptr);
     m_audioData.clear();
     m_decodedAudio.reset();
-    m_audioFormat = {};
     m_hasAudioSource = false;
     m_usingFallbackClock = false;
     m_audioFailed = false;
@@ -298,12 +355,6 @@ void PlaybackController::resetAudioPlayback() {
 }
 
 void PlaybackController::createAudioDecoder() {
-    m_audioFormat = QMediaDevices::defaultAudioOutput().preferredFormat();
-    if (!m_audioFormat.isValid()) {
-        m_audioFormat.setSampleRate(kDefaultSampleRate);
-        m_audioFormat.setChannelCount(kDefaultChannelCount);
-    }
-    m_audioFormat.setSampleFormat(QAudioFormat::Float);
     m_decodedAudio = std::make_shared<AudioPlaybackData>();
     m_decodedAudio->complete = false;
     m_audioDecoder = std::make_unique<QAudioDecoder>();
@@ -316,22 +367,23 @@ void PlaybackController::createAudioDecoder() {
 }
 
 void PlaybackController::startAudioPlayback() {
-    if (m_audioSink || !m_decodedAudio || m_decodedAudio->samples.isEmpty() || m_audioFailed
+    if (m_audioSink || (m_hasAudioSource && (!m_decodedAudio || m_decodedAudio->samples.isEmpty())) || m_audioFailed
         || m_chartDurationMilliseconds <= m_positionMilliseconds) {
         return;
     }
 
     m_audioStartPositionMilliseconds = m_positionMilliseconds;
     if (!m_audioStream) {
-        m_audioStream = std::make_unique<AudioPlaybackStream>(m_decodedAudio, m_audioFormat,
+        const auto source = m_hasAudioSource ? m_decodedAudio : std::make_shared<AudioPlaybackData>();
+        m_audioStream = std::make_unique<AudioPlaybackStream>(source, m_audioFormat,
             m_positionMilliseconds, m_chartDurationMilliseconds, m_playbackRate);
+        m_audioStream->setMix(m_mix, m_hitsoundEvents);
     }
     if (m_audioStream->bytesAvailable() == 0) {
         return;
     }
     m_audioSink = std::make_unique<QAudioSink>(m_audioFormat);
     m_audioSink->setBufferSize(m_audioFormat.bytesForDuration(kOutputBufferMicroseconds));
-    m_audioSink->setVolume(m_volume);
     m_audioSink->start(m_audioStream.get());
     if (m_audioSink->error() != QAudio::NoError) {
         handleAudioError(QStringLiteral("Could not start audio output (%1).").arg(static_cast<int>(m_audioSink->error())));

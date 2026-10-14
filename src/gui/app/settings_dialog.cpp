@@ -1,5 +1,10 @@
 #include "gui/app/settings_dialog.h"
+#include "core/media_assets.h"
+#include "gui/state/hitsound_bank.h"
+#include "gui/state/playback_controller.h"
 
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QEvent>
 #include <QtCore/QSettings>
 #include <QtGui/QKeyEvent>
@@ -8,6 +13,8 @@
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QFileDialog>
+#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QKeySequenceEdit>
 #include <QtWidgets/QLabel>
@@ -66,10 +73,11 @@ protected:
 } // namespace
 
 SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettings& visuals,
-    const HandlingSettings& handling, QWidget* parent)
+    const HandlingSettings& handling, HitsoundBank* hitsounds, PlaybackController* playback, QWidget* parent)
     : QDialog(parent)
     , m_keyBindings(keyBindings)
     , m_visuals(visuals)
+    , m_playback(playback)
     , m_bindings(keyBindings->bindings()) {
     auto* layout = new QVBoxLayout(this);
     auto* contentLayout = new QHBoxLayout;
@@ -87,7 +95,8 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
 
     setWindowTitle(QStringLiteral("Settings"));
     resize(kSettingsWidth, kSettingsHeight);
-    navigation->addItems({QStringLiteral("Keybinds"), QStringLiteral("Visuals"), QStringLiteral("Handling")});
+    navigation->addItems({QStringLiteral("Keybinds"), QStringLiteral("Visuals"), QStringLiteral("Handling"),
+        QStringLiteral("Hitsounds")});
     navigation->setCurrentRow(0);
     navigation->setFixedWidth(kNavigationWidth);
     navigation->setUniformItemSizes(true);
@@ -123,6 +132,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     pageLayout->addStretch();
     buildVisualsPage(pages);
     buildHandlingPage(pages, handling);
+    buildHitsoundsPage(pages, hitsounds);
     contentLayout->addWidget(navigation);
     contentLayout->addWidget(pages, 1);
     layout->addLayout(contentLayout, 1);
@@ -131,6 +141,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     connect(resetAll, &QPushButton::clicked, this, &SettingsDialog::resetAllShortcuts);
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(this, &QDialog::finished, m_playback, &PlaybackController::stopHitsoundPreview);
     updateConflicts();
 }
 
@@ -187,11 +198,16 @@ void SettingsDialog::accept() {
     if (!updateConflicts()) {
         return;
     }
+    if (m_hitsounds->isDecoding()) {
+        QMessageBox::information(this, QStringLiteral("Hitsounds"), QStringLiteral("Please wait for the sounds to finish loading."));
+        return;
+    }
     const QVector<KeyBinding> bindings = editedBindings();
     m_keyBindings->setBindings(bindings);
     saveKeybinds(bindings);
     saveVisualSettings(selectedVisualSettings());
     saveHandlingSettings(selectedHandlingSettings());
+    m_hitsounds->save();
     QDialog::accept();
 }
 
@@ -216,7 +232,7 @@ void SettingsDialog::buildVisualsPage(QStackedWidget* pages) {
     controlsLayout->addWidget(m_playheadColorMode, 1);
     controlsLayout->addWidget(m_playheadColorButton);
     rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    rows->addRow(QStringLiteral("Custom playhead color"), controls);
+    rows->addRow(QStringLiteral("Playhead color"), controls);
     pageLayout->addLayout(rows);
     pageLayout->addStretch();
     connect(m_playheadColorMode, &QComboBox::currentIndexChanged, this, &SettingsDialog::updateVisualControls);
@@ -267,6 +283,79 @@ void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSett
 void SettingsDialog::saveHandlingSettings(const HandlingSettings& handling) {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("handling/invert_mousewheel_scroll"), handling.invertMousewheelScroll);
+}
+
+void SettingsDialog::buildHitsoundsPage(QStackedWidget* pages, HitsoundBank* hitsounds) {
+    auto* scrollArea = new QScrollArea(pages);
+    auto* page = new QWidget(scrollArea);
+    auto* pageLayout = new QVBoxLayout(page);
+    auto* rows = new QFormLayout;
+    m_hitsounds = new HitsoundBank(m_playback->audioFormat(), this);
+    m_pendingReplacements.resize(kHitsoundDescriptions.size());
+
+    pages->addWidget(scrollArea);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setWidget(page);
+    rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    for (int index = 0; index < static_cast<int>(kHitsoundDescriptions.size()); ++index) {
+        auto* controls = new QWidget(page);
+        auto* layout = new QHBoxLayout(controls);
+        auto* sound = new QPushButton(hitsounds->files()[index].name, controls);
+        auto* pick = new QPushButton(QStringLiteral("Pick file"), controls);
+        sound->setEnabled(false);
+        sound->setToolTip(QStringLiteral("Play sound"));
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(kControlSpacing);
+        layout->addWidget(sound, 1);
+        layout->addWidget(pick);
+        rows->addRow(QString::fromLatin1(kHitsoundDescriptions[index].label), controls);
+        m_soundButtons.append(sound);
+        m_pickButtons.append(pick);
+        connect(sound, &QPushButton::clicked, this, [this, index] {
+            m_playback->previewHitsound(m_hitsounds->samples(index));
+        });
+        connect(pick, &QPushButton::clicked, this, [this, index] { pickHitsound(index); });
+    }
+    pageLayout->addLayout(rows);
+    pageLayout->addStretch();
+    connect(m_hitsounds, &HitsoundBank::soundReady, this, [this](const int index) {
+        m_soundButtons[index]->setText(m_hitsounds->files()[index].name);
+        m_soundButtons[index]->setEnabled(true);
+        m_soundButtons[index]->setToolTip(QStringLiteral("Play sound"));
+        m_pickButtons[index]->setEnabled(true);
+        m_pendingReplacements[index] = false;
+    });
+    connect(m_hitsounds, &HitsoundBank::soundError, this, [this](const int index, const QString& message) {
+        m_pickButtons[index]->setEnabled(true);
+        m_soundButtons[index]->setEnabled(!m_hitsounds->samples(index).isEmpty());
+        m_soundButtons[index]->setToolTip(message);
+        if (m_pendingReplacements[index]) {
+            m_pendingReplacements[index] = false;
+            QMessageBox::warning(this, QStringLiteral("Hitsound Error"), message);
+        }
+    });
+    m_hitsounds->load(hitsounds->files());
+}
+
+void SettingsDialog::pickHitsound(const int index) {
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Pick Hitsound"), QString(), audioFileDialogFilter());
+    if (path.isEmpty()) {
+        return;
+    }
+    QFile source(path);
+    if (!source.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, QStringLiteral("Hitsound Error"), source.errorString());
+        return;
+    }
+    const QByteArray data = source.readAll();
+    if (data.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Hitsound Error"), QStringLiteral("The sound file is empty or could not be read."));
+        return;
+    }
+    m_pendingReplacements[index] = true;
+    m_pickButtons[index]->setEnabled(false);
+    m_soundButtons[index]->setEnabled(false);
+    m_hitsounds->replace(index, {QFileInfo(path).fileName(), data, true});
 }
 
 QVector<KeyBinding> SettingsDialog::editedBindings() const {

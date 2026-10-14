@@ -302,6 +302,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_state = new EditorState(this);
     m_keyBindings = new KeyBindingRouter(this);
     m_playback = new PlaybackController(this);
+    m_hitsounds = new HitsoundBank(m_playback->audioFormat(), this);
+    m_hitsounds->load(HitsoundBank::loadFiles());
+    m_playback->setHitsoundMix(m_hitsounds->mix());
     buildInterface();
     buildWorkspace();
     buildToolBar();
@@ -583,6 +586,7 @@ void MainWindow::buildInterface() {
         m_verification->setChart(chart, m_state->speedEvents(), m_state->timingPoints());
         m_timeline->setDuration(chart.durationMilliseconds);
         m_playback->setChartDuration(chart.durationMilliseconds);
+        m_playback->setHitObjects(chart);
         if (m_hasProject && !m_loadingProject) {
             storeLoadedDifficulty();
             markProjectDirty();
@@ -621,6 +625,7 @@ void MainWindow::buildInterface() {
         });
     });
     connect(m_state, &EditorState::hitObjectsChanged, this, [this] {
+        m_playback->setHitObjects(m_state->chart());
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
         markProjectDirty();
         updateStatus();
@@ -710,15 +715,12 @@ void MainWindow::buildToolBar() {
     actions->addAction(placeAction);
     actions->addAction(selectAction);
     actions->addAction(moveAction);
-    // This is intentionally not added through QToolBar::addWidget().  That
-    // API makes it an action, which puts a tall slider in the toolbar's
-    // overflow menu on shorter editor layouts.  A direct child stays exposed
-    // below the tool actions and can track the Flat view's playhead.
+    m_toolsToolbar->setMinimumWidth(92);
     m_volumeSlider = new QSlider(Qt::Vertical, m_toolsToolbar);
     m_volumeSlider->setObjectName(QStringLiteral("volumeSlider"));
     m_volumeSlider->setRange(0, 100);
     m_volumeSlider->setInvertedAppearance(false);
-    m_volumeSlider->setToolTip(QStringLiteral("Volume"));
+    m_volumeSlider->setAccessibleName(QStringLiteral("Song volume"));
     m_volumeSlider->setStyleSheet(QStringLiteral(R"(
         QSlider#volumeSlider {
             background: rgb(3, 11, 18);
@@ -744,11 +746,26 @@ void MainWindow::buildToolBar() {
             margin: 0 -2px;
         }
     )"));
+    m_effectsVolumeSlider = new QSlider(Qt::Vertical, m_toolsToolbar);
+    m_effectsVolumeSlider->setObjectName(QStringLiteral("effectsVolumeSlider"));
+    m_effectsVolumeSlider->setRange(m_volumeSlider->minimum(), m_volumeSlider->maximum());
+    m_effectsVolumeSlider->setAccessibleName(QStringLiteral("Hitsound volume"));
+    m_effectsVolumeSlider->setStyleSheet(QString(m_volumeSlider->styleSheet()).replace(
+        QStringLiteral("volumeSlider"), QStringLiteral("effectsVolumeSlider")));
+    m_songVolumeLabel = new QLabel(QStringLiteral("SNG"), m_toolsToolbar);
+    m_effectsVolumeLabel = new QLabel(QStringLiteral("SFX"), m_toolsToolbar);
+    m_songVolumeLabel->setAlignment(Qt::AlignCenter);
+    m_effectsVolumeLabel->setAlignment(Qt::AlignCenter);
 
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     const int volumePercent = std::clamp(settings.value(QStringLiteral("playback/volume"), 100).toInt(), 0, 100);
+    const int effectsVolumePercent = std::clamp(settings.value(QStringLiteral("playback/effects_volume"), 100).toInt(), 0, 100);
     m_volumeSlider->setValue(volumePercent);
+    m_volumeSlider->setToolTip(QStringLiteral("Song volume: %1%").arg(volumePercent));
     m_playback->setVolume(logarithmicVolumeForPercent(volumePercent));
+    m_effectsVolumeSlider->setValue(effectsVolumePercent);
+    m_effectsVolumeSlider->setToolTip(QStringLiteral("Hitsound volume: %1%").arg(effectsVolumePercent));
+    m_playback->setEffectsVolume(logarithmicVolumeForPercent(effectsVolumePercent));
     addToolBar(Qt::LeftToolBarArea, m_toolsToolbar);
 
     connect(placeAction, &QAction::triggered, this, [this] { m_state->setTool(EditorTool::Place); });
@@ -761,9 +778,15 @@ void MainWindow::buildToolBar() {
     });
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](const int volume) {
         m_playback->setVolume(logarithmicVolumeForPercent(volume));
-        m_volumeSlider->setToolTip(QStringLiteral("Volume: %1%").arg(volume));
+        m_volumeSlider->setToolTip(QStringLiteral("Song volume: %1%").arg(volume));
         QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
         settings.setValue(QStringLiteral("playback/volume"), volume);
+    });
+    connect(m_effectsVolumeSlider, &QSlider::valueChanged, this, [this](const int volume) {
+        m_playback->setEffectsVolume(logarithmicVolumeForPercent(volume));
+        m_effectsVolumeSlider->setToolTip(QStringLiteral("Hitsound volume: %1%").arg(volume));
+        QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
+        settings.setValue(QStringLiteral("playback/effects_volume"), volume);
     });
 }
 
@@ -800,8 +823,9 @@ void MainWindow::setSkyGridSize(const int divisor) {
 }
 
 void MainWindow::openSettings() {
-    SettingsDialog dialog(m_keyBindings, m_visualSettings, m_handlingSettings, this);
+    SettingsDialog dialog(m_keyBindings, m_visualSettings, m_handlingSettings, m_hitsounds, m_playback, this);
     if (dialog.exec() == QDialog::Accepted) {
+        m_hitsounds->load(HitsoundBank::loadFiles());
         m_visualSettings = dialog.selectedVisualSettings();
         m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
         m_handlingSettings = dialog.selectedHandlingSettings();
@@ -831,13 +855,27 @@ void MainWindow::updateVolumeSliderPlacement() {
 
     constexpr int kHorizontalPadding = 7;
     constexpr int kBottomPadding = 8;
+    constexpr int kColumnSpacing = 6;
+    constexpr int kLabelHeight = 20;
+    int minimumTop = kLabelHeight;
+    for (QAction* action : m_toolsToolbar->actions()) {
+        minimumTop = std::max(minimumTop, m_toolsToolbar->actionGeometry(action).bottom() + kColumnSpacing + kLabelHeight);
+    }
     const int desiredTop = m_toolsToolbar->mapFromGlobal(
         m_flatView->mapToGlobal(QPoint(0, m_flatView->playheadViewportY()))).y();
-    const int sliderTop = std::clamp(desiredTop, 0, std::max(0, m_toolsToolbar->height() - kBottomPadding));
+    const int sliderTop = std::clamp(desiredTop, minimumTop,
+        std::max(minimumTop, m_toolsToolbar->height() - kBottomPadding));
     const int sliderHeight = std::max(0, m_toolsToolbar->height() - sliderTop - kBottomPadding);
-    const int sliderWidth = std::max(0, m_toolsToolbar->width() - kHorizontalPadding * 2);
+    const int sliderWidth = std::max(0, (m_toolsToolbar->width() - kHorizontalPadding * 2 - kColumnSpacing) / 2);
+    const int effectsLeft = kHorizontalPadding + sliderWidth + kColumnSpacing;
     m_volumeSlider->setGeometry(kHorizontalPadding, sliderTop, sliderWidth, sliderHeight);
+    m_effectsVolumeSlider->setGeometry(effectsLeft, sliderTop, sliderWidth, sliderHeight);
+    m_songVolumeLabel->setGeometry(kHorizontalPadding, sliderTop - kLabelHeight, sliderWidth, kLabelHeight);
+    m_effectsVolumeLabel->setGeometry(effectsLeft, sliderTop - kLabelHeight, sliderWidth, kLabelHeight);
     m_volumeSlider->raise();
+    m_effectsVolumeSlider->raise();
+    m_songVolumeLabel->raise();
+    m_effectsVolumeLabel->raise();
 }
 
 void MainWindow::buildWorkspace() {

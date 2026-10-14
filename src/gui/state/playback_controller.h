@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gui/state/playback_rates.h"
+#include "gui/state/hitsound_bank.h"
 
 #include <QtCore/QBuffer>
 #include <QtCore/QObject>
@@ -26,13 +27,20 @@ public:
     [[nodiscard]] bool isPlaying() const;
     [[nodiscard]] qreal playbackRate() const;
     [[nodiscard]] qreal volume() const;
+    [[nodiscard]] qreal effectsVolume() const;
+    [[nodiscard]] const QAudioFormat& audioFormat() const;
 
+    void setHitsoundMix(std::shared_ptr<AudioMixData> mix);
+    void setHitObjects(const ChartData& chart);
+    void previewHitsound(const QByteArray& samples);
+    void stopHitsoundPreview();
     void setChartDuration(qint64 durationMilliseconds);
     void setAudioSource(const QUrl& source);
     void setAudioData(QByteArray audioData, const QUrl& sourceHint);
     void setPosition(qint64 positionMilliseconds);
     void setPlaybackRate(qreal playbackRate);
     void setVolume(qreal volume);
+    void setEffectsVolume(qreal volume);
     void togglePlayback();
     void scrubBy(qint64 offsetMilliseconds);
     void increasePlaybackRate();
@@ -70,6 +78,10 @@ private:
     std::unique_ptr<QAudioDecoder> m_audioDecoder;
     std::unique_ptr<AudioPlaybackStream> m_audioStream;
     std::unique_ptr<QAudioSink> m_audioSink;
+    std::unique_ptr<AudioPlaybackStream> m_previewStream;
+    std::unique_ptr<QAudioSink> m_previewSink;
+    std::shared_ptr<AudioMixData> m_mix = std::make_shared<AudioMixData>();
+    QVector<HitsoundEvent> m_hitsoundEvents;
     QTimer m_clockUpdateTimer;
     QByteArray m_audioData;
     std::shared_ptr<AudioPlaybackData> m_decodedAudio;
@@ -78,7 +90,6 @@ private:
     qint64 m_audioStartPositionMilliseconds = 0;
     qint64 m_positionMilliseconds = 0;
     qreal m_playbackRate = infalsus::gui::kFullPlaybackRate;
-    qreal m_volume = 1.0;
     bool m_playbackActive = false;
     bool m_hasAudioSource = false;
     bool m_usingFallbackClock = false;

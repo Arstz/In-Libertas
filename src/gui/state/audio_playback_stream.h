@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gui/state/hitsound_bank.h"
+
 #include <QtCore/QByteArray>
 #include <QtCore/QIODevice>
 #include <QtMultimedia/QAudioFormat>
@@ -20,6 +22,8 @@ public:
     ~AudioPlaybackStream() override;
 
     void sourceUpdated();
+    void setMix(std::shared_ptr<AudioMixData> mix, const QVector<HitsoundEvent>& events);
+    void preview(QByteArray samples);
 
     [[nodiscard]] bool isSequential() const override;
     [[nodiscard]] bool atEnd() const override;

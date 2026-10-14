@@ -12,6 +12,7 @@
 
 class ConveyorView;
 class PlaybackController;
+class HitsoundBank;
 class QAudioFormat;
 class QButtonGroup;
 class QComboBox;
@@ -100,6 +101,7 @@ private:
     HandlingSettings m_handlingSettings;
     KeyBindingRouter* m_keyBindings = nullptr;
     PlaybackController* m_playback = nullptr;
+    HitsoundBank* m_hitsounds = nullptr;
     QFutureWatcher<TimingEstimate>* m_timingWatcher = nullptr;
     ConveyorView* m_viewer = nullptr;
     FlatView* m_flatView = nullptr;
@@ -117,6 +119,9 @@ private:
     QToolBar* m_toolsToolbar = nullptr;
     QMenu* m_recentProjectMenu = nullptr;
     QSlider* m_volumeSlider = nullptr;
+    QSlider* m_effectsVolumeSlider = nullptr;
+    QLabel* m_songVolumeLabel = nullptr;
+    QLabel* m_effectsVolumeLabel = nullptr;
     QComboBox* m_flatModeSelector = nullptr;
     QToolButton* m_skyGridToggle = nullptr;
     QButtonGroup* m_skyGridSizes = nullptr;
