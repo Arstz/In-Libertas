@@ -54,6 +54,7 @@ protected:
 private:
     void buildInterface();
     void buildToolBar();
+    void updateToolButtonSizes();
     void registerNavigationKeybinds();
     void setSkyGridSize(int divisor);
     void openSettings();

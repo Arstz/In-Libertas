@@ -40,6 +40,7 @@ public:
     void setGridDuration(qint64 durationMilliseconds);
     void setDivisor(int divisor);
     void setTimingPoints(QVector<TimingPoint> timingPoints);
+    void setSpeedEvents(QVector<SpeedEvent> speedEvents);
     void setLaneEvents(QVector<LaneEvent> laneEvents);
     void setSelectedHitObjects(QVector<int> indexes);
     void clearWaveform();
@@ -159,6 +160,7 @@ private:
     [[nodiscard]] double playheadY() const;
     [[nodiscard]] double flickTriangleHeight() const;
     void drawWaveform(QPainter& painter, const QRectF& area) const;
+    void drawWaveformEvents(QPainter& painter, const QRectF& area) const;
     void drawDividers(QPainter& painter, const QRectF& area) const;
     void drawGround(QPainter& painter, const QRectF& area, int opacity) const;
     void drawSkyGrid(QPainter& painter, const QRectF& area) const;
@@ -177,6 +179,7 @@ private:
     FlatViewMode m_mode = FlatViewMode::Both;
     EditorTool m_tool = EditorTool::Place;
     QVector<TimingPoint> m_timingPoints;
+    QVector<SpeedEvent> m_speedEvents;
     QVector<LaneEvent> m_laneEvents;
     QVector<int> m_selectedHitObjects;
     QSet<int> m_selectedHitObjectIndexes;

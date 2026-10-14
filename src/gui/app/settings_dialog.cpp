@@ -8,6 +8,7 @@
 #include <QtCore/QEvent>
 #include <QtCore/QSettings>
 #include <QtGui/QKeyEvent>
+#include <QtGui/QFontMetrics>
 #include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QColorDialog>
 #include <QtWidgets/QComboBox>
@@ -33,6 +34,7 @@ constexpr int kNavigationWidth = 150;
 constexpr int kSettingsWidth = 800;
 constexpr int kSettingsHeight = 650;
 constexpr int kControlSpacing = 8;
+constexpr int kHitsoundLabelGapCharacters = 15;
 constexpr int kColorTextLightnessThreshold = 128;
 constexpr auto kShortcutConflictStyle = "QLineEdit { border: 2px solid #d9534f; }";
 
@@ -297,6 +299,7 @@ void SettingsDialog::buildHitsoundsPage(QStackedWidget* pages, HitsoundBank* hit
     scrollArea->setWidgetResizable(true);
     scrollArea->setWidget(page);
     rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    rows->setHorizontalSpacing(QFontMetrics(page->font()).averageCharWidth() * kHitsoundLabelGapCharacters);
     for (int index = 0; index < static_cast<int>(kHitsoundDescriptions.size()); ++index) {
         auto* controls = new QWidget(page);
         auto* layout = new QHBoxLayout(controls);

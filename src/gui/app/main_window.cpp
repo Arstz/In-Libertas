@@ -37,6 +37,7 @@
 #include <QtCore/QUrl>
 #include <QtMultimedia/QAudioFormat>
 #include <QtGui/QActionGroup>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QImage>
 #include <QtGui/QWheelEvent>
@@ -78,6 +79,8 @@ namespace infalsus::gui {
 namespace {
 
 constexpr int kRecentProjectLimit = 10;
+constexpr int kToolsToolbarMinimumWidth = 92;
+constexpr int kToolButtonTextPadding = 8;
 
 [[nodiscard]] bool isProjectDocumentFile(const QFileInfo& fileInfo) {
     return fileInfo.isFile() && fileInfo.suffix().compare(QStringLiteral("10no"), Qt::CaseInsensitive) == 0;
@@ -715,7 +718,7 @@ void MainWindow::buildToolBar() {
     actions->addAction(placeAction);
     actions->addAction(selectAction);
     actions->addAction(moveAction);
-    m_toolsToolbar->setMinimumWidth(92);
+    m_toolsToolbar->setMinimumWidth(kToolsToolbarMinimumWidth);
     m_volumeSlider = new QSlider(Qt::Vertical, m_toolsToolbar);
     m_volumeSlider->setObjectName(QStringLiteral("volumeSlider"));
     m_volumeSlider->setRange(0, 100);
@@ -790,6 +793,44 @@ void MainWindow::buildToolBar() {
     });
 }
 
+void MainWindow::updateToolButtonSizes() {
+    const QMargins margins = m_toolsToolbar->layout()->contentsMargins();
+    const auto actions = m_toolsToolbar->actions();
+    QFont font = m_toolsToolbar->font();
+    const int buttonSize = std::max(1, m_toolsToolbar->width() - margins.left() - margins.right());
+    const int textSize = std::max(1, buttonSize - kToolButtonTextPadding * 2);
+    int minimumSize = 1;
+    int maximumSize = textSize;
+
+    while (minimumSize < maximumSize) {
+        const int candidateSize = (minimumSize + maximumSize + 1) / 2;
+        font.setPixelSize(candidateSize);
+        const QFontMetrics metrics(font);
+        const bool fits = metrics.height() <= textSize
+            && std::all_of(actions.cbegin(), actions.cend(),
+                [&metrics, textSize](const QAction* action) { return metrics.horizontalAdvance(action->text()) <= textSize; });
+        if (fits) {
+            minimumSize = candidateSize;
+        } else {
+            maximumSize = candidateSize - 1;
+        }
+    }
+    font.setPixelSize(minimumSize);
+    for (QAction* action : actions) {
+        auto* button = qobject_cast<QToolButton*>(m_toolsToolbar->widgetForAction(action));
+        if (button == nullptr) {
+            continue;
+        }
+        if (button->minimumSize() != QSize(buttonSize, buttonSize) || button->maximumSize() != QSize(buttonSize, buttonSize)) {
+            button->setFixedSize(buttonSize, buttonSize);
+        }
+        if (button->font() != font) {
+            button->setFont(font);
+        }
+    }
+    m_toolsToolbar->layout()->activate();
+}
+
 void MainWindow::registerNavigationKeybinds() {
     const auto addAction = [this](const KeyCommand command, const auto& handler) {
         auto* action = new QAction(this);
@@ -852,6 +893,7 @@ void MainWindow::updateVolumeSliderPlacement() {
         || !m_toolsToolbar->isVisible() || !m_flatView->isVisible()) {
         return;
     }
+    updateToolButtonSizes();
 
     constexpr int kHorizontalPadding = 7;
     constexpr int kBottomPadding = 8;
@@ -1115,6 +1157,7 @@ void MainWindow::buildWorkspace() {
         m_timing->setSelectedEvents(m_state->selectedTimingPoints(), m_state->selectedLaneEvents(),
             m_state->selectedSpeedEvents());
         m_timeline->setSpeedEvents(m_state->speedEvents());
+        m_flatView->setSpeedEvents(m_state->speedEvents());
         m_viewer->setSpeedEvents(m_state->speedEvents());
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
         if (m_hasProject && !m_loadingProject) {
@@ -1151,6 +1194,7 @@ void MainWindow::buildWorkspace() {
     m_timeline->setTimingPoints(m_state->timingPoints());
     m_timeline->setSpeedEvents(m_state->speedEvents());
     m_flatView->setTimingPoints(m_state->timingPoints());
+    m_flatView->setSpeedEvents(m_state->speedEvents());
     m_flatView->setLaneEvents(m_state->laneEvents());
     m_viewer->setTimingPoints(m_state->timingPoints());
     m_viewer->setLaneEvents(m_state->laneEvents());

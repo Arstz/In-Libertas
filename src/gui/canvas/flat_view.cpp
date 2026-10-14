@@ -3,6 +3,7 @@
 #include "gui/app/game_palette.h"
 
 #include <QtGui/QPaintEvent>
+#include <QtGui/QFontMetricsF>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QCursor>
@@ -34,6 +35,11 @@ constexpr double kZoomStepFactor = 1.35;
 constexpr double kWaveformDividerWidth = 6.0;
 constexpr double kMinimumChartWidth = 120.0;
 constexpr double kWaveformDividerOpacity = 0.35;
+constexpr double kWaveformEventLineWidth = 2.0;
+constexpr double kWaveformEventLabelPadding = 3.0;
+constexpr double kWaveformEventLabelLineGap = 3.0;
+constexpr double kWaveformEventLabelSpacing = 6.0;
+constexpr int kWaveformEventValuePrecision = 12;
 constexpr double kMargin = 12.0;
 constexpr double kPlayheadWidth = 6.0;
 constexpr qint64 kTapDurationMilliseconds = 30;
@@ -64,6 +70,29 @@ constexpr std::uint32_t kWidthSineIn = 0x80U;
 constexpr std::uint32_t kFlickRight = 0x400U;
 constexpr std::uint32_t kFlickLeft = 0x1000U;
 constexpr int kInactiveOpacity = 50;
+
+struct WaveformEventLabel {
+    QString text;
+    QColor color;
+};
+
+[[nodiscard]] double drawWaveformEvent(QPainter& painter, const QRectF& area, const double y,
+    const WaveformEventLabel& label, const double labelLeft, const int lineIndex) {
+    const QFontMetricsF metrics(painter.font());
+    const double labelHeight = metrics.height() + kWaveformEventLabelPadding * 2.0;
+    const QRectF labelArea(labelLeft, y - labelHeight - kWaveformEventLabelLineGap,
+        metrics.horizontalAdvance(label.text) + kWaveformEventLabelPadding * 2.0, labelHeight);
+    const double lineY = y + lineIndex * kWaveformEventLineWidth;
+
+    painter.setPen(QPen(label.color, kWaveformEventLineWidth));
+    painter.drawLine(QPointF(area.left(), lineY), QPointF(area.right(), lineY));
+    painter.fillRect(labelArea, palette::panel);
+    painter.setPen(label.color);
+    painter.drawText(labelArea.adjusted(kWaveformEventLabelPadding, 0.0, -kWaveformEventLabelPadding, 0.0),
+        Qt::AlignLeft | Qt::AlignVCenter, label.text);
+
+    return labelArea.width();
+}
 
 class WaveformDivider final : public QWidget {
 public:
@@ -394,6 +423,14 @@ void FlatView::setTimingPoints(QVector<TimingPoint> timingPoints) {
         return first.timeMilliseconds < second.timeMilliseconds;
     });
     m_timingPoints = std::move(timingPoints);
+    update();
+}
+
+void FlatView::setSpeedEvents(QVector<SpeedEvent> speedEvents) {
+    std::stable_sort(speedEvents.begin(), speedEvents.end(), [](const SpeedEvent& first, const SpeedEvent& second) {
+        return first.timeMilliseconds < second.timeMilliseconds;
+    });
+    m_speedEvents = std::move(speedEvents);
     update();
 }
 
@@ -1961,6 +1998,7 @@ void FlatView::paintGL() {
     const QRectF content = rect().adjusted(kMargin, kMargin, -kMargin, -kMargin);
     const QRectF laneArea = groundArea();
     drawWaveform(painter, waveformArea());
+    drawWaveformEvents(painter, waveformArea());
 
     const int groundOpacity = m_mode == FlatViewMode::Sky ? kInactiveOpacity : 255;
     const int skyOpacity = m_mode == FlatViewMode::Ground ? kInactiveOpacity : 255;
@@ -2083,6 +2121,43 @@ void FlatView::drawWaveform(QPainter& painter, const QRectF& area) const {
             QPointF(centerX + maximumAmplitude * area.width() * 0.42, y)));
     }
     painter.drawLines(lines);
+}
+
+void FlatView::drawWaveformEvents(QPainter& painter, const QRectF& area) const {
+    if (area.isEmpty()) {
+        return;
+    }
+    QMap<qint64, QVector<WaveformEventLabel>> labels;
+    const qint64 visibleStart = timeAtY(area.bottom());
+    const qint64 visibleEnd = timeAtY(area.top());
+
+    for (const TimingPoint& point : m_timingPoints) {
+        if (point.timeMilliseconds < visibleStart || point.timeMilliseconds > visibleEnd) {
+            continue;
+        }
+        labels[point.timeMilliseconds].append({QStringLiteral("%1 | %2/%3")
+            .arg(point.beatsPerMinute, 0, 'g', kWaveformEventValuePrecision)
+            .arg(point.timeSignatureNumerator).arg(point.timeSignatureDenominator), palette::outerNoteRed});
+    }
+    for (const SpeedEvent& event : m_speedEvents) {
+        if (event.timeMilliseconds < visibleStart || event.timeMilliseconds > visibleEnd) {
+            continue;
+        }
+        labels[event.timeMilliseconds].append({QString::number(event.speed, 'g', kWaveformEventValuePrecision),
+            palette::guideGreen});
+    }
+    painter.save();
+    painter.setClipRect(area, Qt::IntersectClip);
+    for (auto position = labels.cbegin(); position != labels.cend(); ++position) {
+        const QVector<WaveformEventLabel>& eventLabels = position.value();
+        const double y = timeToY(position.key());
+        double labelLeft = area.left();
+        for (int index = 0; index < eventLabels.size(); ++index) {
+            labelLeft += drawWaveformEvent(painter, area, y, eventLabels[index], labelLeft, index)
+                + kWaveformEventLabelSpacing;
+        }
+    }
+    painter.restore();
 }
 
 void FlatView::drawDividers(QPainter& painter, const QRectF& area) const {

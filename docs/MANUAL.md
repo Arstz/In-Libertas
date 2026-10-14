@@ -16,7 +16,7 @@ The editor is arranged into resizable widgets with dividers, a toolbar on the le
 
 ### Toolbar
 
-Contains Place `1`, Select `F` and Move `V` tools, as well as a logarithmic volume slider. An active tool will influence how you interact with the Flat View widget.
+Contains Place `1`, Select `F` and Move `V` tools, as well as 2 logarithmic volume sliders, one for music and one for hitsounds. An active tool will influence how you interact with the Flat View widget.
 
 ### Flat View
 
