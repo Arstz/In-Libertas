@@ -403,6 +403,7 @@ void FlatView::setTool(const EditorTool tool) {
     }
 
     m_tool = tool;
+    updateToolCursor();
 }
 
 void FlatView::setGridDuration(const qint64 durationMilliseconds) {
@@ -1538,11 +1539,27 @@ bool FlatView::canPlaceSky() const {
     return m_tool == EditorTool::Place && canInteractSky();
 }
 
+void FlatView::updateToolCursor() {
+    if (m_dragNavigating) {
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
+    switch (m_tool) {
+    case EditorTool::Select:
+        setCursor(Qt::CrossCursor);
+        break;
+    case EditorTool::Move:
+        setCursor(Qt::SizeAllCursor);
+        break;
+    case EditorTool::Place:
+        unsetCursor();
+        break;
+    }
+}
+
 void FlatView::beginDragNavigation(const QPointF& position) {
     m_navigationLastPosition = position;
     m_navigationPositionMilliseconds = static_cast<double>(m_playbackPositionMilliseconds);
-    m_navigationPreviousCursor = cursor();
-    m_navigationHadCursor = testAttribute(Qt::WA_SetCursor);
     m_dragNavigating = true;
     setCursor(Qt::ClosedHandCursor);
 }
@@ -1563,11 +1580,7 @@ void FlatView::finishDragNavigation() {
         return;
     }
     m_dragNavigating = false;
-    if (m_navigationHadCursor) {
-        setCursor(m_navigationPreviousCursor);
-    } else {
-        unsetCursor();
-    }
+    updateToolCursor();
 }
 
 bool FlatView::event(QEvent* event) {

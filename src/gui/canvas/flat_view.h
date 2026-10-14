@@ -9,7 +9,6 @@
 #include <QtCore/QFutureWatcher>
 #include <QtCore/QSet>
 #include <QtGui/QColor>
-#include <QtGui/QCursor>
 #include <QtGui/QPainterPath>
 #include <QtOpenGLWidgets/QOpenGLWidget>
 
@@ -153,6 +152,7 @@ private:
     [[nodiscard]] bool canPlaceSky() const;
     void invalidateFieldGroups();
     void ensureFieldGroups() const;
+    void updateToolCursor();
     void beginDragNavigation(const QPointF& position);
     void updateDragNavigation(const QPointF& position);
     void finishDragNavigation();
@@ -194,7 +194,6 @@ private:
     QFutureWatcher<WaveformData>* m_waveformWatcher = nullptr;
     QPointF m_pressPosition;
     QPointF m_navigationLastPosition;
-    QCursor m_navigationPreviousCursor;
     double m_navigationPositionMilliseconds = 0.0;
     double m_waveformMillisecondsPerPeak = 0.0;
     Qt::KeyboardModifiers m_pressModifiers = Qt::NoModifier;
@@ -222,7 +221,6 @@ private:
     bool m_movingSelection = false;
     bool m_invertMousewheelScroll = kDefaultInvertMousewheelScroll;
     bool m_dragNavigating = false;
-    bool m_navigationHadCursor = false;
 };
 
 } // namespace infalsus::gui
