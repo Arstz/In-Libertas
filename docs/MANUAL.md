@@ -4,7 +4,7 @@ Please read this guide in full before using the editor, this would answer many o
 
 ## Main workflow
 
-Start by creating a new project file via `File->New project...` or importing spc with `File->Import SPC...`. When creating new project the editor will ask to provide a valid audio file and a jacket (2048x2048 is preferred), if importing instead, place them in the same folder as the spc itself (if you are importing spc, the files should be already named and arranged as needed and editor will recognize them). After you have created a project you can save it with `File->Save project...` and it will be written on disk as a .10no file (remember to save periodically), which you can then open later, a single instance of an editor can open one project file at the time. To export a project use `File->Export project...` and select CustomCharts folder in your game installation, make sure to have Melon Loader configured and hook dlls installed.
+Start by creating a new project file via `File->New project...` or importing spc with `File->Import SPC...`. When creating new project the editor will ask to provide a valid audio file and a jacket (2048x2048 is preferred), if importing instead, place them in the same folder as the spc itself (if you are importing spc, the files should be already named and arranged as needed and editor will recognize them). After you have created a project you can save it with `File->Save project...` and it will be written on disk as a .10no file (remember to save periodically), which you can then open later, a single instance of an editor can open one project file at the time. To export a project use `File->Export project...` and select CustomCharts folder in your game installation.
 
 ## Handling files
 

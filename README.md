@@ -1,16 +1,6 @@
 # In Libertas - exsurge, two can play fake latin.
 
-A GUI editor for .spc charts and a hook for the game In Falsus by lowiro. This repository does not supply any game assets nor extracted .spc charts from the game itself. In order to play the charts you need to own a copy of the game. For fast and direct communication use [discord server](https://discord.gg/MrtxtVvYuZ), I read the issues here as well.
-
-## Getting started
-
-- Install [Melon Loader](https://github.com/LavaGang/MelonLoader/releases) into your game directory, either directly or with GUI.
-- Run the game with Melon Loader installed, let it generate the configs necessary.
-- Download [latest release](https://github.com/Arstz/In-Libertas/releases/) or build yourself both hook and the editor.
-- Copy dlls provided into Mods folder created by Melon Loader in the game folder.
-- Create a `CustomCharts` folder inside your game folder and put chart folders or .10no files there, they should appear ingame on your next launch if done correctly.
-
-In order to make custom charts launch the editor and follow [User Manual](docs/MANUAL.md).
+A GUI editor for .spc charts and a hook for the game In Falsus by lowiro. This repository does not supply any game assets nor extracted .spc charts from the game itself. In order to play the charts you need to own a copy of the game. For fast and direct communication use [discord server](https://discord.gg/MrtxtVvYuZ), I read the issues here as well. Read the [User Manual](docs/MANUAL.md) for GUI interaction guide.
 
 ## Building
 
