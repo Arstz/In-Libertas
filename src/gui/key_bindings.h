@@ -17,6 +17,7 @@ enum class KeyCommand {
     Undo, Redo, Cut, Copy, Paste, DeleteSelection, SelectAll, MirrorSelection,
     FlipSelectionVertically, ToggleFieldGrouping, ResnapAll, RefreshVerification,
     PlaceTool, SelectTool, MoveTool, ZoomIn, ZoomInAlternate, ZoomOut, ZoomOutAlternate,
+    AddTimingPoint, AddSpeedEvent,
     TogglePlayback, IncreasePlaybackRate, DecreasePlaybackRate,
     SeekBackward, SeekForward, IncreaseDivisor, DecreaseDivisor, CycleFlatMode, ToggleSkyGrid,
     SkyGridSize1, SkyGridSize2, SkyGridSize3, SkyGridSize4,

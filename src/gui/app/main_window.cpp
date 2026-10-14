@@ -841,6 +841,8 @@ void MainWindow::registerNavigationKeybinds() {
     addAction(KeyCommand::ZoomInAlternate, [this] { adjustFlatZoom(1.0); });
     addAction(KeyCommand::ZoomOut, [this] { adjustFlatZoom(-1.0); });
     addAction(KeyCommand::ZoomOutAlternate, [this] { adjustFlatZoom(-1.0); });
+    addAction(KeyCommand::AddTimingPoint, [this] { m_state->addTimingPointAtPlaybackPosition(); });
+    addAction(KeyCommand::AddSpeedEvent, [this] { m_state->addSpeedEventAtPlaybackPosition(); });
     addAction(KeyCommand::TogglePlayback, [this] { togglePlayback(); });
     addAction(KeyCommand::IncreasePlaybackRate, [this] { m_playback->increasePlaybackRate(); });
     addAction(KeyCommand::DecreasePlaybackRate, [this] { m_playback->decreasePlaybackRate(); });
@@ -1171,6 +1173,19 @@ void MainWindow::buildWorkspace() {
     connect(m_state, &EditorState::lastTimingPointRemovalRejected, this, [this] {
         QMessageBox::warning(this, QStringLiteral("Cannot delete last timing event"),
             QStringLiteral("Cannot delete last timing event, change its properties istead"));
+    });
+    connect(m_state, &EditorState::eventPlacementRejected, this, [this](const EventCollision& collision) {
+        QMessageBox::warning(this, QStringLiteral("Event already exists"),
+            QStringLiteral("[%1] already has an event of type [%2], edit existing instead of placing new one")
+                .arg(formatPreciseTimestamp(collision.timeMilliseconds), collision.type));
+    });
+    connect(m_state, &EditorState::eventPasteCollisionsFound, this, [this](const QVector<EventCollision>& collisions) {
+        QStringList messages;
+        for (const EventCollision& collision : collisions) {
+            messages.append(QStringLiteral("Could not place event [%1] at [%2] - already exists.")
+                .arg(collision.type, formatPreciseTimestamp(collision.timeMilliseconds)));
+        }
+        QMessageBox::warning(this, QStringLiteral("Event paste collisions"), messages.join(QLatin1Char('\n')));
     });
     connect(m_state, &EditorState::toolChanged, this, &MainWindow::updateStatus);
     connect(m_state, &EditorState::divisorChanged, this, &MainWindow::updateStatus);

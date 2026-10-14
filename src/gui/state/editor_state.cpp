@@ -96,6 +96,37 @@ void normalizeEvent(SpeedEvent& event) {
     return first.timeMilliseconds == second.timeMilliseconds && first.speed == second.speed;
 }
 
+[[nodiscard]] bool sameEventPosition(const TimingPoint& first, const TimingPoint& second) {
+    return first.timeMilliseconds == second.timeMilliseconds;
+}
+
+[[nodiscard]] bool sameEventPosition(const LaneEvent& first, const LaneEvent& second) {
+    return first.timeMilliseconds == second.timeMilliseconds && first.lane == second.lane;
+}
+
+[[nodiscard]] bool sameEventPosition(const SpeedEvent& first, const SpeedEvent& second) {
+    return first.timeMilliseconds == second.timeMilliseconds;
+}
+
+[[nodiscard]] QString eventTypeName(const TimingPoint&) {
+    return QStringLiteral("BPM");
+}
+
+[[nodiscard]] QString eventTypeName(const LaneEvent& event) {
+    return QStringLiteral("Lane %1").arg(event.lane);
+}
+
+[[nodiscard]] QString eventTypeName(const SpeedEvent&) {
+    return QStringLiteral("SV");
+}
+
+template <typename Event>
+[[nodiscard]] bool hasEventAt(const QVector<Event>& events, const Event& candidate) {
+    return std::any_of(events.cbegin(), events.cend(), [&candidate](const Event& event) {
+        return sameEventPosition(event, candidate);
+    });
+}
+
 template <typename Event>
 [[nodiscard]] bool replaceSelectedEvents(QVector<Event>& events, QVector<int>& selection, QVector<Event> replacements) {
     QVector<int> order(events.size());
@@ -353,9 +384,13 @@ void EditorState::setSpeedEvents(QVector<SpeedEvent> speedEvents) {
 }
 
 void EditorState::addTimingPointAtPlaybackPosition() {
-    EventSnapshot before = eventSnapshot();
     TimingPoint point = timingPointAt(m_playbackPositionMilliseconds);
     point.timeMilliseconds = m_playbackPositionMilliseconds;
+    if (hasEventAt(m_timingPoints, point)) {
+        emit eventPlacementRejected({eventTypeName(point), point.timeMilliseconds});
+        return;
+    }
+    EventSnapshot before = eventSnapshot();
     const int insertionIndex = static_cast<int>(std::upper_bound(m_timingPoints.cbegin(), m_timingPoints.cend(), point.timeMilliseconds,
         [](const qint64 time, const TimingPoint& candidate) { return time < candidate.timeMilliseconds; }) - m_timingPoints.cbegin());
     m_timingPoints.insert(insertionIndex, point);
@@ -365,8 +400,12 @@ void EditorState::addTimingPointAtPlaybackPosition() {
 }
 
 void EditorState::addLaneEventAtPlaybackPosition() {
-    EventSnapshot before = eventSnapshot();
     const LaneEvent event{.timeMilliseconds = m_playbackPositionMilliseconds, .lane = 0, .enabled = false};
+    if (hasEventAt(m_laneEvents, event)) {
+        emit eventPlacementRejected({eventTypeName(event), event.timeMilliseconds});
+        return;
+    }
+    EventSnapshot before = eventSnapshot();
     const int insertionIndex = static_cast<int>(std::upper_bound(m_laneEvents.cbegin(), m_laneEvents.cend(), event.timeMilliseconds,
         [](const qint64 time, const LaneEvent& candidate) { return time < candidate.timeMilliseconds; }) - m_laneEvents.cbegin());
     m_laneEvents.insert(insertionIndex, event);
@@ -376,7 +415,6 @@ void EditorState::addLaneEventAtPlaybackPosition() {
 }
 
 void EditorState::addSpeedEventAtPlaybackPosition() {
-    EventSnapshot before = eventSnapshot();
     double speed = 1.0;
     for (const SpeedEvent& event : m_speedEvents) {
         if (event.timeMilliseconds > m_playbackPositionMilliseconds) {
@@ -385,6 +423,11 @@ void EditorState::addSpeedEventAtPlaybackPosition() {
         speed = event.speed;
     }
     const SpeedEvent event{.timeMilliseconds = m_playbackPositionMilliseconds, .speed = speed};
+    if (hasEventAt(m_speedEvents, event)) {
+        emit eventPlacementRejected({eventTypeName(event), event.timeMilliseconds});
+        return;
+    }
+    EventSnapshot before = eventSnapshot();
     const int insertionIndex = static_cast<int>(std::upper_bound(m_speedEvents.cbegin(), m_speedEvents.cend(), event.timeMilliseconds,
         [](const qint64 time, const SpeedEvent& candidate) { return time < candidate.timeMilliseconds; }) - m_speedEvents.cbegin());
     m_speedEvents.insert(insertionIndex, event);
@@ -695,7 +738,8 @@ void EditorState::pasteCopiedHitObjects() {
         QVector<int> timingIndexes;
         QVector<int> laneIndexes;
         QVector<int> speedIndexes;
-        const auto insertEvents = [offset](auto* destination, const auto& source, QVector<int>* indexes) {
+        QVector<EventCollision> collisions;
+        const auto insertEvents = [offset, &collisions](auto* destination, const auto& source, QVector<int>* indexes) {
             using Event = typename std::decay_t<decltype(*destination)>::value_type;
             QVector<Event> ordered = source;
             std::stable_sort(ordered.begin(), ordered.end(), [](const Event& first, const Event& second) {
@@ -703,6 +747,10 @@ void EditorState::pasteCopiedHitObjects() {
             });
             for (Event event : ordered) {
                 event.timeMilliseconds = std::max<qint64>(0, event.timeMilliseconds + offset);
+                if (hasEventAt(*destination, event)) {
+                    collisions.append({eventTypeName(event), event.timeMilliseconds});
+                    continue;
+                }
                 const int insertionIndex = static_cast<int>(std::upper_bound(destination->cbegin(), destination->cend(), event.timeMilliseconds,
                     [](const qint64 time, const Event& candidate) { return time < candidate.timeMilliseconds; }) - destination->cbegin());
                 destination->insert(insertionIndex, event);
@@ -712,6 +760,12 @@ void EditorState::pasteCopiedHitObjects() {
         insertEvents(&m_timingPoints, m_clipboardTimingPoints, &timingIndexes);
         insertEvents(&m_laneEvents, m_clipboardLaneEvents, &laneIndexes);
         insertEvents(&m_speedEvents, m_clipboardSpeedEvents, &speedIndexes);
+        if (timingIndexes.isEmpty() && laneIndexes.isEmpty() && speedIndexes.isEmpty()) {
+            if (!collisions.isEmpty()) {
+                emit eventPasteCollisionsFound(collisions);
+            }
+            return;
+        }
         if (!timingIndexes.isEmpty()) {
             emit timingPointsChanged();
             emit divisorChanged(m_divisor);
@@ -724,6 +778,9 @@ void EditorState::pasteCopiedHitObjects() {
         }
         setSelectedEvents(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes));
         appendEventHistory(std::move(before));
+        if (!collisions.isEmpty()) {
+            emit eventPasteCollisionsFound(collisions);
+        }
         return;
     }
     if (m_clipboardHitObjects.isEmpty()) {

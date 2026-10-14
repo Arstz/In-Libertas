@@ -20,6 +20,11 @@ enum class FlatViewMode {
     Both,
 };
 
+struct EventCollision {
+    QString type;
+    qint64 timeMilliseconds = 0;
+};
+
 class EditorState final : public QObject {
     Q_OBJECT
 
@@ -107,6 +112,8 @@ signals:
     void laneEventsChanged();
     void speedEventsChanged();
     void lastTimingPointRemovalRejected();
+    void eventPlacementRejected(const infalsus::gui::EventCollision& collision);
+    void eventPasteCollisionsFound(const QVector<infalsus::gui::EventCollision>& collisions);
     void playbackPositionChanged(qint64 positionMilliseconds);
     void divisorChanged(int divisor);
     void difficultyChanged(infalsus::Difficulty difficulty);
