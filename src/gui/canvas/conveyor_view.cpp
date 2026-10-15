@@ -21,9 +21,6 @@ namespace {
 
 namespace palette = infalsus::gui::palette;
 
-// Track uses a 3.333333334-second visual approach at 1.00x note speed. Its
-// culling and perspective ranges are divided by the player's note-speed
-// setting, independently of chart SV.
 constexpr double kBaseApproachDistanceMilliseconds = 3333.333334;
 constexpr qint64 kTapDepthMilliseconds = 30;
 constexpr int kFlickTrailSamples = 18;
@@ -31,10 +28,10 @@ constexpr int kSkyCurveSamples = 18;
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kSkyCoordinateMinimum = 0.0;
 constexpr double kSkyCoordinateMaximum = 1.0;
-constexpr std::uint32_t kCenterSineOut = 0x08U;
-constexpr std::uint32_t kCenterSineIn = 0x10U;
-constexpr std::uint32_t kWidthSineOut = 0x40U;
-constexpr std::uint32_t kWidthSineIn = 0x80U;
+constexpr std::uint32_t kLeftSineOut = 0x08U;
+constexpr std::uint32_t kLeftSineIn = 0x10U;
+constexpr std::uint32_t kRightSineOut = 0x40U;
+constexpr std::uint32_t kRightSineIn = 0x80U;
 constexpr std::uint32_t kFlickRight = 0x400U;
 constexpr std::uint32_t kFlickLeft = 0x1000U;
 constexpr double kFlickTriangleHeight = 90.0;
@@ -45,10 +42,6 @@ constexpr int kSkyFillAlpha = 105;
 constexpr qreal kRailWidth = 4.0;
 constexpr qreal kSkyContourWidth = 3.0;
 constexpr qreal kNoteContourWidth = 2.0;
-// floorPoint/skyPoint sample the receiver's final 5% of perspective depth.
-// Extending that tangent by 20 reproduces one full approach interval at the
-// same local screen velocity, rather than making -1x look four times slower.
-constexpr double kNegativePlaneExtension = 20.0;
 constexpr double kFloorLaneWidth = 0.25;
 constexpr double kFloorHalfLaneWidth = kFloorLaneWidth * 0.5;
 constexpr double kCentralFloorLeftBoundary = 0.125;
@@ -57,11 +50,6 @@ constexpr double kCentralFloorRightBoundary = 1.125;
 struct FloorSpan {
     double left = 0.0;
     double right = 0.0;
-};
-
-struct TimeRange {
-    qint64 startMilliseconds = 0;
-    qint64 endMilliseconds = 0;
 };
 
 [[nodiscard]] double fieldLeftEdge(const ChartNote& note, const bool atStart) {
@@ -113,18 +101,6 @@ struct TimeRange {
     default:
         return {.left = firstLaneCenter - kFloorHalfLaneWidth, .right = firstLaneCenter + kFloorHalfLaneWidth};
     }
-}
-
-[[nodiscard]] QPointF extendedFloorPoint(const double coordinate, const double approach) {
-    const QPointF receiver = ConveyorGeometry::floorPoint(coordinate, 1.0);
-    const QPointF inside = ConveyorGeometry::floorPoint(coordinate, 0.95);
-    return receiver + (receiver - inside) * ((1.0 - std::clamp(approach, 0.0, 1.0)) * kNegativePlaneExtension);
-}
-
-[[nodiscard]] QPointF extendedSkyPoint(const double coordinate, const double approach) {
-    const QPointF receiver = ConveyorGeometry::skyPoint(coordinate, 1.0);
-    const QPointF inside = ConveyorGeometry::skyPoint(coordinate, 0.95);
-    return receiver + (receiver - inside) * ((1.0 - std::clamp(approach, 0.0, 1.0)) * kNegativePlaneExtension);
 }
 
 [[nodiscard]] QColor floorColor(const ChartNote& note) {
@@ -185,6 +161,7 @@ ConveyorView::ConveyorView(QWidget* parent)
 void ConveyorView::setChart(const ChartData& chart) {
     m_chart = chart;
     m_fieldBoundariesDirty = true;
+    m_measureMarkersDirty = true;
     m_playbackPositionMilliseconds = 0;
     update();
 }
@@ -195,6 +172,7 @@ void ConveyorView::setTimingPoints(QVector<infalsus::TimingPoint> timingPoints) 
             return first.timeMilliseconds < second.timeMilliseconds;
         });
     m_timingPoints = std::move(timingPoints);
+    m_measureMarkersDirty = true;
     update();
 }
 
@@ -211,6 +189,7 @@ void ConveyorView::setSpeedEvents(QVector<infalsus::SpeedEvent> speedEvents) {
         return first.timeMilliseconds < second.timeMilliseconds;
     });
     m_speedEvents = std::move(speedEvents);
+    m_measureMarkersDirty = true;
     update();
 }
 
@@ -244,6 +223,7 @@ void ConveyorView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
     m_chart.notes.insert(insertionIndex, hitObject);
     m_fieldBoundariesDirty = true;
+    m_measureMarkersDirty = true;
     update();
 }
 
@@ -254,6 +234,7 @@ void ConveyorView::removeHitObject(const int index) {
 
     m_chart.notes.removeAt(index);
     m_fieldBoundariesDirty = true;
+    m_measureMarkersDirty = true;
     update();
 }
 
@@ -264,6 +245,7 @@ void ConveyorView::updateHitObject(const int index, const ChartNote& hitObject) 
 
     m_chart.notes[index] = hitObject;
     m_fieldBoundariesDirty = true;
+    m_measureMarkersDirty = true;
     update();
 }
 
@@ -283,6 +265,7 @@ void ConveyorView::updateHitObjects(const QVector<int>& indexes, const QVector<C
     }
     if (changed) {
         m_fieldBoundariesDirty = true;
+        m_measureMarkersDirty = true;
         update();
     }
 }
@@ -293,6 +276,7 @@ void ConveyorView::paintGL() {
     painter.fillRect(rect(), palette::canvasBackground);
     painter.save();
     painter.setTransform(painterTransform(rect()));
+    painter.setClipRect(QRectF(QPointF(0.0, 0.0), ConveyorGeometry::nativeSize()));
     drawConveyor(painter);
     drawChart(painter);
     painter.restore();
@@ -395,30 +379,38 @@ double ConveyorView::approachProgress(const qint64 chartTimeMilliseconds) const 
     return std::clamp(progress, 0.0, 1.0);
 }
 
+double ConveyorView::projectionProgress(const qint64 chartTimeMilliseconds) const {
+    return 1.0 - scrollDistanceTo(chartTimeMilliseconds) / approachDistanceMilliseconds();
+}
+
 double ConveyorView::approachDistanceMilliseconds() const {
     return kBaseApproachDistanceMilliseconds / m_noteSpeed;
 }
 
 double ConveyorView::noteOpacity(const qint64 chartTimeMilliseconds) const {
-    // Track_RenderLogicalNote feeds the material a cubic smoothstep based on
-    // (1 - abs(signedCoordinateDelta / approachRange)) / 0.1.  Candidates at
-    // the horizon therefore become transparent over the outermost 10% of
-    // their permitted distance; drawing them fully opaque makes folded-SV
-    // re-entries appear that are invisible in gameplay.
     const double fadeProgress = std::clamp(approachProgress(chartTimeMilliseconds) / 0.1, 0.0, 1.0);
     return (3.0 - 2.0 * fadeProgress) * fadeProgress * fadeProgress;
 }
 
-double ConveyorView::scrollCoordinateAt(const qint64 chartTimeMilliseconds) const {
-    // Mirrors GameAssembly's Conveyor_IntegrateScrollCoordinate: each kind-0
-    // speed becomes active after its timestamp and contributes a signed,
-    // piecewise-linear interval to the chart's rendered coordinate.
-    const qint64 target = std::max(chartTimeMilliseconds, qint64(0));
+double ConveyorView::scrollCoordinateAt(const double chartTimeMilliseconds) const {
+    const double target = chartTimeMilliseconds;
     qint64 cursor = 0;
     double speed = 1.0;
     double coordinate = 0.0;
+    if (target < 0) {
+        for (const infalsus::SpeedEvent& event : m_speedEvents) {
+            if (event.timeMilliseconds > 0) {
+                break;
+            }
+            if (event.timeMilliseconds == 0 && std::isfinite(event.speed)) {
+                speed = event.speed;
+            }
+        }
+
+        return static_cast<double>(target) * speed;
+    }
     for (const infalsus::SpeedEvent& event : m_speedEvents) {
-        if (event.timeMilliseconds < cursor) {
+        if (event.timeMilliseconds < cursor || !std::isfinite(event.speed)) {
             continue;
         }
         if (event.timeMilliseconds > target) {
@@ -464,33 +456,15 @@ bool ConveyorView::isVisible(const qint64 startMilliseconds, const qint64 endMil
     return false;
 }
 
-QPointF ConveyorView::floorPointAt(const double coordinate, const qint64 chartTimeMilliseconds) const {
-    if (chartTimeMilliseconds <= m_playbackPositionMilliseconds) {
-        return ConveyorGeometry::floorPoint(coordinate, 1.0);
-    }
-    const double delta = scrollDistanceTo(chartTimeMilliseconds);
-    const double progress = approachProgress(chartTimeMilliseconds);
-    return delta < 0.0
-        ? extendedFloorPoint(coordinate, progress)
-        : ConveyorGeometry::floorPoint(coordinate, progress);
-}
-
 QPointF ConveyorView::skyPointAt(const double coordinate, const qint64 chartTimeMilliseconds) const {
-    if (chartTimeMilliseconds <= m_playbackPositionMilliseconds) {
-        return ConveyorGeometry::skyPoint(coordinate, 1.0);
-    }
-    const double delta = scrollDistanceTo(chartTimeMilliseconds);
-    const double progress = approachProgress(chartTimeMilliseconds);
-    return delta < 0.0
-        ? extendedSkyPoint(coordinate, progress)
-        : ConveyorGeometry::skyPoint(coordinate, progress);
+    return ConveyorGeometry::skyPoint(coordinate, projectionProgress(chartTimeMilliseconds));
 }
 
 double ConveyorView::easingFor(const std::uint32_t auxiliary, const bool rightSide, const double progress) const {
     const std::uint32_t mode = rightSide ? (auxiliary & 0xE0U) : (auxiliary & 0x1CU);
     const double clampedProgress = std::clamp(progress, 0.0, 1.0);
-    const std::uint32_t sineOut = rightSide ? kWidthSineOut : kCenterSineOut;
-    const std::uint32_t sineIn = rightSide ? kWidthSineIn : kCenterSineIn;
+    const std::uint32_t sineOut = rightSide ? kRightSineOut : kLeftSineOut;
+    const std::uint32_t sineIn = rightSide ? kRightSineIn : kLeftSineIn;
 
     if (mode == sineOut) {
         return std::sin(clampedProgress * kPi * 0.5);
@@ -511,13 +485,11 @@ void ConveyorView::drawConveyor(QPainter& painter) {
     painter.setBrush(QBrush(gradient));
     painter.drawPolygon(floor);
 
-    // The outer floor lanes carry their gameplay-side colour. Keeping the
-    // central lanes neutral prevents the entire receiver from reading blue.
     painter.setPen(Qt::NoPen);
     painter.setBrush(palette::withAlpha(palette::outerNotePurple, 46));
-    painter.drawPolygon(ConveyorGeometry::floorLane(0));
+    painter.drawPath(ConveyorGeometry::floorLane(0));
     painter.setBrush(palette::withAlpha(palette::outerNoteRed, 46));
-    painter.drawPolygon(ConveyorGeometry::floorLane(kLaneCount - 1));
+    painter.drawPath(ConveyorGeometry::floorLane(kLaneCount - 1));
 
     painter.setPen(Qt::NoPen);
     painter.setBrush(palette::withAlpha(palette::canvasBackground.darker(180), 180));
@@ -530,14 +502,8 @@ void ConveyorView::drawConveyor(QPainter& painter) {
             }
             const qint64 clippedStart = std::max(start, m_playbackPositionMilliseconds);
             const qint64 clippedEnd = end;
-            const double left = -0.125 + static_cast<double>(lane) * 0.25;
-            const double right = left + 0.25;
-            painter.drawPolygon(QPolygonF{
-                floorPointAt(left, clippedStart),
-                floorPointAt(right, clippedStart),
-                floorPointAt(right, clippedEnd),
-                floorPointAt(left, clippedEnd),
-            });
+            painter.drawPath(ConveyorGeometry::floorLane(lane,
+                projectionProgress(clippedStart), projectionProgress(clippedEnd)));
         };
         for (const infalsus::LaneEvent& event : m_laneEvents) {
             if (event.lane != lane) {
@@ -581,107 +547,81 @@ void ConveyorView::drawConveyor(QPainter& painter) {
     painter.drawLine(ConveyorGeometry::skyHorizon());
 }
 
-void ConveyorView::drawDivisors(QPainter& painter) {
-    const double approachDistance = approachDistanceMilliseconds();
-    if (m_timingPoints.isEmpty()) {
+void ConveyorView::ensureMeasureMarkers() {
+    if (!m_measureMarkersDirty) {
         return;
     }
+    QVector<infalsus::TimingPoint> timingPoints = m_timingPoints;
+    if (timingPoints.isEmpty()) {
+        timingPoints.append(infalsus::TimingPoint{});
+    }
+    if (timingPoints.front().timeMilliseconds > 0) {
+        infalsus::TimingPoint initial = timingPoints.front();
+        initial.timeMilliseconds = 0;
+        timingPoints.prepend(initial);
+    }
+    m_measureMarkers.clear();
+    const double initialBpm = timingPoints.front().beatsPerMinute;
+    const double initialMeasureDuration = 240000.0 / (std::isfinite(initialBpm) && initialBpm > 0.0
+        ? initialBpm : infalsus::TimingPoint{}.beatsPerMinute);
+    double chartEnd = m_chart.durationMilliseconds;
+    for (const ChartNote& note : m_chart.notes) {
+        chartEnd = std::max(chartEnd, static_cast<double>(note.endMilliseconds));
+    }
+    chartEnd += initialMeasureDuration * 10.0;
+    const auto speedBefore = [this](const double time) {
+        double speed = 1.0;
+        for (const infalsus::SpeedEvent& event : m_speedEvents) {
+            if (event.timeMilliseconds >= time && event.timeMilliseconds > 0) {
+                break;
+            }
+            if (event.timeMilliseconds >= 0 && std::isfinite(event.speed)) {
+                speed = event.speed;
+            }
+        }
 
-    // A signed SV coordinate is monotonic only between speed events. Find
-    // the future chart-time ranges that lie inside the rendered approach
-    // distance, then lay timing divisions into those ranges. This keeps a
-    // negative section on the receptor side of the conveyor and avoids
-    // iterating every division in a long chart each frame.
-    const qint64 chartEnd = std::max(
-        m_chart.durationMilliseconds,
-        m_playbackPositionMilliseconds + static_cast<qint64>(std::ceil(approachDistance)));
-    QVector<qint64> boundaries{m_playbackPositionMilliseconds, chartEnd};
-    for (const infalsus::SpeedEvent& event : m_speedEvents) {
-        if (event.timeMilliseconds > m_playbackPositionMilliseconds && event.timeMilliseconds < chartEnd) {
-            boundaries.append(event.timeMilliseconds);
+        return speed;
+    };
+    if (std::isfinite(initialMeasureDuration) && initialMeasureDuration > 0.0 && speedBefore(0.0) >= 0.0) {
+        for (int measureIndex = -9; measureIndex <= 0; ++measureIndex) {
+            const double time = initialMeasureDuration * measureIndex;
+            m_measureMarkers.append({time, scrollCoordinateAt(time)});
         }
     }
-    std::sort(boundaries.begin(), boundaries.end());
-    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
-
-    QVector<TimeRange> visibleRanges;
-    for (int index = 1; index < boundaries.size(); ++index) {
-        const qint64 segmentStart = boundaries.at(index - 1);
-        const qint64 segmentEnd = boundaries.at(index);
-        if (segmentEnd <= segmentStart) {
+    for (int pointIndex = 0; pointIndex < timingPoints.size(); ++pointIndex) {
+        const infalsus::TimingPoint& point = timingPoints.at(pointIndex);
+        const double measureDuration = 60000.0 / point.beatsPerMinute * point.timeSignatureNumerator;
+        const double sectionEnd = pointIndex + 1 < timingPoints.size()
+            ? timingPoints.at(pointIndex + 1).timeMilliseconds : chartEnd;
+        if (!std::isfinite(measureDuration) || measureDuration <= 0.0) {
             continue;
         }
-        const double startCoordinate = scrollDistanceTo(segmentStart);
-        const double coordinateChange = scrollDistanceTo(segmentEnd) - startCoordinate;
-        if (std::abs(coordinateChange) < 0.000001) {
-            if (std::abs(startCoordinate) <= approachDistance) {
-                visibleRanges.append({segmentStart, segmentEnd});
+        for (qint64 measureIndex = 0;; ++measureIndex) {
+            const double time = point.timeMilliseconds + measureIndex * measureDuration;
+            if (time >= sectionEnd) {
+                break;
             }
-            continue;
-        }
-
-        const double firstCrossing = (-approachDistance - startCoordinate) / coordinateChange;
-        const double secondCrossing = (approachDistance - startCoordinate) / coordinateChange;
-        const double rangeStart = std::max(0.0, std::min(firstCrossing, secondCrossing));
-        const double rangeEnd = std::min(1.0, std::max(firstCrossing, secondCrossing));
-        if (rangeStart >= rangeEnd) {
-            continue;
-        }
-        const qint64 start = segmentStart + static_cast<qint64>(std::ceil(
-            static_cast<double>(segmentEnd - segmentStart) * rangeStart));
-        const qint64 end = segmentStart + static_cast<qint64>(std::ceil(
-            static_cast<double>(segmentEnd - segmentStart) * rangeEnd));
-        if (end > start) {
-            visibleRanges.append({start, end});
+            if (speedBefore(time) >= 0.0) {
+                m_measureMarkers.append({time, scrollCoordinateAt(time)});
+            }
         }
     }
+    m_measureMarkersDirty = false;
+}
 
-    for (int pointIndex = 0; pointIndex < m_timingPoints.size(); ++pointIndex) {
-        const infalsus::TimingPoint& point = m_timingPoints.at(pointIndex);
-        const qint64 sectionStart = point.timeMilliseconds;
-        const qint64 sectionEnd = pointIndex + 1 < m_timingPoints.size()
-            ? m_timingPoints.at(pointIndex + 1).timeMilliseconds
-            : chartEnd;
-        const double beatDuration = 60000.0 / point.beatsPerMinute;
-        const double measureDuration = beatDuration * point.timeSignatureNumerator * 4.0
-            / std::max(point.timeSignatureDenominator, 1);
-        if (measureDuration <= 0.0 || sectionEnd <= sectionStart) {
+void ConveyorView::drawDivisors(QPainter& painter) {
+    ensureMeasureMarkers();
+    const double currentCoordinate = scrollCoordinateAt(m_playbackPositionMilliseconds);
+    const double approachDistance = approachDistanceMilliseconds();
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(palette::withAlpha(palette::white, 220));
+    for (const MeasureMarker& marker : m_measureMarkers) {
+        if (marker.timeMilliseconds <= m_playbackPositionMilliseconds) {
             continue;
         }
-
-        for (const TimeRange range : visibleRanges) {
-            const qint64 rangeStart = std::max(range.startMilliseconds, sectionStart);
-            const qint64 rangeEnd = std::min(range.endMilliseconds, sectionEnd);
-            if (rangeEnd <= rangeStart) {
-                continue;
-            }
-            const qint64 firstMeasure = std::max<qint64>(0, static_cast<qint64>(std::floor(
-                static_cast<double>(rangeStart - sectionStart) / measureDuration)));
-            for (qint64 measureIndex = firstMeasure;; ++measureIndex) {
-                const double measureStart = static_cast<double>(sectionStart) + measureIndex * measureDuration;
-                if (measureStart >= rangeEnd || measureStart >= sectionEnd) {
-                    break;
-                }
-                const qint64 timeMilliseconds = static_cast<qint64>(std::llround(measureStart));
-                if (timeMilliseconds < rangeStart || timeMilliseconds >= rangeEnd
-                    || timeMilliseconds < sectionStart || timeMilliseconds >= sectionEnd) {
-                    continue;
-                }
-
-                painter.setPen(QPen(palette::withAlpha(palette::white, 220), 2.0));
-                // The game draws three ground-only divider strips. The outer
-                // lanes have their own angled strips while lanes 1–4 share
-                // the straight central strip.
-                painter.drawLine(
-                    floorPointAt(-0.125, timeMilliseconds),
-                    floorPointAt(0.125, timeMilliseconds));
-                painter.drawLine(
-                    floorPointAt(0.125, timeMilliseconds),
-                    floorPointAt(1.125, timeMilliseconds));
-                painter.drawLine(
-                    floorPointAt(1.125, timeMilliseconds),
-                    floorPointAt(1.375, timeMilliseconds));
-            }
+        const double distance = (marker.coordinate - currentCoordinate) / approachDistance;
+        if (std::abs(distance) <= 1.0) {
+            painter.drawPath(ConveyorGeometry::measureMarker(distance));
         }
     }
 }
@@ -694,12 +634,9 @@ void ConveyorView::drawFloorNote(QPainter& painter, const ChartNote& note) {
     const qint64 noteStart = std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
     const FloorSpan startSpan = floorSpan(note.side, note.startX, note.startWidth);
     const FloorSpan endSpan = floorSpan(note.side, note.endX, note.endWidth);
-    const QPolygonF shape{
-        floorPointAt(startSpan.left, noteStart),
-        floorPointAt(startSpan.right, noteStart),
-        floorPointAt(endSpan.right, rawEnd),
-        floorPointAt(endSpan.left, rawEnd),
-    };
+    const QPainterPath shape = ConveyorGeometry::floorPath({
+        {startSpan.left, projectionProgress(noteStart)}, {startSpan.right, projectionProgress(noteStart)},
+        {endSpan.right, projectionProgress(rawEnd)}, {endSpan.left, projectionProgress(rawEnd)}}, note.side);
     const QColor color = floorColor(note);
 
     painter.save();
@@ -707,11 +644,14 @@ void ConveyorView::drawFloorNote(QPainter& painter, const ChartNote& note) {
     const QColor contour = palette::floorNoteContour;
     painter.setPen(QPen(contour, kNoteContourWidth));
     painter.setBrush(color);
-    painter.drawPolygon(shape);
+    painter.drawPath(shape);
     painter.restore();
 }
 
 void ConveyorView::drawFlick(QPainter& painter, const ChartNote& note) {
+    if (!ConveyorGeometry::skyVisible(projectionProgress(note.startMilliseconds))) {
+        return;
+    }
     const auto pointAt = [this, &note](const double coordinate) {
         return skyPointAt(coordinate, note.startMilliseconds);
     };
@@ -797,16 +737,21 @@ void ConveyorView::drawFieldBoundary(QPainter& painter, const double left, const
         const double sharedLeft = std::clamp(segment.left, left, right);
         const double sharedRight = std::clamp(segment.right, left, right);
         if (sharedLeft > cursor) {
-            painter.drawLine(skyPointAt(cursor, timeMilliseconds), skyPointAt(sharedLeft, timeMilliseconds));
+            painter.drawPath(ConveyorGeometry::skyPath({{cursor, projectionProgress(timeMilliseconds)},
+                {sharedLeft, projectionProgress(timeMilliseconds)}}, false));
         }
         cursor = std::max(cursor, sharedRight);
     }
     if (cursor < right) {
-        painter.drawLine(skyPointAt(cursor, timeMilliseconds), skyPointAt(right, timeMilliseconds));
+        painter.drawPath(ConveyorGeometry::skyPath({{cursor, projectionProgress(timeMilliseconds)},
+            {right, projectionProgress(timeMilliseconds)}}, false));
     }
 }
 
 void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const int index) {
+    if (note.endMilliseconds <= m_playbackPositionMilliseconds) {
+        return;
+    }
     const qint64 clippedStart = std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
     const qint64 clippedEnd = note.endMilliseconds;
     const qint64 segmentDuration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
@@ -827,8 +772,8 @@ void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const 
             + (fieldRightEdge(note, false) - fieldRightEdge(note, true))
                 * easingFor(note.auxiliary, true, segmentProgress);
         const qint64 chartTime = static_cast<qint64>(sampleTime);
-        leftBoundary.append(skyPointAt(left, chartTime));
-        rightBoundary.append(skyPointAt(right, chartTime));
+        leftBoundary.append({left, projectionProgress(chartTime)});
+        rightBoundary.append({right, projectionProgress(chartTime)});
     }
 
     QPolygonF field = leftBoundary;
@@ -843,11 +788,11 @@ void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const 
     painter.setOpacity(painter.opacity() * noteOpacity(clippedStart));
     painter.setPen(Qt::NoPen);
     painter.setBrush(color);
-    painter.drawPolygon(field);
+    painter.drawPath(ConveyorGeometry::skyPath(field));
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(contourColor, kSkyContourWidth));
-    painter.drawPolyline(leftBoundary);
-    painter.drawPolyline(rightBoundary);
+    painter.drawPath(ConveyorGeometry::skyPath(leftBoundary, false));
+    painter.drawPath(ConveyorGeometry::skyPath(rightBoundary, false));
     drawFieldBoundary(painter, fieldLeftEdge(note, false), fieldRightEdge(note, false), note.endMilliseconds,
         m_sharedFieldEnds.value(index));
     if (originalStartVisible) {
@@ -855,20 +800,13 @@ void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const 
             m_sharedFieldStarts.value(index));
     } else {
         painter.setPen(QPen(contourColor, kSkyContourWidth));
-        painter.drawLine(leftBoundary.front(), rightBoundary.front());
+        painter.drawPath(ConveyorGeometry::skyPath({leftBoundary.front(), rightBoundary.front()}, false));
     }
     painter.restore();
 }
 
 void ConveyorView::drawChart(QPainter& painter) {
     ensureFieldBoundaries();
-    // Track_BuildVisibleNoteCandidates works independently on the four raw
-    // side buffers.  Its coordinate window is signed: a note is accepted only
-    // when its start/end span touches [current - range, current + range].
-    // It deliberately keeps walking through a skipped note, only stopping a
-    // side after its start is beyond current + 2 * range.  A global time-order
-    // pass cannot reproduce that behaviour across central, outer, and sky
-    // buffers when a negative-SV section folds their coordinates.
     std::array<QVector<const ChartNote*>, 4> notesBySide;
     for (const ChartNote& note : m_chart.notes) {
         const int sideIndex = static_cast<int>(note.side);
@@ -882,17 +820,20 @@ void ConveyorView::drawChart(QPainter& painter) {
     const double approachDistance = approachDistanceMilliseconds();
     for (QVector<const ChartNote*>& sideNotes : notesBySide) {
         std::stable_sort(sideNotes.begin(), sideNotes.end(), [](const ChartNote* first, const ChartNote* second) {
-            return first->startMilliseconds < second->startMilliseconds;
+            if (first->startMilliseconds != second->startMilliseconds) {
+                return first->startMilliseconds < second->startMilliseconds;
+            }
+
+            return first->endMilliseconds < second->endMilliseconds;
         });
 
         for (const ChartNote* note : sideNotes) {
-            if (note->endMilliseconds <= m_playbackPositionMilliseconds) {
+            const bool completed = note->endMilliseconds <= m_playbackPositionMilliseconds;
+            if (completed && (note->kind != NoteKind::Sky
+                    || m_playbackPositionMilliseconds - note->endMilliseconds > 1000)) {
                 continue;
             }
 
-            // Native code keeps objects whose start timestamp is less than a
-            // second ahead of the playhead.  This bypasses its coordinate
-            // test, so retain the same short receiver-side grace interval.
             if (note->startMilliseconds - m_playbackPositionMilliseconds < 1000) {
                 visibleNotes.append(note);
                 continue;
@@ -903,11 +844,6 @@ void ConveyorView::drawChart(QPainter& painter) {
                 break;
             }
 
-            const double endDistance = scrollDistanceTo(note->endMilliseconds);
-            if (startDistance > approachDistance
-                || endDistance < -approachDistance) {
-                continue;
-            }
             visibleNotes.append(note);
         }
     }
