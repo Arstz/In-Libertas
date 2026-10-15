@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <limits>
+#include <optional>
 
 namespace infalsus {
 
@@ -27,6 +29,38 @@ namespace detail {
 }
 
 } // namespace detail
+
+[[nodiscard]] inline std::optional<double> unroundedValidDivisorTime(const QVector<TimingPoint>& timingPoints,
+    const qint64 timestampMilliseconds) {
+    const auto nextPoint = std::upper_bound(timingPoints.cbegin(), timingPoints.cend(), timestampMilliseconds,
+        [](const qint64 timestamp, const TimingPoint& point) {
+            return timestamp < point.timeMilliseconds;
+        });
+    if (nextPoint == timingPoints.cbegin()) {
+        return std::nullopt;
+    }
+
+    const TimingPoint& point = *std::prev(nextPoint);
+    const double measureDuration = detail::measureDurationMilliseconds(point);
+    std::optional<double> nearestTime;
+    double nearestDistance = std::numeric_limits<double>::max();
+    for (const int divisor : kSupportedDivisors) {
+        const double tickDuration = measureDuration / divisor;
+        const qint64 tick = static_cast<qint64>(std::llround(
+            (timestampMilliseconds - point.timeMilliseconds) / tickDuration));
+        const double relativeTime = tick * tickDuration;
+        if (point.timeMilliseconds + static_cast<qint64>(std::llround(relativeTime)) != timestampMilliseconds) {
+            continue;
+        }
+        const double time = point.timeMilliseconds + relativeTime;
+        const double distance = std::abs(time - timestampMilliseconds);
+        if (distance < nearestDistance) {
+            nearestTime = time;
+            nearestDistance = distance;
+        }
+    }
+    return nearestTime;
+}
 
 // Finds the closest timestamp that lies on at least one supported divisor of
 // the active timing map. The result is calculated from absolute ticks, so each

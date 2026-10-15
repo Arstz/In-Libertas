@@ -793,12 +793,29 @@ void EditorState::pasteCopiedHitObjects() {
         [](const ChartNote& first, const ChartNote& second) {
             return first.startMilliseconds < second.startMilliseconds;
         });
-    const qint64 timeOffset = closestDivisorTime(m_playbackPositionMilliseconds)
-        - firstHitObject->startMilliseconds;
+    const qint64 destinationStart = closestDivisorTime(m_playbackPositionMilliseconds);
+    const qint64 timeOffset = destinationStart - firstHitObject->startMilliseconds;
+    const auto sourceGridStart = unroundedValidDivisorTime(m_timingPoints, firstHitObject->startMilliseconds);
+    const auto destinationGridStart = unroundedValidDivisorTime(m_timingPoints, destinationStart);
+    const auto translateTime = [&](const qint64 sourceTime) {
+        const qint64 shiftedTime = std::max<qint64>(0, sourceTime + timeOffset);
+        const auto sourceGridTime = unroundedValidDivisorTime(m_timingPoints, sourceTime);
+        if (!sourceGridStart || !destinationGridStart || !sourceGridTime) {
+            return shiftedTime;
+        }
+        constexpr double kGridToleranceMilliseconds = 0.000001;
+        const double translatedGridTime = *destinationGridStart + (*sourceGridTime - *sourceGridStart);
+        const qint64 roundedTime = nearestValidDivisorTime(m_timingPoints,
+            static_cast<qint64>(std::llround(translatedGridTime)));
+        const auto destinationGridTime = unroundedValidDivisorTime(m_timingPoints, roundedTime);
+        return destinationGridTime
+                && std::abs(*destinationGridTime - translatedGridTime) <= kGridToleranceMilliseconds
+            ? roundedTime : shiftedTime;
+    };
     QVector<ChartNote> hitObjects = m_clipboardHitObjects;
     for (ChartNote& hitObject : hitObjects) {
-        hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds + timeOffset);
-        hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds + timeOffset);
+        hitObject.startMilliseconds = translateTime(hitObject.startMilliseconds);
+        hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, translateTime(hitObject.endMilliseconds));
         if (hitObject.kind == NoteKind::Tap || hitObject.kind == NoteKind::Flick) {
             hitObject.endMilliseconds = hitObject.startMilliseconds;
         }
