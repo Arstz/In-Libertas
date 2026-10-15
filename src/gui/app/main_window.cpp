@@ -1466,7 +1466,7 @@ void MainWindow::createProject() {
     ChartProject project = blankProject(songName);
     project.songPath = songPath;
     project.jacketPath = jacketPath;
-    if (!normalizeAssets(&project, &audio, &jacket)) {
+    if (!normalizeAssets(&project, &audio, &jacket, true)) {
         return;
     }
     m_project = std::move(project);
@@ -1697,7 +1697,8 @@ bool MainWindow::requireChartId(ChartProject* project) {
     return true;
 }
 
-bool MainWindow::normalizeAssets(ChartProject* project, QByteArray* audio, QByteArray* jacket) {
+bool MainWindow::normalizeAssets(ChartProject* project, QByteArray* audio, QByteArray* jacket,
+    const bool normalizeAudioPeak) {
     QProgressDialog progress(QStringLiteral("Preparing project media..."), QStringLiteral("Cancel"), 0, 100, this);
     progress.setWindowModality(Qt::ApplicationModal);
     progress.setMinimumDuration(0);
@@ -1706,7 +1707,7 @@ bool MainWindow::normalizeAssets(ChartProject* project, QByteArray* audio, QByte
         [&progress](const qint64 position, const qint64 duration) {
             progress.setValue(duration > 0 ? static_cast<int>(std::clamp(100 * position / duration, qint64(0), qint64(99))) : 0);
             return !progress.wasCanceled();
-        });
+        }, normalizeAudioPeak);
     progress.close();
     if (!assets.error.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("Project media"), assets.error);

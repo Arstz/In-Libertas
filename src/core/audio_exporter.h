@@ -11,7 +11,7 @@ using AudioExportProgress = std::function<bool(qint64 positionMilliseconds, qint
 
 [[nodiscard]] bool validateAudioSource(const QString& path, QString* error);
 [[nodiscard]] QByteArray encodeOggAudio(const QString& sourcePath, const QByteArray& sourceData,
-    QString* error, const AudioExportProgress& progress = {});
+    QString* error, const AudioExportProgress& progress = {}, bool normalizePeak = false);
 [[nodiscard]] bool exportOggAudio(const QString& sourcePath, const QByteArray& sourceData,
     const QString& destinationPath, QString* error, const AudioExportProgress& progress = {});
 

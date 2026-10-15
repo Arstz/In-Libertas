@@ -6,7 +6,8 @@
 namespace infalsus {
 
 NormalizedProjectAssets normalizeProjectAssets(const QString& songPath, const QByteArray& songData,
-    const QString& jacketPath, const QByteArray& jacketData, const AudioExportProgress& progress) {
+    const QString& jacketPath, const QByteArray& jacketData, const AudioExportProgress& progress,
+    const bool normalizeAudioPeak) {
     NormalizedProjectAssets result;
     QImage jacket;
 
@@ -18,7 +19,7 @@ NormalizedProjectAssets normalizeProjectAssets(const QString& songPath, const QB
     if (!result.error.isEmpty()) {
         return result;
     }
-    result.songData = encodeOggAudio(songPath, songData, &result.error, progress);
+    result.songData = encodeOggAudio(songPath, songData, &result.error, progress, normalizeAudioPeak);
     if (!result.error.isEmpty()) {
         return result;
     }

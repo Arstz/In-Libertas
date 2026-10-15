@@ -21,7 +21,9 @@ extern "C" {
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 
 namespace infalsus {
 
@@ -39,6 +41,9 @@ constexpr int kOggVersionOffset = 4;
 constexpr int kVorbisSignatureSize = 7;
 constexpr int kOggProbeSize = 512;
 constexpr int kAudioCopyChunkSize = 1024 * 1024;
+constexpr double kGamePeakAmplitude = 1.1405839342071802;
+constexpr double kPeakToleranceDecibels = 0.1;
+constexpr int kMaximumNormalizationAttempts = 4;
 
 [[nodiscard]] bool reportEncodingError(QString* error, const QString& operation, const int code) {
     char message[AV_ERROR_MAX_STRING_SIZE]{};
@@ -127,13 +132,7 @@ public:
         return result >= 0 || reportEncodingError(error, QStringLiteral("write Ogg header"), result);
     }
 
-    [[nodiscard]] bool append(const QAudioBuffer& buffer, QString* error) {
-        const QAudioFormat format = buffer.format();
-        if (format.sampleFormat() != QAudioFormat::Float || format.sampleRate() != kExportSampleRate
-            || format.channelCount() != kExportChannelCount) {
-            *error = QStringLiteral("The decoder did not provide stereo 48 kHz float audio.");
-            return false;
-        }
+    [[nodiscard]] bool append(const QAudioBuffer& buffer, QString* error, const double gain) {
         const float* samples = buffer.constData<float>();
         for (qsizetype offset = 0; offset < buffer.frameCount();) {
             if (m_pendingSamples == 0) {
@@ -148,7 +147,7 @@ public:
             for (int channel = 0; channel < kExportChannelCount; ++channel) {
                 auto* output = reinterpret_cast<float*>(m_frame->data[channel]) + m_pendingSamples;
                 for (int sample = 0; sample < count; ++sample) {
-                    output[sample] = samples[(offset + sample) * kExportChannelCount + channel];
+                    output[sample] = static_cast<float>(samples[(offset + sample) * kExportChannelCount + channel] * gain);
                 }
             }
             offset += count;
@@ -269,13 +268,8 @@ private:
     return true;
 }
 
-[[nodiscard]] bool transcodeAudio(QIODevice& source, QIODevice& destination, QString* error,
-    const AudioExportProgress& progress) {
-    VorbisEncoder encoder(destination);
-    if (!encoder.initialize(error)) {
-        return false;
-    }
-
+[[nodiscard]] bool decodeAudio(QIODevice& source, QString* error,
+    const AudioExportProgress& progress, const std::function<bool(const QAudioBuffer&)>& consumeBuffer) {
     QEventLoop loop;
     QAudioDecoder decoder;
     QTimer idleTimeout;
@@ -303,6 +297,12 @@ private:
             if (!buffer.isValid()) {
                 continue;
             }
+            const QAudioFormat format = buffer.format();
+            if (format.sampleFormat() != QAudioFormat::Float || format.sampleRate() != kExportSampleRate
+                || format.channelCount() != kExportChannelCount) {
+                fail(QStringLiteral("The decoder did not provide stereo 48 kHz float audio."));
+                return;
+            }
             idleTimeout.start();
             if (progress && !progress(decoder.position(), decoder.duration())) {
                 fail(QStringLiteral("Audio export cancelled."));
@@ -311,7 +311,7 @@ private:
             if (completed) {
                 return;
             }
-            if (!encoder.append(buffer, error)) {
+            if (!consumeBuffer(buffer)) {
                 fail(*error);
                 return;
             }
@@ -322,10 +322,6 @@ private:
         }
         if (decodedFrames == 0) {
             fail(QStringLiteral("The song contains no decodable audio."));
-            return;
-        }
-        if (!encoder.finish(error)) {
-            fail(*error);
             return;
         }
         completed = true;
@@ -367,6 +363,91 @@ private:
     idleTimeout.stop();
     decoder.stop();
     return error->isEmpty();
+}
+
+[[nodiscard]] bool transcodeAudio(QIODevice& source, QIODevice& destination, QString* error,
+    const AudioExportProgress& progress, const double gain = 1.0) {
+    VorbisEncoder encoder(destination);
+    return encoder.initialize(error)
+        && decodeAudio(source, error, progress, [&](const QAudioBuffer& buffer) {
+            return encoder.append(buffer, error, gain);
+        })
+        && encoder.finish(error);
+}
+
+[[nodiscard]] bool measureAudioPeak(QIODevice& source, double* peak, QString* error,
+    const AudioExportProgress& progress) {
+    *peak = 0.0;
+    return decodeAudio(source, error, progress, [&](const QAudioBuffer& buffer) {
+        const float* samples = buffer.constData<float>();
+        for (qsizetype index = 0; index < buffer.sampleCount(); ++index) {
+            if (!std::isfinite(samples[index])) {
+                *error = QStringLiteral("The song contains non-finite audio samples.");
+                return false;
+            }
+            *peak = std::max(*peak, std::abs(static_cast<double>(samples[index])));
+        }
+        return true;
+    });
+}
+
+[[nodiscard]] bool normalizeAudioPeak(QIODevice& source, QIODevice& destination, QString* error,
+    const AudioExportProgress& progress) {
+    constexpr qint64 kProgressStages = 2 + kMaximumNormalizationAttempts * 2;
+    qint64 reportedPosition = 0;
+    const auto stageProgress = [&](const int stage) -> AudioExportProgress {
+        return [&, stage](const qint64 position, const qint64 duration) {
+            const qint64 fraction = duration > 0
+                ? static_cast<qint64>(1000.0 * std::clamp(static_cast<double>(position) / duration, 0.0, 1.0)) : 0;
+            reportedPosition = std::max(reportedPosition, stage * qint64(1000) + fraction);
+            return !progress || progress(reportedPosition, kProgressStages * 1000);
+        };
+    };
+
+    double sourcePeak = 0.0;
+    if (!measureAudioPeak(source, &sourcePeak, error, stageProgress(0))) {
+        return false;
+    }
+    double gain = sourcePeak > 0.0 ? kGamePeakAmplitude / sourcePeak : 1.0;
+    double bestError = std::numeric_limits<double>::infinity();
+    QByteArray bestAudio;
+    for (int attempt = 0; attempt < kMaximumNormalizationAttempts; ++attempt) {
+        if (!source.seek(0)) {
+            *error = QStringLiteral("Could not rewind the project audio.");
+            return false;
+        }
+        QByteArray bytes;
+        QBuffer encoded(&bytes);
+        encoded.open(QIODevice::ReadWrite);
+        if (!transcodeAudio(source, encoded, error, stageProgress(1 + attempt * 2), gain)) {
+            return false;
+        }
+        if (sourcePeak == 0.0) {
+            bestAudio = std::move(bytes);
+            break;
+        }
+        encoded.seek(0);
+        double encodedPeak = 0.0;
+        if (!measureAudioPeak(encoded, &encodedPeak, error, stageProgress(2 + attempt * 2))) {
+            return false;
+        }
+        if (encodedPeak == 0.0) {
+            *error = QStringLiteral("The normalized song contains no audible samples.");
+            return false;
+        }
+        const double peakError = std::abs(20.0 * std::log10(encodedPeak / kGamePeakAmplitude));
+        if (peakError < bestError) {
+            bestAudio = std::move(bytes);
+            bestError = peakError;
+        }
+        if (peakError <= kPeakToleranceDecibels) {
+            break;
+        }
+        gain *= kGamePeakAmplitude / encodedPeak;
+    }
+    QBuffer result(&bestAudio);
+    result.open(QIODevice::ReadOnly);
+    return copyVorbisAudio(result, destination, error, progress ? stageProgress(kProgressStages - 1) : AudioExportProgress{});
 }
 
 [[nodiscard]] bool validateAudio(const QString& path, QIODevice* source, QString* error) {
@@ -424,7 +505,8 @@ bool validateAudioSource(const QString& path, QString* error) {
 namespace {
 
 [[nodiscard]] bool writeOggAudio(const QString& sourcePath, const QByteArray& sourceData,
-    QIODevice& destination, QString* error, const AudioExportProgress& progress, bool normalize = false) {
+    QIODevice& destination, QString* error, const AudioExportProgress& progress,
+    const bool forceTranscode = false, const bool normalizePeak = false) {
     QFile file(sourcePath);
     QBuffer buffer;
     QIODevice* source = sourceData.isEmpty() ? static_cast<QIODevice*>(&file) : &buffer;
@@ -439,7 +521,7 @@ namespace {
         return false;
     }
     const QByteArray header = source->peek(kOggProbeSize);
-    if (!normalize && isOggVorbis(header) && isProjectVorbisAudio(source->peek(source->size()))) {
+    if (!forceTranscode && !normalizePeak && isOggVorbis(header) && isProjectVorbisAudio(source->peek(source->size()))) {
         if (!validateAudio({}, source, error)) {
             return false;
         }
@@ -450,17 +532,18 @@ namespace {
         return copyVorbisAudio(*source, destination, error, progress);
     }
 
-    return transcodeAudio(*source, destination, error, progress);
+    return normalizePeak ? normalizeAudioPeak(*source, destination, error, progress)
+                         : transcodeAudio(*source, destination, error, progress);
 }
 
 } // namespace
 
 QByteArray encodeOggAudio(const QString& sourcePath, const QByteArray& sourceData,
-    QString* error, const AudioExportProgress& progress) {
+    QString* error, const AudioExportProgress& progress, const bool normalizePeak) {
     QByteArray bytes;
     QBuffer destination(&bytes);
     destination.open(QIODevice::WriteOnly);
-    if (!writeOggAudio(sourcePath, sourceData, destination, error, progress, true)) {
+    if (!writeOggAudio(sourcePath, sourceData, destination, error, progress, true, normalizePeak)) {
         return {};
     }
 

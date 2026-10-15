@@ -11,6 +11,7 @@ struct NormalizedProjectAssets {
 };
 
 [[nodiscard]] NormalizedProjectAssets normalizeProjectAssets(const QString& songPath, const QByteArray& songData,
-    const QString& jacketPath, const QByteArray& jacketData, const AudioExportProgress& progress = {});
+    const QString& jacketPath, const QByteArray& jacketData, const AudioExportProgress& progress = {},
+    bool normalizeAudioPeak = false);
 
 } // namespace infalsus

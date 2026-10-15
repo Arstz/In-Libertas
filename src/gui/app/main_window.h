@@ -79,7 +79,8 @@ private:
     bool saveProject();
     void saveProjectAs();
     [[nodiscard]] bool requireChartId(ChartProject* project);
-    [[nodiscard]] bool normalizeAssets(ChartProject* project, QByteArray* audio, QByteArray* jacket);
+    [[nodiscard]] bool normalizeAssets(ChartProject* project, QByteArray* audio, QByteArray* jacket,
+        bool normalizeAudioPeak = false);
     void exportProject();
     void storeLoadedDifficulty();
     void loadDifficulty(infalsus::Difficulty difficulty);
