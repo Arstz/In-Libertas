@@ -2,7 +2,6 @@
 
 #include <QtCore/QHash>
 #include <QtCore/QMap>
-#include <QtCore/QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -32,24 +31,20 @@ struct FieldEndpoint {
         .index = index, .atStart = atStart, .left = center - width * 0.5, .right = center + width * 0.5};
 }
 
-[[nodiscard]] bool isConnected(const FieldGroup& group, const QHash<int, QVector<int>>& neighbors) {
-    QSet<int> visited;
-    QVector<int> pending{group.indexes.front()};
-
-    while (!pending.isEmpty()) {
-        const int index = pending.takeLast();
-        if (visited.contains(index)) {
-            continue;
+[[nodiscard]] bool isConnected(const FieldGroup& group, const ChartData& chart) {
+    QVector<int> indexes = group.indexes;
+    std::sort(indexes.begin(), indexes.end(), [&chart](const int first, const int second) {
+        return chart.notes.at(first).startMilliseconds < chart.notes.at(second).startMilliseconds;
+    });
+    qint64 coveredEnd = chart.notes.at(indexes.front()).endMilliseconds;
+    for (const int index : indexes) {
+        const ChartNote& note = chart.notes.at(index);
+        if (note.startMilliseconds > coveredEnd) {
+            return false;
         }
-        visited.insert(index);
-        for (const int neighbor : neighbors.value(index)) {
-            if (!visited.contains(neighbor)) {
-                pending.append(neighbor);
-            }
-        }
+        coveredEnd = std::max(coveredEnd, note.endMilliseconds);
     }
-
-    return visited.size() == group.indexes.size();
+    return true;
 }
 
 } // namespace
@@ -71,7 +66,6 @@ QVector<FieldGroup> analyzeFieldGroups(const ChartData& chart) {
     result.reserve(groups.size());
     for (FieldGroup& group : groups) {
         QVector<FieldEndpoint> endpoints;
-        QHash<int, QVector<int>> neighbors;
         endpoints.reserve(group.indexes.size() * 2);
         for (const int index : group.indexes) {
             const ChartNote& note = chart.notes.at(index);
@@ -94,8 +88,6 @@ QVector<FieldGroup> analyzeFieldGroups(const ChartData& chart) {
                     || !(std::min(first.right, second.right) > std::max(first.left, second.left))) {
                     continue;
                 }
-                neighbors[first.index].append(second.index);
-                neighbors[second.index].append(first.index);
                 group.joints.append({.segment = {.left = std::max(first.left, second.left),
                     .right = std::min(first.right, second.right)},
                     .firstIndex = first.index, .secondIndex = second.index,
@@ -104,7 +96,7 @@ QVector<FieldGroup> analyzeFieldGroups(const ChartData& chart) {
                         && std::abs(first.right - second.right) <= kEndpointEdgeTolerance});
             }
         }
-        group.connected = isConnected(group, neighbors);
+        group.connected = isConnected(group, chart);
         result.append(std::move(group));
     }
 

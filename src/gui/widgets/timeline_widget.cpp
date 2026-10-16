@@ -72,11 +72,11 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
         painter.drawLine(QPointF(x, 4.0), QPointF(x, height() - 4.0));
     }
 
-    // Type-0 SPC events are conveyor-speed changes.  Keep them distinct from
-    // BPM sections: short green bars sit on the timeline track itself.
     painter.setPen(Qt::NoPen);
-    painter.setBrush(palette::guideGreen);
-    for (const SpeedEvent& event : m_speedEvents) {
+    for (int index = 0; index < m_speedEvents.size(); ++index) {
+        const SpeedEvent& event = m_speedEvents.at(index);
+        const bool repeatsPrevious = index > 0 && event.speed == m_speedEvents.at(index - 1).speed;
+        painter.setBrush(repeatsPrevious ? palette::floorNoteBlue : palette::guideGreen);
         const double progress = static_cast<double>(event.timeMilliseconds) / m_durationMilliseconds;
         const double x = track.left() + std::clamp(progress, 0.0, 1.0) * track.width();
         painter.drawRect(QRectF(x - 2.0, track.center().y(), 4.0, track.height() * 0.5));
