@@ -62,6 +62,7 @@ function Invoke-VisualStudioCommand {
             $processEnvironment[[string]$environmentName] = [string]$sourceEnvironment[$environmentName]
         }
     }
+    $processEnvironment['MSBUILDDISABLENODEREUSE'] = '1'
 
     $process = [System.Diagnostics.Process]::Start($startInfo)
     $process.WaitForExit()

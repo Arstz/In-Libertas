@@ -568,6 +568,7 @@ void MainWindow::buildInterface() {
     connect(m_timeline, &TimelineWidget::playbackPositionRequested, m_state, &EditorState::setPlaybackPosition);
     connect(m_flatView, &FlatView::playbackPositionRequested, m_state, &EditorState::setPlaybackPosition);
     connect(m_flatView, &FlatView::divisorSeekRequested, m_state, &EditorState::seekByDivisor);
+    connect(m_flatView, &FlatView::measureSeekRequested, m_state, &EditorState::seekByMeasure);
     connect(m_flatView, &FlatView::divisorIncreaseRequested, m_state, &EditorState::increaseDivisor);
     connect(m_flatView, &FlatView::divisorDecreaseRequested, m_state, &EditorState::decreaseDivisor);
     connect(m_flatView, &FlatView::hitObjectAddRequested, m_state, &EditorState::addHitObject);

@@ -56,6 +56,7 @@ public:
 signals:
     void playbackPositionRequested(qint64 positionMilliseconds);
     void divisorSeekRequested(int direction);
+    void measureSeekRequested(int direction);
     void divisorIncreaseRequested();
     void divisorDecreaseRequested();
     void hitObjectAddRequested(const ChartNote& hitObject);

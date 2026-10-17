@@ -546,6 +546,14 @@ void EditorState::decreaseDivisor() {
 }
 
 void EditorState::seekByDivisor(const int direction) {
+    seekByGrid(direction, m_divisor);
+}
+
+void EditorState::seekByMeasure(const int direction) {
+    seekByGrid(direction, 1);
+}
+
+void EditorState::seekByGrid(const int direction, const int divisor) {
     if (direction == 0 || m_timingPoints.isEmpty()) {
         return;
     }
@@ -555,7 +563,7 @@ void EditorState::seekByDivisor(const int direction) {
     const double beatDuration = 60000.0 / std::max(point.beatsPerMinute, 1.0);
     const double measureDuration = beatDuration * std::max(point.timeSignatureNumerator, 1) * 4.0
         / std::max(point.timeSignatureDenominator, 1);
-    const double tickDuration = measureDuration / m_divisor;
+    const double tickDuration = measureDuration / divisor;
     const double gridPosition = static_cast<double>(m_playbackPositionMilliseconds - point.timeMilliseconds) / tickDuration;
     const double nearestTick = std::round(gridPosition);
     const qint64 nearestTime = point.timeMilliseconds

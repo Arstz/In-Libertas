@@ -2051,7 +2051,11 @@ void FlatView::wheelEvent(QWheelEvent* event) {
         const int direction = (steps > 0.0 ? -1 : 1) * (m_invertMousewheelScroll ? -1 : 1);
         const int count = std::max(1, static_cast<int>(std::lround(std::abs(steps))));
         for (int index = 0; index < count; ++index) {
-            emit divisorSeekRequested(direction);
+            if ((event->modifiers() & Qt::ShiftModifier) != 0) {
+                emit measureSeekRequested(direction);
+            } else {
+                emit divisorSeekRequested(direction);
+            }
         }
     }
     event->accept();

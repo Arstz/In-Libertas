@@ -68,6 +68,7 @@ public:
     void increaseDivisor();
     void decreaseDivisor();
     void seekByDivisor(int direction);
+    void seekByMeasure(int direction);
     void setDifficulty(Difficulty difficulty);
     void setTool(EditorTool tool);
     void setFlatViewMode(FlatViewMode mode);
@@ -170,6 +171,7 @@ private:
 
     [[nodiscard]] const TimingPoint& timingPointAt(qint64 positionMilliseconds) const;
     [[nodiscard]] qint64 closestDivisorTime(qint64 positionMilliseconds) const;
+    void seekByGrid(int direction, int divisor);
     [[nodiscard]] bool isValidHitObjectIndex(int index) const;
     [[nodiscard]] static bool hitObjectsEqual(const ChartNote& first, const ChartNote& second);
     [[nodiscard]] EventSnapshot eventSnapshot() const;
