@@ -198,7 +198,10 @@ void EventsWidget::setSelectedSpeedEvent(const int index) {
 void EventsWidget::setEvents(const QVector<TimingPoint>& timingEvents, const QVector<LaneEvent>& laneEvents,
     const QVector<SpeedEvent>& speedEvents) {
     while (QLayoutItem* item = m_rowsLayout->takeAt(0)) {
-        delete item->widget();
+        if (QWidget* widget = item->widget()) {
+            widget->hide();
+            widget->deleteLater();
+        }
         delete item;
     }
     m_rows.clear();
@@ -268,6 +271,15 @@ void EventsWidget::setRowsSelected(const QSet<EventRow*>& rows, EventRow* anchor
 void EventsWidget::activateRow(EventRow* row, const Qt::KeyboardModifiers modifiers, const bool seek) {
     if (row == nullptr) {
         return;
+    }
+    if (!m_rows.contains(row)) {
+        const auto current = std::find_if(m_rows.cbegin(), m_rows.cend(), [row](const EventRow* candidate) {
+            return candidate->type() == row->type() && candidate->index() == row->index();
+        });
+        if (current == m_rows.cend()) {
+            return;
+        }
+        row = *current;
     }
 
     QSet<EventRow*> selected = m_selectedRows;

@@ -1,5 +1,3 @@
 - Investigate score DB persistance for different sizes 
 - Save and retrieve custom field presents
 - Implement sv interpolation tool
-- Remebmer last export folder
-- Clicking on Events widget wlile editing properties will result in crash

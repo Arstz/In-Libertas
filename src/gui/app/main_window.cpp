@@ -1749,7 +1749,10 @@ void MainWindow::exportProject() {
             return;
         }
     }
-    const QString parentPath = QFileDialog::getExistingDirectory(this, QStringLiteral("Export project to"));
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
+    const QString lastExportDirectory = settings.value(QStringLiteral("export/last_directory")).toString();
+    const QString parentPath = QFileDialog::getExistingDirectory(this, QStringLiteral("Export project to"),
+        QDir(lastExportDirectory).exists() ? lastExportDirectory : QString());
     if (parentPath.isEmpty()) {
         return;
     }
@@ -1768,6 +1771,7 @@ void MainWindow::exportProject() {
         QMessageBox::warning(this, QStringLiteral("Export project"), error);
         return;
     }
+    settings.setValue(QStringLiteral("export/last_directory"), parentPath);
     const bool mediaChanged = audio != m_projectSongData || jacket != m_projectJacketData;
     m_project = std::move(project);
     if (mediaChanged) {
