@@ -1,5 +1,6 @@
 #include "gui/canvas/flat_view.h"
 
+#include "core/timing_grid.h"
 #include "gui/app/game_palette.h"
 
 #include <QtGui/QPaintEvent>
@@ -946,13 +947,17 @@ QVector<ChartNote> FlatView::hitObjectsForSelectionMove(const QPointF& position,
         const qint64 unsnappedStart = firstStart + timeOffset;
         timeOffset = snappedTimeAtY(timeToY(unsnappedStart)) - firstStart;
     }
+    const auto translateTime = [&](const qint64 sourceTime) {
+        return snapToGrid ? translateDivisorTime(m_timingPoints, sourceTime, firstStart, firstStart + timeOffset)
+                          : std::max<qint64>(0, sourceTime + timeOffset);
+    };
 
     QVector<ChartNote> hitObjects;
     hitObjects.reserve(m_dragSelectionOriginals.size());
     for (const ChartNote& original : m_dragSelectionOriginals) {
         ChartNote hitObject = original;
-        hitObject.startMilliseconds = std::max<qint64>(0, original.startMilliseconds + timeOffset);
-        hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, original.endMilliseconds + timeOffset);
+        hitObject.startMilliseconds = translateTime(original.startMilliseconds);
+        hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, translateTime(original.endMilliseconds));
         if (original.kind == NoteKind::Tap || original.kind == NoteKind::Flick) {
             hitObject.endMilliseconds = hitObject.startMilliseconds;
         }

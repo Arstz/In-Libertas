@@ -802,23 +802,8 @@ void EditorState::pasteCopiedHitObjects() {
             return first.startMilliseconds < second.startMilliseconds;
         });
     const qint64 destinationStart = closestDivisorTime(m_playbackPositionMilliseconds);
-    const qint64 timeOffset = destinationStart - firstHitObject->startMilliseconds;
-    const auto sourceGridStart = unroundedValidDivisorTime(m_timingPoints, firstHitObject->startMilliseconds);
-    const auto destinationGridStart = unroundedValidDivisorTime(m_timingPoints, destinationStart);
     const auto translateTime = [&](const qint64 sourceTime) {
-        const qint64 shiftedTime = std::max<qint64>(0, sourceTime + timeOffset);
-        const auto sourceGridTime = unroundedValidDivisorTime(m_timingPoints, sourceTime);
-        if (!sourceGridStart || !destinationGridStart || !sourceGridTime) {
-            return shiftedTime;
-        }
-        constexpr double kGridToleranceMilliseconds = 0.000001;
-        const double translatedGridTime = *destinationGridStart + (*sourceGridTime - *sourceGridStart);
-        const qint64 roundedTime = nearestValidDivisorTime(m_timingPoints,
-            static_cast<qint64>(std::llround(translatedGridTime)));
-        const auto destinationGridTime = unroundedValidDivisorTime(m_timingPoints, roundedTime);
-        return destinationGridTime
-                && std::abs(*destinationGridTime - translatedGridTime) <= kGridToleranceMilliseconds
-            ? roundedTime : shiftedTime;
+        return translateDivisorTime(m_timingPoints, sourceTime, firstHitObject->startMilliseconds, destinationStart);
     };
     QVector<ChartNote> hitObjects = m_clipboardHitObjects;
     for (ChartNote& hitObject : hitObjects) {

@@ -98,6 +98,25 @@ namespace detail {
     return nearestTimestamp;
 }
 
+[[nodiscard]] inline qint64 translateDivisorTime(const QVector<TimingPoint>& timingPoints,
+    const qint64 sourceTime, const qint64 sourceAnchor, const qint64 destinationAnchor) {
+    const qint64 shiftedTime = std::max<qint64>(0, sourceTime + destinationAnchor - sourceAnchor);
+    const auto sourceGridAnchor = unroundedValidDivisorTime(timingPoints, sourceAnchor);
+    const auto destinationGridAnchor = unroundedValidDivisorTime(timingPoints, destinationAnchor);
+    const auto sourceGridTime = unroundedValidDivisorTime(timingPoints, sourceTime);
+    if (!sourceGridAnchor || !destinationGridAnchor || !sourceGridTime) {
+        return shiftedTime;
+    }
+    constexpr double kGridToleranceMilliseconds = 0.000001;
+    const double translatedGridTime = *destinationGridAnchor + (*sourceGridTime - *sourceGridAnchor);
+    const qint64 roundedTime = nearestValidDivisorTime(timingPoints,
+        static_cast<qint64>(std::llround(translatedGridTime)));
+    const auto destinationGridTime = unroundedValidDivisorTime(timingPoints, roundedTime);
+    return destinationGridTime
+            && std::abs(*destinationGridTime - translatedGridTime) <= kGridToleranceMilliseconds
+        ? roundedTime : shiftedTime;
+}
+
 [[nodiscard]] inline qint64 nextValidDivisorTime(const QVector<TimingPoint>& timingPoints,
     const qint64 timestampMilliseconds) {
     qint64 nextTimestamp = std::numeric_limits<qint64>::max();
