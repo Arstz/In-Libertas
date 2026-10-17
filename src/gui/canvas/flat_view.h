@@ -137,7 +137,7 @@ private:
     [[nodiscard]] ChartNote floorHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote floorHitObjectForMove(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote holdHitObjectForEndMove(const QPointF& position, bool snapToGrid) const;
-    [[nodiscard]] ChartNote flickHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
+    [[nodiscard]] ChartNote flickHitObjectForDrag(const QPointF& position) const;
     [[nodiscard]] ChartNote flickHitObjectForMove(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote flickHitObjectForControlMove(const QPointF& position) const;
     [[nodiscard]] ChartNote fieldHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
@@ -194,6 +194,7 @@ private:
     ChartNote m_dragOriginal;
     QFutureWatcher<WaveformData>* m_waveformWatcher = nullptr;
     QPointF m_pressPosition;
+    qint64 m_placementStartMilliseconds = 0;
     QPointF m_navigationLastPosition;
     double m_navigationPositionMilliseconds = 0.0;
     double m_waveformMillisecondsPerPeak = 0.0;

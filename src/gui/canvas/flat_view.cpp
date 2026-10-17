@@ -1091,7 +1091,7 @@ FlatView::FieldSegmentAnchor FlatView::fieldSegmentAnchorAt(const QPointF& posit
 
 ChartNote FlatView::hitObjectForPlacement(const QPointF& position, const bool snapToGrid) const {
     if (m_pressModifiers & Qt::ShiftModifier) {
-        return flickHitObjectForDrag(position, snapToGrid);
+        return flickHitObjectForDrag(position);
     }
     if (m_pressModifiers & Qt::AltModifier) {
         return fieldHitObjectForDrag(position, snapToGrid);
@@ -1103,10 +1103,9 @@ ChartNote FlatView::hitObjectForPlacement(const QPointF& position, const bool sn
 ChartNote FlatView::floorHitObjectForDrag(const QPointF& position, const bool snapToGrid) const {
     const int pressLane = laneAt(m_pressPosition);
     const int releaseLane = laneAt(position);
-    const qint64 pressTime = snapToGrid ? snappedTimeAtY(m_pressPosition.y()) : timeAtY(m_pressPosition.y());
     const qint64 releaseTime = snapToGrid ? snappedTimeAtY(position.y()) : timeAtY(position.y());
-    const qint64 startTime = std::min(pressTime, releaseTime);
-    const qint64 endTime = std::max(pressTime, releaseTime);
+    const qint64 startTime = m_placementStartMilliseconds;
+    const qint64 endTime = std::max(startTime, releaseTime);
     ChartNote hitObject;
 
     hitObject.kind = endTime - startTime >= kMinimumHoldDurationMilliseconds ? NoteKind::Hold : NoteKind::Tap;
@@ -1196,7 +1195,7 @@ ChartNote FlatView::holdHitObjectForEndMove(const QPointF& position, const bool 
     return hitObject;
 }
 
-ChartNote FlatView::flickHitObjectForDrag(const QPointF& position, const bool snapToGrid) const {
+ChartNote FlatView::flickHitObjectForDrag(const QPointF& position) const {
     const QRectF area = groundArea();
     const double pressCoordinate = std::clamp((m_pressPosition.x() - area.left()) / area.width(), 0.0, 1.0);
     const double releaseCoordinate = std::clamp((position.x() - area.left()) / area.width(), 0.0, 1.0);
@@ -1205,7 +1204,7 @@ ChartNote FlatView::flickHitObjectForDrag(const QPointF& position, const bool sn
 
     hitObject.kind = NoteKind::Flick;
     hitObject.side = FloorSide::Sky;
-    hitObject.startMilliseconds = snapToGrid ? snappedTimeAtY(m_pressPosition.y()) : timeAtY(m_pressPosition.y());
+    hitObject.startMilliseconds = m_placementStartMilliseconds;
     hitObject.endMilliseconds = hitObject.startMilliseconds;
     hitObject.startX = (pressCoordinate + releaseCoordinate) * 0.5;
     hitObject.endX = hitObject.startX;
@@ -1259,7 +1258,7 @@ ChartNote FlatView::fieldHitObjectForDrag(const QPointF& position, const bool sn
     const QRectF area = groundArea();
     const double pressCoordinate = std::clamp((m_pressPosition.x() - area.left()) / area.width(), 0.0, 1.0);
     const double releaseCoordinate = std::clamp((position.x() - area.left()) / area.width(), 0.0, 1.0);
-    const qint64 pressTime = snapToGrid ? snappedTimeAtY(m_pressPosition.y()) : timeAtY(m_pressPosition.y());
+    const qint64 pressTime = m_placementStartMilliseconds;
     const qint64 releaseTime = snapToGrid ? snappedTimeAtY(position.y()) : timeAtY(position.y());
     ChartNote hitObject;
 
@@ -1698,6 +1697,7 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
     m_dragMoved = false;
     m_draggingHoldEnd = false;
     m_selectionOnlyClick = false;
+    m_placementStartMilliseconds = snappedTimeAtY(m_pressPosition.y());
     if (m_tool == EditorTool::Place && (m_pressModifiers & (Qt::AltModifier | Qt::ShiftModifier))
         && canPlaceSky()) {
         m_dragHitObjectIndex = m_chart.notes.size();
@@ -1883,7 +1883,9 @@ void FlatView::mouseMoveEvent(QMouseEvent* event) {
     } else if (m_draggingHitObject && m_dragMoved) {
         emit hitObjectMoveRequested(m_dragHitObjectIndex, floorHitObjectForMove(event->position(), false));
     } else if (m_placingHitObject) {
-        emit hitObjectMoveRequested(m_dragHitObjectIndex, hitObjectForPlacement(event->position(), false));
+        ChartNote hitObject = hitObjectForPlacement(event->position(), false);
+        hitObject.id = m_dragOriginal.id;
+        updateHitObject(m_dragHitObjectIndex, hitObject);
     }
     event->accept();
 }
@@ -1986,6 +1988,7 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
                 || fieldExtensionExists(event->position(), true))) {
             emit hitObjectCreationCancelled(m_dragHitObjectIndex);
         } else {
+            updateHitObject(m_dragHitObjectIndex, m_dragOriginal);
             emit hitObjectMoveRequested(m_dragHitObjectIndex, hitObject);
             emit hitObjectMoveFinished();
         }
