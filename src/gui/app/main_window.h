@@ -2,11 +2,14 @@
 
 #include "core/chart_project.h"
 #include "core/timing_analyzer.h"
+#include "core/playtest_session.h"
 #include "gui/app/visual_settings.h"
 #include "gui/app/handling_settings.h"
+#include "gui/app/playtest_settings.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QFutureWatcher>
+#include <QtCore/QPointer>
 #include <QtGui/QImage>
 #include <QtWidgets/QMainWindow>
 
@@ -25,6 +28,7 @@ class QSplitter;
 class QSlider;
 class QToolBar;
 class QToolButton;
+class QTimer;
 class QWidget;
 
 namespace infalsus::gui {
@@ -91,6 +95,13 @@ private:
     [[nodiscard]] bool readProjectJacket(QImage* image, QString* error) const;
     void updateViewerSongCard();
     void togglePlayback();
+    void enterPlaytest();
+    void leavePlaytest();
+    void updatePlaytest();
+    void publishPlaytest();
+    void constrainPlaytestCursor();
+    struct PlaytestClock { double chartTime; double monotonicTime; };
+    [[nodiscard]] PlaytestClock samplePlaytestClock() const;
     void adjustFlatZoom(double steps);
     void startInitialTimingAnalysis();
     void analyzeInitialTimingAudio(QByteArray samples, const QAudioFormat& format);
@@ -101,6 +112,7 @@ private:
     EditorState* m_state = nullptr;
     VisualSettings m_visualSettings;
     HandlingSettings m_handlingSettings;
+    PlaytestSettings m_playtestSettings;
     KeyBindingRouter* m_keyBindings = nullptr;
     PlaybackController* m_playback = nullptr;
     HitsoundBank* m_hitsounds = nullptr;
@@ -144,6 +156,23 @@ private:
     bool m_timingAnalysisInProgress = false;
     bool m_selectingEventInWidget = false;
     bool m_splittersArranged = false;
+    PlaytestSession m_playtestSession;
+    QTimer* m_playtestTimer = nullptr;
+    QWidget* m_viewerEditorParent = nullptr;
+    QPointer<QWidget> m_editorFocus;
+    QByteArray m_playtestWindowState;
+    std::array<QByteArray, 4> m_playtestSplitters;
+    QPoint m_editorCursor;
+    qint64 m_editorPosition = 0;
+    qint64 m_pendingDuration = 0;
+    double m_leadInEnd = 0.0;
+    int m_viewerLayoutIndex = 0;
+    bool m_playtest = false;
+    bool m_playtestLeadIn = false;
+    bool m_playtestFinished = false;
+    bool m_editorMenuVisible = true;
+    bool m_editorToolsVisible = true;
+    bool m_fieldContact = false;
 };
 
 } // namespace infalsus::gui

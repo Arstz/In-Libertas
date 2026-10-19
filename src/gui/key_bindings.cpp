@@ -60,6 +60,7 @@ constexpr CommandDefinition kCommands[]{
     {KeyCommand::AddTimingPoint, "add_timing_point", "Events / Place BPM event", "Ctrl+Shift+O"},
     {KeyCommand::AddSpeedEvent, "add_speed_event", "Events / Place SV event", "Ctrl+Shift+P"},
     {KeyCommand::TogglePlayback, "toggle_playback", "Playback / Play or pause", "Space"},
+    {KeyCommand::EnterPlaytest, "enter_playtest", "Playback / Playtest", "F5"},
     {KeyCommand::IncreasePlaybackRate, "increase_playback_rate", "Playback / Increase speed", "[", true},
     {KeyCommand::DecreasePlaybackRate, "decrease_playback_rate", "Playback / Decrease speed", "]", true},
     {KeyCommand::SeekBackward, "seek_backward", "Playback / Seek backward", "Left", true},

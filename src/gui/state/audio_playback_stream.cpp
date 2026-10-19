@@ -162,8 +162,20 @@ struct AudioPlaybackStream::ProcessingState {
         if (!mix) {
             return;
         }
-        const std::lock_guard mixLock(mix->mutex);
-        const std::lock_guard previewLock(previewMutex);
+        std::array<QByteArray, kHitsoundDescriptions.size()> soundSamples;
+        {
+            const std::lock_guard lock(mix->mutex);
+            soundSamples = mix->sounds;
+        }
+        QVector<QByteArray> incomingPreviews;
+        std::array<bool, kHitsoundDescriptions.size()> requestedLoops;
+        std::array<quint64, kHitsoundDescriptions.size()> requestedGenerations;
+        {
+            const std::lock_guard lock(previewMutex);
+            incomingPreviews.swap(previews);
+            requestedLoops = liveLoops;
+            requestedGenerations = liveLoopGenerations;
+        }
         const qint64 blockEnd = generatedOutputFrames + outputFrames;
         const int channels = format.channelCount();
         auto* output = reinterpret_cast<float*>(pending.data());
@@ -176,12 +188,11 @@ struct AudioPlaybackStream::ProcessingState {
         while (nextSound < sounds.size() && sounds[nextSound].firstFrame < blockEnd) {
             activeSounds.append(sounds[nextSound++]);
         }
-        for (QByteArray& samples : previews) {
+        for (QByteArray& samples : incomingPreviews) {
             activeSounds.append({std::move(samples), generatedOutputFrames, 0});
         }
-        previews.clear();
         for (Sound& sound : activeSounds) {
-            const QByteArray& samples = sound.samples.isEmpty() ? mix->sounds[static_cast<int>(sound.kind)] : sound.samples;
+            const QByteArray& samples = sound.samples.isEmpty() ? soundSamples[static_cast<int>(sound.kind)] : sound.samples;
             const qint64 sampleFrames = samples.size() / format.bytesPerFrame();
             if (sampleFrames == 0) {
                 continue;
@@ -198,8 +209,30 @@ struct AudioPlaybackStream::ProcessingState {
                 }
             }
         }
+        for (int kind = 0; kind < static_cast<int>(liveLoops.size()); ++kind) {
+            if (mixedLoopGenerations[kind] != requestedGenerations[kind]) {
+                liveLoopFrames[kind] = 0;
+                mixedLoopGenerations[kind] = requestedGenerations[kind];
+            }
+            if (!requestedLoops[kind]) {
+                continue;
+            }
+            const QByteArray& samples = soundSamples[kind];
+            const qint64 frames = samples.size() / format.bytesPerFrame();
+            if (frames == 0) {
+                continue;
+            }
+            const auto* input = reinterpret_cast<const float*>(samples.constData());
+            for (int frame = 0; frame < outputFrames; ++frame) {
+                const qint64 inputFrame = (liveLoopFrames[kind] + frame) % frames;
+                for (int channel = 0; channel < channels; ++channel) {
+                    output[frame * channels + channel] += input[inputFrame * channels + channel] * effectsVolume;
+                }
+            }
+            liveLoopFrames[kind] += outputFrames;
+        }
         activeSounds.removeIf([&](const Sound& sound) {
-            const QByteArray& samples = sound.samples.isEmpty() ? mix->sounds[static_cast<int>(sound.kind)] : sound.samples;
+            const QByteArray& samples = sound.samples.isEmpty() ? soundSamples[static_cast<int>(sound.kind)] : sound.samples;
             return (sound.loop ? sound.lastFrame : sound.firstFrame + samples.size() / format.bytesPerFrame()) <= blockEnd;
         });
         for (int index = 0; index < outputFrames * channels; ++index) {
@@ -212,6 +245,10 @@ struct AudioPlaybackStream::ProcessingState {
     QVector<Sound> sounds;
     QVector<Sound> activeSounds;
     QVector<QByteArray> previews;
+    std::array<bool, kHitsoundDescriptions.size()> liveLoops{};
+    std::array<quint64, kHitsoundDescriptions.size()> liveLoopGenerations{};
+    std::array<quint64, kHitsoundDescriptions.size()> mixedLoopGenerations{};
+    std::array<qint64, kHitsoundDescriptions.size()> liveLoopFrames{};
     std::mutex previewMutex;
     QByteArray pending;
     QAudioFormat format;
@@ -273,6 +310,18 @@ void AudioPlaybackStream::setMix(std::shared_ptr<AudioMixData> mix, const QVecto
 void AudioPlaybackStream::preview(QByteArray samples) {
     const std::lock_guard lock(m_processing->previewMutex);
     m_processing->previews.append(std::move(samples));
+}
+
+void AudioPlaybackStream::setLiveLoop(const HitsoundKind kind, const bool active) {
+    const std::lock_guard lock(m_processing->previewMutex);
+    const int index = static_cast<int>(kind);
+    if (index < 0 || index >= static_cast<int>(m_processing->liveLoops.size())) {
+        return;
+    }
+    if (m_processing->liveLoops[index] != active) {
+        m_processing->liveLoops[index] = active;
+        ++m_processing->liveLoopGenerations[index];
+    }
 }
 
 bool AudioPlaybackStream::isSequential() const {

@@ -18,6 +18,7 @@ public:
     };
 
     [[nodiscard]] static LoadResult load(const QString& filePath);
+    [[nodiscard]] static ChartData playbackSnapshot(const ChartData& chart);
     [[nodiscard]] static bool save(const QString& filePath, const ChartData& chart,
         const QVector<infalsus::TimingPoint>& timingPoints, const QVector<infalsus::LaneEvent>& laneEvents,
         const QVector<infalsus::SpeedEvent>& speedEvents, QString* error);

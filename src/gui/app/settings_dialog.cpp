@@ -10,6 +10,7 @@
 #include <QtGui/QKeyEvent>
 #include <QtGui/QFontMetrics>
 #include <QtWidgets/QDialogButtonBox>
+#include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QColorDialog>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QCheckBox>
@@ -25,6 +26,9 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QVBoxLayout>
+
+#include <algorithm>
+#include <cmath>
 
 namespace infalsus::gui {
 
@@ -72,10 +76,32 @@ protected:
     }
 };
 
+class PlaytestKeyEdit final : public QKeySequenceEdit {
+public:
+    using QKeySequenceEdit::QKeySequenceEdit;
+
+protected:
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress
+            || event->type() == QEvent::KeyRelease) {
+            if (event->type() == QEvent::KeyPress) {
+                const auto& key = *static_cast<QKeyEvent*>(event);
+                if (!key.isAutoRepeat() && key.key() != Qt::Key_unknown) {
+                    setKeySequence(QKeySequence(keyBindingCombination(key).key()));
+                }
+            }
+            event->accept();
+            return true;
+        }
+        return QKeySequenceEdit::event(event);
+    }
+};
+
 } // namespace
 
 SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettings& visuals,
-    const HandlingSettings& handling, HitsoundBank* hitsounds, PlaybackController* playback, QWidget* parent)
+    const HandlingSettings& handling, const PlaytestSettings& playtest,
+    HitsoundBank* hitsounds, PlaybackController* playback, QWidget* parent)
     : QDialog(parent)
     , m_keyBindings(keyBindings)
     , m_visuals(visuals)
@@ -98,7 +124,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     setWindowTitle(QStringLiteral("Settings"));
     resize(kSettingsWidth, kSettingsHeight);
     navigation->addItems({QStringLiteral("Keybinds"), QStringLiteral("Visuals"), QStringLiteral("Handling"),
-        QStringLiteral("Hitsounds")});
+        QStringLiteral("Hitsounds"), QStringLiteral("Playtest")});
     navigation->setCurrentRow(0);
     navigation->setFixedWidth(kNavigationWidth);
     navigation->setUniformItemSizes(true);
@@ -135,6 +161,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     buildVisualsPage(pages);
     buildHandlingPage(pages, handling);
     buildHitsoundsPage(pages, hitsounds);
+    buildPlaytestPage(pages, playtest);
     contentLayout->addWidget(navigation);
     contentLayout->addWidget(pages, 1);
     layout->addLayout(contentLayout, 1);
@@ -145,6 +172,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(this, &QDialog::finished, m_playback, &PlaybackController::stopHitsoundPreview);
     updateConflicts();
+    updatePlaytestConflicts();
 }
 
 VisualSettings SettingsDialog::selectedVisualSettings() const {
@@ -179,6 +207,40 @@ HandlingSettings SettingsDialog::loadHandlingSettings() {
     return result;
 }
 
+PlaytestSettings SettingsDialog::selectedPlaytestSettings() const {
+    PlaytestSettings result;
+    for (std::size_t lane = 0; lane < result.laneKeys.size(); ++lane) {
+        const QKeySequence sequence = m_playtestLaneEdits[lane]->keySequence();
+        result.laneKeys[lane] = sequence.isEmpty() ? Qt::Key_unknown : sequence[0].key();
+    }
+    result.mouseSensitivity = m_mouseSensitivity->value();
+    return result;
+}
+
+PlaytestSettings SettingsDialog::loadPlaytestSettings() {
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
+    return loadPlaytestSettings(settings);
+}
+
+PlaytestSettings SettingsDialog::loadPlaytestSettings(QSettings& settings) {
+    PlaytestSettings result;
+    for (std::size_t lane = 0; lane < result.laneKeys.size(); ++lane) {
+        bool valid = false;
+        const int key = settings.value(QStringLiteral("playtest/lane_%1").arg(lane), result.laneKeys[lane]).toInt(&valid);
+        if (valid && key > 0 && key <= Qt::Key_unknown && key != Qt::Key_Escape) {
+            result.laneKeys[lane] = static_cast<Qt::Key>(key);
+        }
+    }
+    bool valid = false;
+    const double sensitivity = settings.value(QStringLiteral("playtest/mouse_sensitivity"),
+        result.mouseSensitivity).toDouble(&valid);
+    if (valid && std::isfinite(sensitivity)) {
+        result.mouseSensitivity = std::clamp(sensitivity,
+            kMinimumPlaytestMouseSensitivity, kMaximumPlaytestMouseSensitivity);
+    }
+    return result;
+}
+
 void SettingsDialog::restoreKeybinds(KeyBindingRouter* keyBindings) {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     restoreKeybinds(keyBindings, settings);
@@ -197,7 +259,9 @@ void SettingsDialog::restoreKeybinds(KeyBindingRouter* keyBindings, QSettings& s
 }
 
 void SettingsDialog::accept() {
-    if (!updateConflicts()) {
+    const bool keybindsValid = updateConflicts();
+    const bool playtestValid = updatePlaytestConflicts();
+    if (!keybindsValid || !playtestValid) {
         return;
     }
     if (m_hitsounds->isDecoding()) {
@@ -209,6 +273,7 @@ void SettingsDialog::accept() {
     saveKeybinds(bindings);
     saveVisualSettings(selectedVisualSettings());
     saveHandlingSettings(selectedHandlingSettings());
+    savePlaytestSettings(selectedPlaytestSettings());
     m_hitsounds->save();
     QDialog::accept();
 }
@@ -285,6 +350,125 @@ void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSett
 void SettingsDialog::saveHandlingSettings(const HandlingSettings& handling) {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("handling/invert_mousewheel_scroll"), handling.invertMousewheelScroll);
+}
+
+void SettingsDialog::buildPlaytestPage(QStackedWidget* pages, const PlaytestSettings& playtest) {
+    auto* scrollArea = new QScrollArea(pages);
+    auto* page = new QWidget(scrollArea);
+    auto* pageLayout = new QVBoxLayout(page);
+    auto* description = new QLabel(QStringLiteral("Choose one key for each lane. Clear a keybind to disable it."), page);
+    auto* rows = new QFormLayout;
+    auto* resetControls = new QHBoxLayout;
+    auto* resetAll = new QPushButton(QStringLiteral("Reset All"), page);
+    m_playtestValidationLabel = new QLabel(page);
+    pages->addWidget(scrollArea);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setWidget(page);
+    description->setWordWrap(true);
+    pageLayout->addWidget(description);
+    rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    for (std::size_t lane = 0; lane < m_playtestLaneEdits.size(); ++lane) {
+        auto* controls = new QWidget(page);
+        auto* controlsLayout = new QHBoxLayout(controls);
+        const QKeySequence sequence = playtest.laneKeys[lane] == Qt::Key_unknown ? QKeySequence()
+            : QKeySequence(playtest.laneKeys[lane]);
+        auto* edit = new PlaytestKeyEdit(sequence, controls);
+        auto* reset = new QPushButton(QStringLiteral("Reset"), controls);
+        edit->setObjectName(QStringLiteral("playtest_lane_%1").arg(lane));
+        edit->setClearButtonEnabled(true);
+        edit->setMaximumSequenceLength(1);
+        controlsLayout->setContentsMargins(0, 0, 0, 0);
+        controlsLayout->setSpacing(kControlSpacing);
+        controlsLayout->addWidget(edit, 1);
+        controlsLayout->addWidget(reset);
+        rows->addRow(QStringLiteral("Lane %1").arg(lane), controls);
+        m_playtestLaneEdits[lane] = edit;
+        connect(edit, &QKeySequenceEdit::keySequenceChanged, this, [this] { updatePlaytestConflicts(); });
+        connect(reset, &QPushButton::clicked, this, [this, lane] {
+            m_playtestLaneEdits[lane]->setKeySequence(QKeySequence(kDefaultPlaytestLaneKeys[lane]));
+        });
+    }
+    auto* controls = new QWidget(page);
+    auto* controlsLayout = new QHBoxLayout(controls);
+    auto* reset = new QPushButton(QStringLiteral("Reset"), controls);
+    m_mouseSensitivity = new QDoubleSpinBox(controls);
+    m_mouseSensitivity->setObjectName(QStringLiteral("playtest_mouse_sensitivity"));
+    m_mouseSensitivity->setRange(kMinimumPlaytestMouseSensitivity, kMaximumPlaytestMouseSensitivity);
+    m_mouseSensitivity->setDecimals(2);
+    m_mouseSensitivity->setSingleStep(0.1);
+    m_mouseSensitivity->setSuffix(QStringLiteral("x"));
+    m_mouseSensitivity->setValue(playtest.mouseSensitivity);
+    m_mouseSensitivity->setToolTip(QStringLiteral("Multiply mouse movement during playtest."));
+    controlsLayout->setContentsMargins(0, 0, 0, 0);
+    controlsLayout->setSpacing(kControlSpacing);
+    controlsLayout->addWidget(m_mouseSensitivity, 1);
+    controlsLayout->addWidget(reset);
+    rows->addRow(QStringLiteral("Mouse sensitivity"), controls);
+    pageLayout->addLayout(rows);
+    m_playtestValidationLabel->setWordWrap(true);
+    m_playtestValidationLabel->setStyleSheet(QStringLiteral("color: #d07070;"));
+    resetControls->addWidget(m_playtestValidationLabel, 1);
+    resetControls->addWidget(resetAll);
+    pageLayout->addLayout(resetControls);
+    pageLayout->addStretch();
+    connect(reset, &QPushButton::clicked, this, [this] {
+        m_mouseSensitivity->setValue(kDefaultPlaytestMouseSensitivity);
+    });
+    connect(resetAll, &QPushButton::clicked, this, [this] {
+        for (std::size_t lane = 0; lane < m_playtestLaneEdits.size(); ++lane) {
+            m_playtestLaneEdits[lane]->setKeySequence(QKeySequence(kDefaultPlaytestLaneKeys[lane]));
+        }
+        m_mouseSensitivity->setValue(kDefaultPlaytestMouseSensitivity);
+    });
+}
+
+bool SettingsDialog::updatePlaytestConflicts() {
+    std::array<bool, 6> conflicts{};
+    QString message;
+    for (std::size_t lane = 0; lane < m_playtestLaneEdits.size(); ++lane) {
+        const QKeySequence sequence = m_playtestLaneEdits[lane]->keySequence();
+        if (sequence.isEmpty()) {
+            continue;
+        }
+        const Qt::Key key = sequence[0].key();
+        if (key == Qt::Key_Escape || key == Qt::Key_unknown || sequence.count() != 1
+            || sequence[0].keyboardModifiers() != Qt::NoModifier) {
+            conflicts[lane] = true;
+            message = key == Qt::Key_Escape ? QStringLiteral("Escape is reserved for returning to the editor.")
+                : QStringLiteral("Choose a single key for each lane.");
+        }
+        for (std::size_t other = 0; other < lane; ++other) {
+            if (!m_playtestLaneEdits[other]->keySequence().isEmpty()
+                && m_playtestLaneEdits[other]->keySequence()[0].key() == key) {
+                conflicts[lane] = conflicts[other] = true;
+                if (message.isEmpty()) {
+                    message = QStringLiteral("Conflicting lane keybinds. Assign different keys before saving.");
+                }
+            }
+        }
+    }
+    for (std::size_t lane = 0; lane < conflicts.size(); ++lane) {
+        setShortcutConflictStyle(m_playtestLaneEdits[lane], conflicts[lane]);
+    }
+    m_playtestValidationLabel->setText(message);
+    return std::none_of(conflicts.begin(), conflicts.end(), [](const bool conflict) { return conflict; });
+}
+
+void SettingsDialog::savePlaytestSettings(const PlaytestSettings& playtest) {
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
+    for (std::size_t lane = 0; lane < playtest.laneKeys.size(); ++lane) {
+        const QString id = QStringLiteral("playtest/lane_%1").arg(lane);
+        if (playtest.laneKeys[lane] == kDefaultPlaytestLaneKeys[lane]) {
+            settings.remove(id);
+        } else {
+            settings.setValue(id, static_cast<int>(playtest.laneKeys[lane]));
+        }
+    }
+    if (playtest.mouseSensitivity == kDefaultPlaytestMouseSensitivity) {
+        settings.remove(QStringLiteral("playtest/mouse_sensitivity"));
+    } else {
+        settings.setValue(QStringLiteral("playtest/mouse_sensitivity"), playtest.mouseSensitivity);
+    }
 }
 
 void SettingsDialog::buildHitsoundsPage(QStackedWidget* pages, HitsoundBank* hitsounds) {

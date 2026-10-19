@@ -20,10 +20,15 @@ class PlaybackController final : public QObject {
     Q_OBJECT
 
 public:
+    struct ClockSample {
+        double chartMilliseconds;
+        double monotonicSeconds;
+    };
     explicit PlaybackController(QObject* parent = nullptr);
     ~PlaybackController() override;
 
     [[nodiscard]] qint64 position() const;
+    [[nodiscard]] ClockSample sampleClock() const;
     [[nodiscard]] bool isPlaying() const;
     [[nodiscard]] qreal playbackRate() const;
     [[nodiscard]] qreal volume() const;
@@ -32,6 +37,8 @@ public:
 
     void setHitsoundMix(std::shared_ptr<AudioMixData> mix);
     void setHitObjects(const ChartData& chart);
+    void setManualPlaytest(bool enabled);
+    void setHeldHitsounds(bool hold, bool sky);
     void previewHitsound(const QByteArray& samples);
     void stopHitsoundPreview();
     void setChartDuration(qint64 durationMilliseconds);
@@ -94,4 +101,7 @@ private:
     bool m_hasAudioSource = false;
     bool m_usingFallbackClock = false;
     bool m_audioFailed = false;
+    bool m_manualPlaytest = false;
+    bool m_holdSound = false;
+    bool m_skySound = false;
 };

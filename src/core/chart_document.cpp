@@ -383,6 +383,22 @@ void appendU16(QByteArray& bytes, const std::uint16_t value) {
 
 } // namespace
 
+ChartData ChartDocument::playbackSnapshot(const ChartData& chart) {
+    ChartData snapshot = chart;
+    std::stable_sort(snapshot.notes.begin(), snapshot.notes.end(),
+        [](const ChartNote& first, const ChartNote& second) {
+            if (first.startMilliseconds != second.startMilliseconds) {
+                return first.startMilliseconds < second.startMilliseconds;
+            }
+            return first.endMilliseconds < second.endMilliseconds;
+        });
+    const auto groups = exportGroupIds(snapshot);
+    for (qsizetype index = 0; index < snapshot.notes.size(); ++index) {
+        snapshot.notes[index].groupId = groups[index];
+    }
+    return snapshot;
+}
+
 bool ChartDocument::LoadResult::succeeded() const {
     return error.isEmpty();
 }
@@ -631,19 +647,7 @@ bool saveEncodedChart(const QString& filePath, const QString& chartName, const C
     const std::uint32_t noteCount = static_cast<std::uint32_t>(chart.notes.size());
     const std::uint32_t eventCount = static_cast<std::uint32_t>(events.size());
     const infalsus::TimingPoint& initialPoint = timingPoints.front();
-    // The runtime's playback-buffer compiler consumes source records in
-    // chronological order.  The editor deliberately keeps creation order for
-    // stable selection/history, so derive an ordered export view rather than
-    // reordering the document itself.
-    ChartData orderedChart = chart;
-    std::stable_sort(orderedChart.notes.begin(), orderedChart.notes.end(),
-        [](const ChartNote& first, const ChartNote& second) {
-            if (first.startMilliseconds != second.startMilliseconds) {
-                return first.startMilliseconds < second.startMilliseconds;
-            }
-            return first.endMilliseconds < second.endMilliseconds;
-        });
-    const QVector<std::uint64_t> groupIds = exportGroupIds(orderedChart);
+    const ChartData orderedChart = ChartDocument::playbackSnapshot(chart);
     QByteArray bytes;
     bytes.reserve(kHeaderLength + static_cast<int>(noteCount) * kNoteRecordLength
         + static_cast<int>(eventCount) * kEventRecordLength);
@@ -689,7 +693,7 @@ bool saveEncodedChart(const QString& filePath, const QString& chartName, const C
         }};
         const std::array<std::uint64_t, kProtectedFieldCount> fields{{
             index,
-            groupIds.at(static_cast<int>(index)),
+            note.groupId,
             static_cast<std::uint32_t>(std::max<qint64>(0, note.startMilliseconds)),
             static_cast<std::uint32_t>(std::max<qint64>(0, note.endMilliseconds)),
             sideCodeFor(note.side) | (typeCodeFor(note.kind) << 8U),

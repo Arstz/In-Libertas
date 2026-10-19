@@ -58,6 +58,7 @@
 #include <QtWidgets/QProgressDialog>
 #include <QtGui/QShowEvent>
 #include <QtGui/QCloseEvent>
+#include <QtGui/QCursor>
 #include <QtWidgets/QSplitter>
 #include <QtWidgets/QSlider>
 #include <QtWidgets/QToolBar>
@@ -68,6 +69,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <utility>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -317,11 +319,62 @@ MainWindow::MainWindow(QWidget* parent)
     m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
     m_handlingSettings = SettingsDialog::loadHandlingSettings();
     m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
+    m_playtestSettings = SettingsDialog::loadPlaytestSettings();
+    m_viewer->setPlaytestLaneKeys(m_playtestSettings.laneKeys);
     restoreLayout();
     qApp->installEventFilter(this);
+    m_playtestTimer = new QTimer(this);
+    m_playtestTimer->setTimerType(Qt::PreciseTimer);
+    m_playtestTimer->setInterval(4);
+    connect(m_playtestTimer, &QTimer::timeout, this, &MainWindow::updatePlaytest);
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (m_playtest) {
+        if (event->type() == QEvent::ApplicationDeactivate
+            || (watched == this && event->type() == QEvent::WindowDeactivate)) {
+            leavePlaytest();
+        } else if (watched == this && (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
+            m_viewer->setGeometry(rect());
+            constrainPlaytestCursor();
+        } else if (event->type() == QEvent::ShortcutOverride) {
+            event->accept();
+            return true;
+        } else if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->isAutoRepeat()) {
+                return true;
+            }
+            const bool down = event->type() == QEvent::KeyPress;
+            if (down && key->key() == Qt::Key_Escape) {
+                leavePlaytest();
+                return true;
+            }
+            if (!m_playtestFinished) {
+                const int code = keyBindingCombination(*key).key();
+                const auto& keys = m_playtestSettings.laneKeys;
+                const auto found = std::find(keys.begin(), keys.end(), code);
+                if (code != Qt::Key_unknown && found != keys.end()) {
+                    const int lane = static_cast<int>(std::distance(keys.begin(), found));
+                    const auto clock = samplePlaytestClock();
+                    const double now = clock.monotonicTime;
+                    const double eventTime = now + static_cast<std::int32_t>(static_cast<DWORD>(key->timestamp()) - GetTickCount()) / 1000.0;
+                    const double timestamp = key->timestamp() == 0 ? now : std::min(now, eventTime);
+                    if (down) {
+                        m_playtestSession.press(lane, clock.chartTime, now, timestamp);
+                    } else {
+                        m_playtestSession.release(lane, clock.chartTime, now, timestamp);
+                    }
+                    publishPlaytest();
+                }
+            }
+            return true;
+        } else if (event->type() == QEvent::Wheel || event->type() == QEvent::ContextMenu
+            || event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease
+            || event->type() == QEvent::MouseButtonDblClick) {
+            return true;
+        }
+    }
     if (QApplication::activeModalWidget() != nullptr && QApplication::activeModalWidget() != this) {
         return QMainWindow::eventFilter(watched, event);
     }
@@ -357,6 +410,24 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
     if (eventType == "windows_generic_MSG" && message != nullptr) {
         const auto* nativeMessage = static_cast<MSG*>(message);
+        if (m_playtest && nativeMessage->message == WM_INPUT && !m_playtestFinished) {
+            RAWINPUT input{};
+            UINT size = sizeof(input);
+            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(nativeMessage->lParam), RID_INPUT,
+                    &input, &size, sizeof(RAWINPUTHEADER)) != static_cast<UINT>(-1)
+                && input.header.dwType == RIM_TYPEMOUSE
+                && (input.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 && input.data.mouse.lLastX != 0) {
+                const auto clock = samplePlaytestClock();
+                const double now = clock.monotonicTime;
+                const double eventTime = now + static_cast<std::int32_t>(nativeMessage->time - GetTickCount()) / 1000.0;
+                m_playtestSession.move(input.data.mouse.lLastX * m_playtestSettings.mouseSensitivity
+                        / m_viewer->gameplayMouseWidth(),
+                    clock.chartTime, now, std::min(now, eventTime));
+            }
+        }
+        if (m_playtest) {
+            return QMainWindow::nativeEvent(eventType, message, result);
+        }
         if (nativeMessage->message == WM_MOUSEWHEEL && nativeAltHeld()) {
             const auto lParam = static_cast<DWORD_PTR>(nativeMessage->lParam);
             const int globalX = static_cast<short>(LOWORD(lParam));
@@ -394,6 +465,7 @@ void MainWindow::showEvent(QShowEvent* event) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    leavePlaytest();
     if (!confirmDiscardUnsavedChanges(QStringLiteral("quitting"))) {
         event->ignore();
         return;
@@ -541,7 +613,11 @@ void MainWindow::buildInterface() {
         QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
         settings.setValue(QStringLiteral("viewer/note_speed"), noteSpeed);
     });
-    connect(m_playback, &PlaybackController::positionChanged, m_state, &EditorState::setPlaybackPosition);
+    connect(m_playback, &PlaybackController::positionChanged, this, [this](qint64 position) {
+        if (!m_playtest) {
+            m_state->setPlaybackPosition(position);
+        }
+    });
     connect(m_playback, &PlaybackController::audioSourceChanged, m_flatView, &FlatView::clearWaveform);
     connect(m_playback, &PlaybackController::audioDecoded, m_flatView, &FlatView::setDecodedAudio);
     connect(m_playback, &PlaybackController::audioDecoded, this, &MainWindow::analyzeInitialTimingAudio);
@@ -845,6 +921,7 @@ void MainWindow::registerNavigationKeybinds() {
     addAction(KeyCommand::AddTimingPoint, [this] { m_state->addTimingPointAtPlaybackPosition(); });
     addAction(KeyCommand::AddSpeedEvent, [this] { m_state->addSpeedEventAtPlaybackPosition(); });
     addAction(KeyCommand::TogglePlayback, [this] { togglePlayback(); });
+    addAction(KeyCommand::EnterPlaytest, [this] { enterPlaytest(); });
     addAction(KeyCommand::IncreasePlaybackRate, [this] { m_playback->increasePlaybackRate(); });
     addAction(KeyCommand::DecreasePlaybackRate, [this] { m_playback->decreasePlaybackRate(); });
     addAction(KeyCommand::SeekBackward, [this] { m_state->seekByDivisor(-1); });
@@ -867,13 +944,16 @@ void MainWindow::setSkyGridSize(const int divisor) {
 }
 
 void MainWindow::openSettings() {
-    SettingsDialog dialog(m_keyBindings, m_visualSettings, m_handlingSettings, m_hitsounds, m_playback, this);
+    SettingsDialog dialog(m_keyBindings, m_visualSettings, m_handlingSettings, m_playtestSettings,
+        m_hitsounds, m_playback, this);
     if (dialog.exec() == QDialog::Accepted) {
         m_hitsounds->load(HitsoundBank::loadFiles());
         m_visualSettings = dialog.selectedVisualSettings();
         m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
         m_handlingSettings = dialog.selectedHandlingSettings();
         m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
+        m_playtestSettings = dialog.selectedPlaytestSettings();
+        m_viewer->setPlaytestLaneKeys(m_playtestSettings.laneKeys);
     }
 }
 
@@ -1335,6 +1415,180 @@ void MainWindow::updateStatus() {
 
 void MainWindow::togglePlayback() {
     m_playback->togglePlayback();
+}
+
+void MainWindow::enterPlaytest() {
+    if (m_playtest || m_timingAnalysisInProgress || m_state->chart().durationMilliseconds <= 0) {
+        return;
+    }
+    if (m_playback->isPlaying()) {
+        m_playback->togglePlayback();
+    }
+    m_editorPosition = m_playback->position();
+    m_editorFocus = QApplication::focusWidget();
+    m_editorCursor = QCursor::pos();
+    m_editorMenuVisible = menuBar()->isVisible();
+    m_editorToolsVisible = m_toolsToolbar->isVisible();
+    m_playtestWindowState = saveState();
+    const std::array<QSplitter*, 4> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter};
+    for (int index = 0; index < 4; ++index) {
+        m_playtestSplitters[index] = splitters[index]->saveState();
+    }
+    m_viewerEditorParent = m_viewer->parentWidget();
+    m_viewerLayoutIndex = m_viewerEditorParent->layout()->indexOf(m_viewer);
+    centralWidget()->hide();
+    menuBar()->hide();
+    m_toolsToolbar->hide();
+    m_viewer->setParent(this);
+    m_viewer->setGeometry(rect());
+    m_viewer->setFocusPolicy(Qt::StrongFocus);
+    m_viewer->setCursor(Qt::BlankCursor);
+    m_viewer->show();
+    m_viewer->raise();
+    m_viewer->setFocus(Qt::OtherFocusReason);
+    m_playtestLeadIn = m_editorPosition == 0;
+    m_playtestFinished = false;
+    m_fieldContact = false;
+    m_playtestSession.load(m_state->chart(), m_state->timingPoints(), m_state->speedEvents(),
+        m_playtestLeadIn ? -3000.0 : static_cast<double>(m_editorPosition));
+    m_playtest = true;
+    m_playback->setManualPlaytest(true);
+    m_playback->setChartDuration(static_cast<qint64>(std::ceil(m_playtestSession.endTime())) + 2001);
+    m_playback->setPosition(m_editorPosition);
+    m_leadInEnd = m_playback->sampleClock().monotonicSeconds + 3.0;
+    RAWINPUTDEVICE mouse{0x01, 0x02, 0, reinterpret_cast<HWND>(winId())};
+    if (!RegisterRawInputDevices(&mouse, 1, sizeof(mouse))) {
+        leavePlaytest();
+        QMessageBox::warning(this, QStringLiteral("Playtest"), QStringLiteral("Could not capture relative mouse input."));
+        return;
+    }
+    constrainPlaytestCursor();
+    if (!m_playtestLeadIn) {
+        m_playback->togglePlayback();
+    }
+    m_playtestTimer->start();
+    updatePlaytest();
+}
+
+void MainWindow::leavePlaytest() {
+    if (!m_playtest) {
+        return;
+    }
+    m_playtestTimer->stop();
+    m_playtestSession.clearInput(m_playback->sampleClock().monotonicSeconds);
+    m_playback->setHeldHitsounds(false, false);
+    if (m_playback->isPlaying()) {
+        m_playback->togglePlayback();
+    }
+    m_playback->stopHitsoundPreview();
+    m_playback->setManualPlaytest(false);
+    ClipCursor(nullptr);
+    RAWINPUTDEVICE mouse{0x01, 0x02, RIDEV_REMOVE, nullptr};
+    RegisterRawInputDevices(&mouse, 1, sizeof(mouse));
+    m_playtest = false;
+    m_viewer->endPlaytest();
+    m_viewer->hide();
+    m_viewer->setParent(m_viewerEditorParent);
+    static_cast<QBoxLayout*>(m_viewerEditorParent->layout())->insertWidget(m_viewerLayoutIndex, m_viewer, 1);
+    m_viewer->setFocusPolicy(Qt::NoFocus);
+    m_viewer->unsetCursor();
+    centralWidget()->show();
+    m_viewer->show();
+    restoreState(m_playtestWindowState);
+    menuBar()->setVisible(m_editorMenuVisible);
+    m_toolsToolbar->setVisible(m_editorToolsVisible);
+    const std::array<QSplitter*, 4> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter};
+    for (int index = 0; index < 4; ++index) {
+        splitters[index]->restoreState(m_playtestSplitters[index]);
+    }
+    if (m_pendingDuration > 0) {
+        const qint64 duration = std::exchange(m_pendingDuration, 0);
+        updateProjectDuration(duration);
+    }
+    m_playback->setChartDuration(m_state->chart().durationMilliseconds);
+    m_playback->setPosition(m_editorPosition);
+    m_state->setPlaybackPosition(m_editorPosition);
+    m_viewer->setPlaybackPosition(m_editorPosition);
+    if (isActiveWindow()) {
+        QCursor::setPos(m_editorCursor);
+        if (m_editorFocus) {
+            m_editorFocus->setFocus(Qt::OtherFocusReason);
+        }
+    }
+}
+
+void MainWindow::constrainPlaytestCursor() {
+    const auto window = reinterpret_cast<HWND>(winId());
+    RECT bounds{};
+    GetClientRect(window, &bounds);
+    POINT topLeft{bounds.left, bounds.top};
+    POINT bottomRight{bounds.right, bounds.bottom};
+    ClientToScreen(window, &topLeft);
+    ClientToScreen(window, &bottomRight);
+    bounds = {topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
+    ClipCursor(&bounds);
+}
+
+MainWindow::PlaytestClock MainWindow::samplePlaytestClock() const {
+    const auto clock = m_playback->sampleClock();
+    return {m_playtestLeadIn ? std::min(0.0, (clock.monotonicSeconds - m_leadInEnd) * 1000.0)
+        : clock.chartMilliseconds, clock.monotonicSeconds};
+}
+
+void MainWindow::updatePlaytest() {
+    if (!m_playtest || m_playtestFinished) {
+        return;
+    }
+    auto clock = m_playback->sampleClock();
+    if (m_playtestLeadIn && clock.monotonicSeconds >= m_leadInEnd) {
+        m_playtestLeadIn = false;
+        m_playback->togglePlayback();
+        clock = m_playback->sampleClock();
+    }
+    const auto sample = samplePlaytestClock();
+    m_playtestSession.advance(sample.chartTime, sample.monotonicTime);
+    if (m_playtestSession.complete()) {
+        m_playtestFinished = true;
+        m_playtestSession.clearInput(clock.monotonicSeconds);
+        if (m_playback->isPlaying()) {
+            m_playback->togglePlayback();
+        }
+        m_playtestTimer->stop();
+    }
+    publishPlaytest();
+}
+
+void MainWindow::publishPlaytest() {
+    auto judgements = m_playtestSession.takeJudgements();
+    for (const auto& judgement : judgements) {
+        if (judgement.grade == PlaytestGrade::Miss) {
+            continue;
+        }
+        if (judgement.tickType == 1 || judgement.kind == NoteKind::Flick) {
+            HitsoundKind sound = judgement.kind == NoteKind::Flick ? HitsoundKind::FlickHit
+                : judgement.kind == NoteKind::Hold ? HitsoundKind::HoldHit
+                : judgement.side == FloorSide::Central ? HitsoundKind::NoteHit : HitsoundKind::NoteSideHit;
+            m_playback->previewHitsound(m_hitsounds->samples(static_cast<int>(sound)));
+        }
+    }
+    bool hold = false;
+    bool sky = false;
+    for (const auto& state : m_playtestSession.notes()) {
+        hold = hold || (state.active && state.note.kind == NoteKind::Hold);
+        sky = sky || (state.active && state.note.kind == NoteKind::Sky);
+    }
+    if (sky && !m_fieldContact) {
+        m_playback->previewHitsound(m_hitsounds->samples(static_cast<int>(HitsoundKind::FieldHit)));
+    }
+    m_fieldContact = sky;
+    m_playback->setHeldHitsounds(hold && !m_playtestFinished, sky && !m_playtestFinished);
+    QString status;
+    if (m_playtestFinished) {
+        status = QStringLiteral("Press Escape to return to editor");
+    } else if (m_playtestLeadIn) {
+        status = QString::number(std::max(1, static_cast<int>(std::ceil(-m_playtestSession.time() / 1000.0))));
+    }
+    m_viewer->setPlaytestFrame(m_playtestSession, status, judgements);
 }
 
 QString MainWindow::audioPathForFolder(const QString& folderPath) const {
@@ -1828,6 +2082,10 @@ void MainWindow::loadProjectAssets(const QString& songFileName, const QByteArray
 }
 
 void MainWindow::updateProjectDuration(const qint64 durationMilliseconds) {
+    if (m_playtest) {
+        m_pendingDuration = durationMilliseconds;
+        return;
+    }
     if (!m_hasProject || durationMilliseconds <= 0) {
         return;
     }

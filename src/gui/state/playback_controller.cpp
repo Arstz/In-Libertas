@@ -43,6 +43,38 @@ qint64 PlaybackController::position() const {
     return m_positionMilliseconds;
 }
 
+PlaybackController::ClockSample PlaybackController::sampleClock() const {
+    const auto now = std::chrono::steady_clock::now();
+    double position = m_positionMilliseconds;
+    if (m_playbackActive) {
+        if (m_usingFallbackClock) {
+            position = m_clockAnchorPositionMilliseconds
+                + std::chrono::duration<double, std::milli>(now - m_clockAnchor).count() * m_playbackRate;
+        } else if (m_audioSink) {
+            position = m_audioStartPositionMilliseconds + m_audioSink->processedUSecs() * m_playbackRate / 1000.0;
+        }
+    }
+    return {position, std::chrono::duration<double>(now.time_since_epoch()).count()};
+}
+
+void PlaybackController::setManualPlaytest(const bool enabled) {
+    m_manualPlaytest = enabled;
+    setHeldHitsounds(false, false);
+    resetAudioPlayback();
+}
+
+void PlaybackController::setHeldHitsounds(const bool hold, const bool sky) {
+    if (m_holdSound == hold && m_skySound == sky) {
+        return;
+    }
+    m_holdSound = hold;
+    m_skySound = sky;
+    if (m_audioStream) {
+        m_audioStream->setLiveLoop(HitsoundKind::HoldHeld, hold);
+        m_audioStream->setLiveLoop(HitsoundKind::FieldHeld, sky);
+    }
+}
+
 bool PlaybackController::isPlaying() const {
     return m_playbackActive;
 }
@@ -377,7 +409,9 @@ void PlaybackController::startAudioPlayback() {
         const auto source = m_hasAudioSource ? m_decodedAudio : std::make_shared<AudioPlaybackData>();
         m_audioStream = std::make_unique<AudioPlaybackStream>(source, m_audioFormat,
             m_positionMilliseconds, m_chartDurationMilliseconds, m_playbackRate);
-        m_audioStream->setMix(m_mix, m_hitsoundEvents);
+        m_audioStream->setMix(m_mix, m_manualPlaytest ? QVector<HitsoundEvent>{} : m_hitsoundEvents);
+        m_audioStream->setLiveLoop(HitsoundKind::HoldHeld, m_holdSound);
+        m_audioStream->setLiveLoop(HitsoundKind::FieldHeld, m_skySound);
     }
     if (m_audioStream->bytesAvailable() == 0) {
         return;

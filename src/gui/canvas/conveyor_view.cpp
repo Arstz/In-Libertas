@@ -1,15 +1,23 @@
 #include "gui/canvas/conveyor_view.h"
 
 #include "gui/app/game_palette.h"
+#include "gui/app/playtest_settings.h"
 #include "gui/canvas/conveyor_geometry.h"
+#include "gui/key_bindings.h"
 #include "core/field_groups.h"
 
 #include <QtCore/QLineF>
+#include <QtCore/QCoreApplication>
+#include <QtCore/QDebug>
 #include <QtCore/QRectF>
+#include <QtCore/QSet>
 #include <QtGui/QBrush>
+#include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetrics>
+#include <QtGui/QLinearGradient>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QPainterPathStroker>
 #include <QtGui/QPen>
 #include <QtGui/QTransform>
 
@@ -46,6 +54,10 @@ constexpr double kFloorLaneWidth = 0.25;
 constexpr double kFloorHalfLaneWidth = kFloorLaneWidth * 0.5;
 constexpr double kCentralFloorLeftBoundary = 0.125;
 constexpr double kCentralFloorRightBoundary = 1.125;
+constexpr int kComboGlyphPixelSize = 256;
+constexpr double kComboEmWorldSize = 0.39 * 1.3 * 0.9;
+constexpr double kComboStrokeWidth = 0.39 * 1.23 / 16.0 * 0.5 * 0.9;
+constexpr double kJudgementLifetimeMilliseconds = 450.0;
 
 struct FloorSpan {
     double left = 0.0;
@@ -78,6 +90,20 @@ struct FloorSpan {
     transform.scale(scale, scale);
 
     return transform;
+}
+
+[[nodiscard]] double overlayCardScale(const QSizeF& viewport) {
+    return std::clamp(std::min(viewport.width() / 1400.0, viewport.height() / 900.0), 0.65, 1.75);
+}
+
+[[nodiscard]] QRectF overlayCardRect(const QRectF& viewport, const bool left, const bool paired) {
+    const double scale = overlayCardScale(viewport.size());
+    const double margin = 12.0 * scale;
+    const QRectF available = viewport.adjusted(margin, margin, -margin, -margin);
+    const double maximumWidth = paired ? (available.width() - margin) * 0.5 : available.width();
+    const double width = std::max(0.0, std::min(548.0 * scale, maximumWidth));
+    return {left ? available.left() : available.right() - width, available.top(),
+        width, std::max(0.0, std::min(128.0 * scale, available.height()))};
 }
 
 [[nodiscard]] FloorSpan floorSpan(const FloorSide side, const double firstLaneCenter, const double width) {
@@ -150,16 +176,164 @@ struct FloorSpan {
     return {};
 }
 
+[[nodiscard]] QPainterPath centeredGlyphs(const QString& text, QFont font, const double emSize,
+    const QFont::Weight weight = QFont::DemiBold) {
+    font.setPixelSize(kComboGlyphPixelSize);
+    font.setWeight(weight);
+    QPainterPath glyphs;
+    glyphs.addText(QPointF(), font, text);
+    const QPointF center = glyphs.boundingRect().center();
+    QTransform transform;
+    transform.scale(emSize / kComboGlyphPixelSize, emSize / kComboGlyphPixelSize);
+    transform.translate(-center.x(), -center.y());
+    return transform.map(glyphs);
+}
+
+[[nodiscard]] QFont gameplayNumberFont() {
+    static const QFont font = [] {
+        const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/assets/ultraproxi sb.otf");
+        const int id = QFontDatabase::addApplicationFont(path);
+        const QStringList families = QFontDatabase::applicationFontFamilies(id);
+        if (families.isEmpty()) {
+            qWarning() << "Could not load gameplay number font:" << path;
+            return QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        }
+        const QString family = families.first();
+        return QFontDatabase::font(family, QFontDatabase::styles(family).value(0), 12);
+    }();
+    return font;
+}
+
+struct NumericAtlas {
+    QImage image;
+    QRectF bounds;
+    double advance = 0.0;
+    std::array<QRectF, 11> sources;
+};
+
+[[nodiscard]] NumericAtlas makeNumericAtlas(const bool outlined) {
+    QFont font = gameplayNumberFont();
+    font.setPixelSize(kComboGlyphPixelSize);
+    font.setKerning(false);
+    const QFontMetricsF metrics(font);
+    NumericAtlas atlas;
+    for (const QChar digit : QStringLiteral("0123456789")) {
+        atlas.advance = std::max(atlas.advance, metrics.horizontalAdvance(digit));
+    }
+    const QString characters = QStringLiteral("0123456789'");
+    const double baseline = metrics.capHeight() * 0.5;
+    const double strokeWidth = outlined ? kComboStrokeWidth * kComboGlyphPixelSize / kComboEmWorldSize : 0.0;
+    std::array<QPainterPath, 11> glyphs;
+    QRectF inkBounds;
+    for (int index = 0; index < characters.size(); ++index) {
+        const QChar digit = characters.at(index);
+        const double x = (atlas.advance - metrics.horizontalAdvance(digit)) * 0.5;
+        glyphs[index].addText(QPointF(x, baseline), font, QString(digit));
+        inkBounds = inkBounds.united(glyphs[index].boundingRect());
+    }
+    const double padding = std::ceil(strokeWidth * 0.5) + 2.0;
+    atlas.bounds = inkBounds.united(QRectF(0.0, inkBounds.top(), atlas.advance, inkBounds.height()))
+        .adjusted(-padding, -padding, padding, padding).toAlignedRect();
+    const int cellWidth = qRound(atlas.bounds.width());
+    const int cellHeight = qRound(atlas.bounds.height());
+    atlas.image = QImage(cellWidth * 4, cellHeight * 3, QImage::Format_ARGB32_Premultiplied);
+    atlas.image.fill(Qt::transparent);
+    QPainter painter(&atlas.image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPainterPathStroker stroker;
+    stroker.setWidth(strokeWidth);
+    stroker.setCapStyle(Qt::RoundCap);
+    stroker.setJoinStyle(Qt::RoundJoin);
+    for (int index = 0; index < characters.size(); ++index) {
+        const QPointF origin((index % 4) * cellWidth, (index / 4) * cellHeight);
+        atlas.sources[index] = QRectF(origin, QSizeF(cellWidth, cellHeight));
+        painter.save();
+        painter.translate(origin - atlas.bounds.topLeft());
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(outlined ? QColor::fromRgbF(0.4823529, 0.8550977, 0.8588235, 0.2352941)
+            : QColor(153, 247, 248));
+        painter.drawPath(glyphs[index]);
+        if (outlined) {
+            painter.setBrush(QColor::fromRgbF(0.7905393, 0.8962264, 0.8863183, 0.4901961));
+            painter.drawPath(stroker.createStroke(glyphs[index]));
+        }
+        painter.restore();
+    }
+    return atlas;
+}
+
+[[nodiscard]] const NumericAtlas& numericAtlas(const bool outlined) {
+    static const NumericAtlas combo = makeNumericAtlas(true);
+    static const NumericAtlas score = makeNumericAtlas(false);
+    return outlined ? combo : score;
+}
+
+void drawFixedWidthNumber(QPainter& painter, const QString& text, const NumericAtlas& atlas, const double emSize) {
+    const double scale = emSize / kComboGlyphPixelSize;
+    const double left = -atlas.advance * text.size() * 0.5;
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    for (qsizetype index = 0; index < text.size(); ++index) {
+        const QChar character = text.at(index);
+        const int digit = character == QLatin1Char('\'') ? 10 : character.digitValue();
+        if (digit < 0 || digit > 10) {
+            continue;
+        }
+        const QRectF cell = atlas.bounds.translated(left + index * atlas.advance, 0.0);
+        const QRectF target(cell.left() * scale, cell.top() * scale, cell.width() * scale, cell.height() * scale);
+        painter.drawImage(target, atlas.image, atlas.sources[digit]);
+    }
+    painter.restore();
+}
+
+[[nodiscard]] std::array<QImage, 7> makeJudgementImages(QFont font) {
+    static const QString labels[]{QString(), QStringLiteral("MISS"), QStringLiteral("NEAR EARLY"),
+        QStringLiteral("NEAR LATE"), QStringLiteral("EXACT EARLY"), QStringLiteral("EXACT LATE"),
+        QStringLiteral("EXACT+")};
+    font.setPixelSize(68);
+    font.setBold(true);
+    std::array<QImage, 7> images;
+    for (int index = 1; index < images.size(); ++index) {
+        QPainterPath glyphs;
+        glyphs.addText(QPointF(), font, labels[index]);
+        const QRect bounds = glyphs.boundingRect().adjusted(-2.0, -2.0, 2.0, 2.0).toAlignedRect();
+        QImage& image = images[index];
+        image = QImage(bounds.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.translate(-bounds.topLeft());
+        painter.fillPath(glyphs, palette::white);
+    }
+    return images;
+}
+
 } // namespace
 
 ConveyorView::ConveyorView(QWidget* parent)
     : QOpenGLWidget(parent) {
     setMinimumSize(400, 225);
     setAutoFillBackground(false);
+    setPlaytestLaneKeys(infalsus::gui::kDefaultPlaytestLaneKeys);
+}
+
+void ConveyorView::setPlaytestLaneKeys(const std::array<Qt::Key, 6>& keys) {
+    for (std::size_t lane = 0; lane < keys.size(); ++lane) {
+        const QString label = keys[lane] == Qt::Key_unknown ? QString()
+            : QKeySequence(keys[lane]).toString(QKeySequence::NativeText);
+        QPainterPath glyphs = centeredGlyphs(label, font(), 0.35, QFont::Bold);
+        const double scale = std::min(1.0, 0.95 / std::max(0.95, glyphs.boundingRect().width()));
+        QTransform transform;
+        transform.translate(0.0, -0.32);
+        transform.scale(scale, scale);
+        m_keyIndicatorGlyphs[lane] = transform.map(glyphs);
+    }
+    update();
 }
 
 void ConveyorView::setChart(const ChartData& chart) {
     m_chart = chart;
+    m_noteIndexesDirty = true;
     m_fieldBoundariesDirty = true;
     m_measureMarkersDirty = true;
     m_playbackPositionMilliseconds = 0;
@@ -189,6 +363,20 @@ void ConveyorView::setSpeedEvents(QVector<infalsus::SpeedEvent> speedEvents) {
         return first.timeMilliseconds < second.timeMilliseconds;
     });
     m_speedEvents = std::move(speedEvents);
+    m_scrollPoints = {{0, 0.0, 1.0}};
+    for (const auto& event : m_speedEvents) {
+        if (event.timeMilliseconds < 0 || !std::isfinite(event.speed)) {
+            continue;
+        }
+        ScrollPoint& previous = m_scrollPoints.last();
+        const double coordinate = previous.coordinate + (event.timeMilliseconds - previous.time) * previous.speed;
+        if (event.timeMilliseconds == previous.time) {
+            previous.speed = event.speed;
+        } else {
+            m_scrollPoints.append({event.timeMilliseconds, coordinate, event.speed});
+        }
+    }
+    m_noteIndexesDirty = true;
     m_measureMarkersDirty = true;
     update();
 }
@@ -219,9 +407,103 @@ void ConveyorView::setPlaybackPosition(const qint64 positionMilliseconds) {
     update();
 }
 
+void ConveyorView::setPlaytestFrame(const infalsus::PlaytestSession& session, const QString& status,
+    const QVector<infalsus::PlaytestJudgement>& judgements) {
+    if (!m_playtest) {
+        (void)numericAtlas(true);
+        (void)numericAtlas(false);
+        if (m_judgementImages[1].isNull()) {
+            m_judgementImages = makeJudgementImages(font());
+        }
+    }
+    m_playtest = true;
+    QSet<std::uint64_t> heldFieldGroups;
+    QSet<std::uint64_t> dueFieldGroups;
+    for (const auto& state : session.notes()) {
+        if (state.note.kind != NoteKind::Sky) {
+            continue;
+        }
+        if (state.active) {
+            heldFieldGroups.insert(state.note.groupId);
+        }
+        if (!state.consumed && state.note.startMilliseconds <= session.time()
+            && state.note.endMilliseconds >= session.time()) {
+            dueFieldGroups.insert(state.note.groupId);
+        }
+    }
+    for (const auto& state : session.notes()) {
+        bool active = state.note.kind == NoteKind::Sky
+            ? heldFieldGroups.contains(state.note.groupId) : state.active;
+        const bool holdTail = state.note.kind == NoteKind::Hold && state.consumed
+            && session.time() < state.note.endMilliseconds;
+        if (holdTail && session.time() >= state.note.startMilliseconds) {
+            for (int lane = state.firstLane; lane <= state.lastLane; ++lane) {
+                active = active || session.heldLanes()[lane];
+            }
+        }
+        const bool missing = state.note.kind == NoteKind::Sky && !active
+            && dueFieldGroups.contains(state.note.groupId);
+        m_playtestNotes.insert(state.note.id, (state.consumed && !state.missed && !holdTail ? 1 : 0)
+            | (active ? 2 : 0) | (missing ? 4 : 0));
+        if (state.note.kind == NoteKind::Hold || state.note.kind == NoteKind::Sky) {
+            const qint64 now = static_cast<qint64>(std::floor(session.time()));
+            qint64 start = m_playtestNoteStarts.value(state.note.id, state.note.startMilliseconds);
+            start = std::max(start, std::min(now, static_cast<qint64>(std::floor(state.successfulUntil))));
+            if (active) {
+                start = std::max(start, now);
+            }
+            m_playtestNoteStarts.insert(state.note.id, std::min(start, state.note.endMilliseconds));
+        }
+    }
+    if (session.result().combo >= 2
+        && (m_playtestResult.combo != session.result().combo || m_comboText.isEmpty())) {
+        m_comboText = QString::number(session.result().combo);
+    }
+    if (m_scoreText.isEmpty() || m_playtestResult.score != session.result().score) {
+        m_scoreText = QString::number(std::max<qint64>(0, session.result().score)).rightJustified(9, QLatin1Char('0'));
+        for (int index = static_cast<int>(m_scoreText.size()) - 3; index > 0; index -= 3) {
+            m_scoreText.insert(index, QStringLiteral("'"));
+        }
+    }
+    m_playtestResult = session.result();
+    m_playtestHeld = session.heldLanes();
+    m_playtestCursor = session.cursor();
+    m_sweepLeft = session.sweepLeft();
+    m_sweepRight = session.sweepRight();
+    m_playtestStatus = status;
+    m_playbackPositionMilliseconds = static_cast<qint64>(std::floor(session.time()));
+    m_judgements.erase(std::remove_if(m_judgements.begin(), m_judgements.end(), [&session](const auto& judgement) {
+        return session.time() - judgement.time >= kJudgementLifetimeMilliseconds;
+    }), m_judgements.end());
+    for (const auto& judgement : judgements) {
+        if (judgement.grade != infalsus::PlaytestGrade::Pending
+            && session.time() - judgement.time < kJudgementLifetimeMilliseconds) {
+            m_judgements.append(judgement);
+        }
+    }
+    update();
+}
+
+void ConveyorView::endPlaytest() {
+    m_playtest = false;
+    m_playtestNotes.clear();
+    m_playtestNoteStarts.clear();
+    m_comboText.clear();
+    m_scoreText.clear();
+    m_judgements.clear();
+    update();
+}
+
+double ConveyorView::gameplayMouseWidth() const {
+    const QTransform transform = painterTransform(rect());
+    const QLineF receiver = ConveyorGeometry::skyReceiver();
+    return std::max(1.0, std::abs(transform.map(receiver.p2()).x() - transform.map(receiver.p1()).x()) * devicePixelRatioF());
+}
+
 void ConveyorView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
     m_chart.notes.insert(insertionIndex, hitObject);
+    m_noteIndexesDirty = true;
     m_fieldBoundariesDirty = true;
     m_measureMarkersDirty = true;
     update();
@@ -233,6 +515,7 @@ void ConveyorView::removeHitObject(const int index) {
     }
 
     m_chart.notes.removeAt(index);
+    m_noteIndexesDirty = true;
     m_fieldBoundariesDirty = true;
     m_measureMarkersDirty = true;
     update();
@@ -244,6 +527,7 @@ void ConveyorView::updateHitObject(const int index, const ChartNote& hitObject) 
     }
 
     m_chart.notes[index] = hitObject;
+    m_noteIndexesDirty = true;
     m_fieldBoundariesDirty = true;
     m_measureMarkersDirty = true;
     update();
@@ -264,6 +548,7 @@ void ConveyorView::updateHitObjects(const QVector<int>& indexes, const QVector<C
         changed = true;
     }
     if (changed) {
+        m_noteIndexesDirty = true;
         m_fieldBoundariesDirty = true;
         m_measureMarkersDirty = true;
         update();
@@ -271,6 +556,7 @@ void ConveyorView::updateHitObjects(const QVector<int>& indexes, const QVector<C
 }
 
 void ConveyorView::paintGL() {
+    m_frameScrollCoordinate = scrollCoordinateAt(m_playbackPositionMilliseconds);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.fillRect(rect(), palette::canvasBackground);
@@ -279,8 +565,205 @@ void ConveyorView::paintGL() {
     painter.setClipRect(QRectF(QPointF(0.0, 0.0), ConveyorGeometry::nativeSize()));
     drawConveyor(painter);
     drawChart(painter);
+    if (m_playtest) {
+        drawPlaytestCombo(painter);
+        drawPlaytestInput(painter);
+        drawPlaytestJudgements(painter);
+    }
     painter.restore();
     drawSongCard(painter);
+    if (m_playtest) {
+        drawScoreCard(painter);
+        drawPlaytestOverlay(painter);
+    }
+    drawControlHints(painter);
+}
+
+void ConveyorView::drawPlaytestCombo(QPainter& painter) const {
+    if (m_playtestResult.combo < 2) {
+        return;
+    }
+    painter.save();
+    painter.setTransform(ConveyorGeometry::comboTextProjection(), true);
+    drawFixedWidthNumber(painter, m_comboText, numericAtlas(true), kComboEmWorldSize);
+    painter.restore();
+}
+
+void ConveyorView::drawPlaytestInput(QPainter& painter) const {
+    const auto receiver = ConveyorGeometry::floorReceiver();
+    std::array<bool, kLaneCount> enabled;
+    enabled.fill(true);
+    const qint64 laneEventCutoff = m_playbackPositionMilliseconds >= 50 ? m_playbackPositionMilliseconds : 5;
+    for (const infalsus::LaneEvent& event : m_laneEvents) {
+        if (event.timeMilliseconds >= laneEventCutoff) {
+            break;
+        }
+        if (event.lane >= 0 && event.lane < kLaneCount) {
+            enabled[event.lane] = event.enabled;
+        }
+    }
+    for (int lane = 0; lane < kLaneCount;) {
+        if (!m_playtestHeld[lane]) {
+            ++lane;
+            continue;
+        }
+        QPainterPath indicator;
+        indicator.moveTo(receiver[lane]);
+        QPainterPath clip;
+        do {
+            indicator.lineTo(receiver[lane + 1]);
+            clip = clip.united(ConveyorGeometry::floorLane(lane, 1.01, 0.99));
+            ++lane;
+        } while (lane < kLaneCount && m_playtestHeld[lane]);
+        painter.save();
+        painter.setClipPath(clip, Qt::IntersectClip);
+        painter.setPen(QPen(palette::white, 16.0, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(indicator);
+        painter.restore();
+    }
+    for (int lane = 0; lane < kLaneCount; ++lane) {
+        painter.save();
+        painter.setTransform(ConveyorGeometry::keyIndicatorProjection(lane), true);
+        painter.setOpacity(enabled[lane] ? 1.0 : 0.3);
+        const bool pressed = m_playtestHeld[lane];
+        QPainterPath keyShape;
+        keyShape.addPolygon(QPolygonF{{-0.9, -12.0}, {0.9, -12.0}, {0.9, -0.65},
+            {0.65, 0.0}, {-0.65, 0.0}, {-0.9, -0.65}});
+        keyShape.closeSubpath();
+        QLinearGradient fill(QPointF(0.0, 0.0), QPointF(0.0, -12.0));
+        fill.setColorAt(0.0, QColor(151, 253, 253, pressed ? 130 : 65));
+        fill.setColorAt(0.35, QColor(125, 235, 235, pressed ? 50 : 22));
+        fill.setColorAt(1.0, QColor(125, 235, 235, 0));
+        QLinearGradient outline(QPointF(0.0, 0.0), QPointF(0.0, -12.0));
+        outline.setColorAt(0.0, QColor(175, 255, 255, pressed ? 240 : 140));
+        outline.setColorAt(0.35, QColor(151, 253, 253, pressed ? 65 : 30));
+        outline.setColorAt(1.0, QColor(151, 253, 253, 0));
+        painter.setPen(QPen(QBrush(outline), pressed ? 0.025 : 0.015,
+            Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+        painter.setBrush(fill);
+        painter.drawPath(keyShape);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor::fromRgbF(1.2691348791122437, 2.3396224975585938,
+            2.3396224975585938, 0.3607843220233917));
+        painter.drawPath(m_keyIndicatorGlyphs[lane]);
+        painter.restore();
+    }
+    painter.setPen(QPen(QColor(188, 117, 255, 100), 8.0));
+    painter.drawLine(ConveyorGeometry::skyPoint(m_sweepLeft, 1.0), ConveyorGeometry::skyPoint(m_sweepRight, 1.0));
+    const QPointF cursor = ConveyorGeometry::skyPoint(m_playtestCursor, 1.0);
+    const QPointF horizon = ConveyorGeometry::skyPoint(m_playtestCursor, 0.0);
+    QLinearGradient guide(cursor, horizon);
+    guide.setColorAt(0.0, QColor(255, 250, 124, 245));
+    guide.setColorAt(0.65, QColor(244, 246, 81, 150));
+    guide.setColorAt(1.0, QColor(244, 246, 81, 0));
+    painter.setPen(QPen(QBrush(guide), 2.0));
+    painter.drawLine(cursor, horizon);
+
+    const QPointF tip = ConveyorGeometry::skyPoint(m_playtestCursor, 0.991);
+    const QPointF left = ConveyorGeometry::skyPoint(m_playtestCursor - 0.055, 0.998);
+    const QPointF right = ConveyorGeometry::skyPoint(m_playtestCursor + 0.055, 0.998);
+    const QPointF middle = ConveyorGeometry::skyPoint(m_playtestCursor, 0.998);
+    QLinearGradient triangle(tip, middle);
+    triangle.setColorAt(0.0, QColor(231, 190, 255));
+    triangle.setColorAt(0.25, QColor(172, 79, 239));
+    triangle.setColorAt(1.0, QColor(172, 79, 239));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(triangle);
+    painter.drawPolygon(QPolygonF{left, tip, right});
+}
+
+void ConveyorView::drawPlaytestJudgements(QPainter& painter) const {
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    for (const auto& judgement : m_judgements) {
+        const double age = m_playbackPositionMilliseconds - judgement.time;
+        if (age < 0.0 || age >= kJudgementLifetimeMilliseconds) {
+            continue;
+        }
+        const double fadeIn = 1.0 - std::pow(1.0 - std::clamp(age / 100.0, 0.0, 1.0), 3.0);
+        const double fadeOut = 1.0 - std::clamp((age - 250.0) / 200.0, 0.0, 1.0);
+        const double stretch = 1.0 - 0.15 * std::pow(1.0 - std::clamp(age / 200.0, 0.0, 1.0), 3.0);
+        const QImage& image = m_judgementImages[static_cast<int>(judgement.grade)];
+        const QPointF center = ConveyorGeometry::judgementTextPosition(judgement.position);
+        const QSizeF size(image.width() * 0.5, image.height() * 0.5 * stretch);
+        painter.setOpacity(fadeIn * fadeOut);
+        painter.drawImage(QRectF(center - QPointF(size.width(), size.height()) * 0.5, size), image);
+    }
+    painter.restore();
+}
+
+void ConveyorView::drawPlaytestOverlay(QPainter& painter) const {
+    painter.save();
+    QFont font = painter.font();
+    font.setPixelSize(std::clamp(height() / 34, 16, 34));
+    font.setBold(true);
+    painter.setFont(font);
+    painter.setPen(palette::white);
+    if (!m_playtestStatus.isEmpty()) {
+        font.setPixelSize(std::clamp(height() / 18, 24, 72));
+        painter.setFont(font);
+        painter.drawText(rect(), Qt::AlignCenter, m_playtestStatus);
+    }
+    painter.restore();
+}
+
+void ConveyorView::drawScoreCard(QPainter& painter) const {
+    const double scale = overlayCardScale(size());
+    const QRectF card = overlayCardRect(rect(), true, true);
+    if (card.width() < 120.0 || card.height() < 70.0) {
+        return;
+    }
+    painter.save();
+    painter.setPen(QPen(QColor(133, 200, 216, 200), 1.5 * scale));
+    painter.setBrush(QColor(7, 25, 34, 246));
+    painter.drawRect(card);
+    painter.setPen(QPen(QColor(177, 245, 250, 220), 3.0 * scale));
+    painter.drawLine(QPointF(card.left() + 7.0 * scale, card.top() + 8.0 * scale),
+        QPointF(card.left() + 7.0 * scale, card.top() + 29.0 * scale));
+
+    const QRectF content = card.adjusted(22.0 * scale, 9.0 * scale, -22.0 * scale, -9.0 * scale);
+    QFont labelFont = painter.font();
+    labelFont.setPointSizeF(12.0 * scale);
+    labelFont.setWeight(QFont::DemiBold);
+    painter.setFont(labelFont);
+    painter.setPen(QColor(186, 215, 225));
+    painter.drawText(QRectF(content.left(), content.top(), content.width(), 23.0 * scale),
+        Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("SCORE"));
+
+    const double emSize = 68.0 * scale;
+    const NumericAtlas& atlas = numericAtlas(false);
+    const double layoutWidth = atlas.advance * m_scoreText.size() * emSize / kComboGlyphPixelSize;
+    const double fit = std::min(1.0, content.width() / std::max(1.0, layoutWidth));
+    const QRectF valueRect(content.left(), content.top() + 25.0 * scale, content.width(),
+        content.height() - 25.0 * scale);
+    painter.translate(valueRect.left() + layoutWidth * fit * 0.5, valueRect.center().y());
+    painter.scale(fit, fit);
+    drawFixedWidthNumber(painter, m_scoreText, atlas, emSize);
+    painter.restore();
+}
+
+void ConveyorView::drawControlHints(QPainter& painter) const {
+    const QString text = m_playtest ? QStringLiteral("Esc: Editor")
+        : QStringLiteral("F5: Playtest from current time");
+    painter.save();
+    QFont hintFont = painter.font();
+    hintFont.setPointSizeF(14.0);
+    hintFont.setWeight(QFont::Normal);
+    painter.setFont(hintFont);
+    painter.setPen(QColor(150, 150, 150));
+    const QFontMetricsF metrics(hintFont);
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    double blockWidth = 0.0;
+    for (const QString& line : lines) {
+        blockWidth = std::max(blockWidth, metrics.horizontalAdvance(line));
+    }
+    const double margin = 12.0 * overlayCardScale(size());
+    const double blockHeight = metrics.lineSpacing() * lines.size();
+    const QRectF block(margin, height() - margin - blockHeight,
+        std::max(0.0, std::min(blockWidth + 2.0, width() - 2.0 * margin)), blockHeight);
+    painter.drawText(block, Qt::AlignLeft | Qt::AlignBottom, text);
+    painter.restore();
 }
 
 void ConveyorView::drawSongCard(QPainter& painter) const {
@@ -288,17 +771,9 @@ void ConveyorView::drawSongCard(QPainter& painter) const {
         return;
     }
 
-    // The reference layout is the 1400x900 editor workspace.  Retaining that
-    // ratio keeps the card visually tied to the 3D viewport rather than to a
-    // fixed pixel size when the user resizes a dock.
-    const double scale = std::clamp(std::min(width() / 1400.0, height() / 900.0), 0.65, 1.75);
-    const double margin = 12.0 * scale;
-    const double cardHeight = 128.0 * scale;
-    const double cardWidth = 548.0 * scale;
+    const double scale = overlayCardScale(size());
     const double jacketInset = 7.0 * scale;
-    const QRectF available = rect().adjusted(margin, margin, -margin, -margin);
-    const QRectF card(available.right() - std::min(cardWidth, available.width()), available.top(),
-        std::min(cardWidth, available.width()), std::min(cardHeight, available.height()));
+    const QRectF card = overlayCardRect(rect(), false, m_playtest);
     if (card.width() < 120.0 || card.height() < 70.0) {
         return;
     }
@@ -388,44 +863,24 @@ double ConveyorView::approachDistanceMilliseconds() const {
 }
 
 double ConveyorView::noteOpacity(const qint64 chartTimeMilliseconds) const {
-    const double fadeProgress = std::clamp(approachProgress(chartTimeMilliseconds) / 0.1, 0.0, 1.0);
+    const double progress = m_playtest ? projectionProgress(chartTimeMilliseconds) : approachProgress(chartTimeMilliseconds);
+    const double fadeProgress = std::clamp(progress / 0.1, 0.0, 1.0);
     return (3.0 - 2.0 * fadeProgress) * fadeProgress * fadeProgress;
 }
 
 double ConveyorView::scrollCoordinateAt(const double chartTimeMilliseconds) const {
-    const double target = chartTimeMilliseconds;
-    qint64 cursor = 0;
-    double speed = 1.0;
-    double coordinate = 0.0;
-    if (target < 0) {
-        for (const infalsus::SpeedEvent& event : m_speedEvents) {
-            if (event.timeMilliseconds > 0) {
-                break;
-            }
-            if (event.timeMilliseconds == 0 && std::isfinite(event.speed)) {
-                speed = event.speed;
-            }
-        }
-
-        return static_cast<double>(target) * speed;
+    if (chartTimeMilliseconds < 0.0) {
+        return chartTimeMilliseconds * m_scrollPoints.front().speed;
     }
-    for (const infalsus::SpeedEvent& event : m_speedEvents) {
-        if (event.timeMilliseconds < cursor || !std::isfinite(event.speed)) {
-            continue;
-        }
-        if (event.timeMilliseconds > target) {
-            break;
-        }
-        coordinate += static_cast<double>(event.timeMilliseconds - cursor) * speed;
-        cursor = event.timeMilliseconds;
-        speed = event.speed;
-    }
-    return coordinate + static_cast<double>(target - cursor) * speed;
+    const auto end = std::upper_bound(m_scrollPoints.cbegin(), m_scrollPoints.cend(), chartTimeMilliseconds,
+        [](const double time, const ScrollPoint& point) { return time < point.time; });
+    const ScrollPoint& point = *std::prev(end);
+    return point.coordinate + (chartTimeMilliseconds - point.time) * point.speed;
 }
 
 double ConveyorView::scrollDistanceTo(const qint64 chartTimeMilliseconds) const {
     return scrollCoordinateAt(chartTimeMilliseconds)
-        - scrollCoordinateAt(m_playbackPositionMilliseconds);
+        - m_frameScrollCoordinate;
 }
 
 bool ConveyorView::isVisible(const qint64 startMilliseconds, const qint64 endMilliseconds) const {
@@ -502,8 +957,11 @@ void ConveyorView::drawConveyor(QPainter& painter) {
             }
             const qint64 clippedStart = std::max(start, m_playbackPositionMilliseconds);
             const qint64 clippedEnd = end;
-            painter.drawPath(ConveyorGeometry::floorLane(lane,
-                projectionProgress(clippedStart), projectionProgress(clippedEnd)));
+            const double startProgress = std::clamp(projectionProgress(clippedStart), 0.0, 1.0);
+            const double endProgress = std::clamp(projectionProgress(clippedEnd), 0.0, 1.0);
+            if (startProgress != endProgress) {
+                painter.drawPath(ConveyorGeometry::floorLane(lane, startProgress, endProgress));
+            }
         };
         for (const infalsus::LaneEvent& event : m_laneEvents) {
             if (event.lane != lane) {
@@ -628,16 +1086,23 @@ void ConveyorView::drawDivisors(QPainter& painter) {
 
 void ConveyorView::drawFloorNote(QPainter& painter, const ChartNote& note) {
     const qint64 rawEnd = note.kind == NoteKind::Hold ? note.endMilliseconds : note.startMilliseconds + kTapDepthMilliseconds;
-    if (rawEnd <= m_playbackPositionMilliseconds) {
+    if (!m_playtest && rawEnd <= m_playbackPositionMilliseconds) {
         return;
     }
-    const qint64 noteStart = std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
+    const qint64 noteStart = m_playtest ? m_playtestNoteStarts.value(note.id, note.startMilliseconds)
+        : std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
+    if (noteStart >= rawEnd) {
+        return;
+    }
     const FloorSpan startSpan = floorSpan(note.side, note.startX, note.startWidth);
     const FloorSpan endSpan = floorSpan(note.side, note.endX, note.endWidth);
     const QPainterPath shape = ConveyorGeometry::floorPath({
         {startSpan.left, projectionProgress(noteStart)}, {startSpan.right, projectionProgress(noteStart)},
         {endSpan.right, projectionProgress(rawEnd)}, {endSpan.left, projectionProgress(rawEnd)}}, note.side);
-    const QColor color = floorColor(note);
+    const bool outerHold = note.kind == NoteKind::Hold
+        && (note.side == FloorSide::LeftOuter || note.side == FloorSide::RightOuter);
+    const QColor color = (m_playtestNotes.value(note.id) & 2) != 0
+        ? floorColor(note).lighter(outerHold ? 110 : 150) : floorColor(note);
 
     painter.save();
     painter.setOpacity(painter.opacity() * noteOpacity(noteStart));
@@ -649,11 +1114,12 @@ void ConveyorView::drawFloorNote(QPainter& painter, const ChartNote& note) {
 }
 
 void ConveyorView::drawFlick(QPainter& painter, const ChartNote& note) {
-    if (!ConveyorGeometry::skyVisible(projectionProgress(note.startMilliseconds))) {
+    const qint64 drawTime = note.startMilliseconds;
+    if (!ConveyorGeometry::skyVisible(projectionProgress(drawTime))) {
         return;
     }
-    const auto pointAt = [this, &note](const double coordinate) {
-        return skyPointAt(coordinate, note.startMilliseconds);
+    const auto pointAt = [this, drawTime](const double coordinate) {
+        return skyPointAt(coordinate, drawTime);
     };
     const bool pointsRight = (note.auxiliary & kFlickRight) != 0 || (note.auxiliary & kFlickLeft) == 0;
     const double direction = pointsRight ? 1.0 : -1.0;
@@ -697,7 +1163,7 @@ void ConveyorView::drawFlick(QPainter& painter, const ChartNote& note) {
     trail.append(rightAngle);
 
     painter.save();
-    painter.setOpacity(painter.opacity() * noteOpacity(note.startMilliseconds));
+    painter.setOpacity(painter.opacity() * noteOpacity(drawTime));
     painter.setPen(QPen(color, kSkyContourWidth));
     painter.setBrush(fillColor);
     painter.drawPolygon(trail);
@@ -728,8 +1194,7 @@ void ConveyorView::ensureFieldBoundaries() {
 }
 
 void ConveyorView::drawFieldBoundary(QPainter& painter, const double left, const double right,
-    const qint64 timeMilliseconds, const QVector<infalsus::FieldSegment>& sharedSegments) {
-    const QColor color = palette::skyArea.lighter(115);
+    const qint64 timeMilliseconds, const QVector<infalsus::FieldSegment>& sharedSegments, const QColor& color) {
     double cursor = left;
 
     painter.setPen(QPen(color, kSkyContourWidth));
@@ -749,11 +1214,18 @@ void ConveyorView::drawFieldBoundary(QPainter& painter, const double left, const
 }
 
 void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const int index) {
-    if (note.endMilliseconds <= m_playbackPositionMilliseconds) {
+    const bool held = (m_playtestNotes.value(note.id) & 2) != 0;
+    const bool missing = (m_playtestNotes.value(note.id) & 4) != 0;
+    const QColor fieldColor = missing ? palette::outerNoteRed : palette::skyArea;
+    if (!m_playtest && note.endMilliseconds <= m_playbackPositionMilliseconds) {
         return;
     }
-    const qint64 clippedStart = std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
+    const qint64 clippedStart = m_playtest ? m_playtestNoteStarts.value(note.id, note.startMilliseconds)
+        : std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
     const qint64 clippedEnd = note.endMilliseconds;
+    if (clippedStart >= clippedEnd) {
+        return;
+    }
     const qint64 segmentDuration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
     QPolygonF leftBoundary;
     QPolygonF rightBoundary;
@@ -781,9 +1253,9 @@ void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const 
         field.append(*iterator);
     }
 
-    const QColor color = palette::withAlpha(palette::skyArea, kSkyFillAlpha);
-    const QColor contourColor = palette::skyArea.lighter(115);
-    const bool originalStartVisible = note.startMilliseconds > m_playbackPositionMilliseconds;
+    const QColor color = palette::withAlpha(fieldColor, held ? 170 : kSkyFillAlpha);
+    const QColor contourColor = fieldColor.lighter(115);
+    const bool originalStartVisible = clippedStart == note.startMilliseconds;
     painter.save();
     painter.setOpacity(painter.opacity() * noteOpacity(clippedStart));
     painter.setPen(Qt::NoPen);
@@ -794,10 +1266,10 @@ void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const 
     painter.drawPath(ConveyorGeometry::skyPath(leftBoundary, false));
     painter.drawPath(ConveyorGeometry::skyPath(rightBoundary, false));
     drawFieldBoundary(painter, fieldLeftEdge(note, false), fieldRightEdge(note, false), note.endMilliseconds,
-        m_sharedFieldEnds.value(index));
+        m_sharedFieldEnds.value(index), contourColor);
     if (originalStartVisible) {
         drawFieldBoundary(painter, fieldLeftEdge(note, true), fieldRightEdge(note, true), note.startMilliseconds,
-            m_sharedFieldStarts.value(index));
+            m_sharedFieldStarts.value(index), contourColor);
     } else {
         painter.setPen(QPen(contourColor, kSkyContourWidth));
         painter.drawPath(ConveyorGeometry::skyPath({leftBoundary.front(), rightBoundary.front()}, false));
@@ -805,31 +1277,68 @@ void ConveyorView::drawSkyField(QPainter& painter, const ChartNote& note, const 
     painter.restore();
 }
 
+void ConveyorView::ensureNoteIndexes() {
+    if (!m_noteIndexesDirty) {
+        return;
+    }
+    for (auto& indexes : m_noteIndexes) {
+        indexes.clear();
+    }
+    m_noteScrollRanges.resize(m_chart.notes.size());
+    for (int index = 0; index < m_chart.notes.size(); ++index) {
+        const ChartNote& note = m_chart.notes.at(index);
+        const int sideIndex = static_cast<int>(note.side);
+        if (sideIndex >= 0 && sideIndex < static_cast<int>(m_noteIndexes.size())) {
+            m_noteIndexes[sideIndex].append(index);
+        }
+        const qint64 end = note.kind == NoteKind::Tap ? note.startMilliseconds + kTapDepthMilliseconds
+            : note.endMilliseconds;
+        const double first = scrollCoordinateAt(note.startMilliseconds);
+        const double last = scrollCoordinateAt(end);
+        ScrollRange range{std::min(first, last), std::max(first, last)};
+        auto point = std::upper_bound(m_scrollPoints.cbegin(), m_scrollPoints.cend(), note.startMilliseconds,
+            [](const double time, const ScrollPoint& candidate) { return time < candidate.time; });
+        for (; point != m_scrollPoints.cend() && point->time < end; ++point) {
+            range.minimum = std::min(range.minimum, point->coordinate);
+            range.maximum = std::max(range.maximum, point->coordinate);
+        }
+        m_noteScrollRanges[index] = range;
+    }
+    for (auto& indexes : m_noteIndexes) {
+        std::stable_sort(indexes.begin(), indexes.end(), [this](const int firstIndex, const int secondIndex) {
+            const auto& first = m_chart.notes.at(firstIndex);
+            const auto& second = m_chart.notes.at(secondIndex);
+            if (first.startMilliseconds != second.startMilliseconds) {
+                return first.startMilliseconds < second.startMilliseconds;
+            }
+            return first.endMilliseconds < second.endMilliseconds;
+        });
+    }
+    m_noteIndexesDirty = false;
+}
+
 void ConveyorView::drawChart(QPainter& painter) {
     ensureFieldBoundaries();
-    std::array<QVector<const ChartNote*>, 4> notesBySide;
-    for (const ChartNote& note : m_chart.notes) {
-        const int sideIndex = static_cast<int>(note.side);
-        if (sideIndex >= 0 && sideIndex < static_cast<int>(notesBySide.size())) {
-            notesBySide.at(static_cast<std::size_t>(sideIndex)).append(&note);
-        }
-    }
-
+    ensureNoteIndexes();
     QVector<const ChartNote*> visibleNotes;
-    visibleNotes.reserve(m_chart.notes.size());
     const double approachDistance = approachDistanceMilliseconds();
-    for (QVector<const ChartNote*>& sideNotes : notesBySide) {
-        std::stable_sort(sideNotes.begin(), sideNotes.end(), [](const ChartNote* first, const ChartNote* second) {
-            if (first->startMilliseconds != second->startMilliseconds) {
-                return first->startMilliseconds < second->startMilliseconds;
-            }
-
-            return first->endMilliseconds < second->endMilliseconds;
-        });
-
-        for (const ChartNote* note : sideNotes) {
+    const double minimumFloorCoordinate = m_frameScrollCoordinate - approachDistance
+        * (ConveyorGeometry::maximumVisibleProgress(FloorSide::Central) - 1.0);
+    const double minimumSkyCoordinate = m_frameScrollCoordinate - approachDistance
+        * (ConveyorGeometry::maximumVisibleProgress(FloorSide::Sky) - 1.0);
+    for (const auto& sideNotes : m_noteIndexes) {
+        for (const int index : sideNotes) {
+            const ChartNote* note = &m_chart.notes.at(index);
             const bool completed = note->endMilliseconds <= m_playbackPositionMilliseconds;
-            if (completed && (note->kind != NoteKind::Sky
+            if (m_playtest && (!m_playtestNotes.contains(note->id) || (m_playtestNotes.value(note->id) & 1) != 0)) {
+                continue;
+            }
+            const ScrollRange& range = m_noteScrollRanges.at(index);
+            const double minimumCoordinate = note->side == FloorSide::Sky ? minimumSkyCoordinate : minimumFloorCoordinate;
+            if (range.maximum < minimumCoordinate) {
+                continue;
+            }
+            if (!m_playtest && completed && (note->kind != NoteKind::Sky
                     || m_playbackPositionMilliseconds - note->endMilliseconds > 1000)) {
                 continue;
             }

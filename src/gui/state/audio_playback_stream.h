@@ -24,6 +24,7 @@ public:
     void sourceUpdated();
     void setMix(std::shared_ptr<AudioMixData> mix, const QVector<HitsoundEvent>& events);
     void preview(QByteArray samples);
+    void setLiveLoop(HitsoundKind kind, bool active);
 
     [[nodiscard]] bool isSequential() const override;
     [[nodiscard]] bool atEnd() const override;

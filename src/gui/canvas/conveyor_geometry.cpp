@@ -41,13 +41,16 @@ struct CameraPoint {
     double z;
 };
 
-[[nodiscard]] CameraPoint cameraPoint(const double x, const double y, const double z) {
+[[nodiscard]] CameraPoint trackCameraPoint(const double x, const double y, const double z) {
     const double cosine = 1.0 - 2.0 * kTrackRotationX * kTrackRotationX;
     const double sine = 2.0 * kTrackRotationX * kTrackRotationW;
-    const double height = y + kReceptorPositionY;
 
-    return {x + kReceptorPositionX, cosine * height - sine * z,
-        sine * height + cosine * z + kTrackPositionZ + kCameraDistance};
+    return {x, cosine * y - sine * z,
+        sine * y + cosine * z + kTrackPositionZ + kCameraDistance};
+}
+
+[[nodiscard]] CameraPoint cameraPoint(const double x, const double y, const double z) {
+    return trackCameraPoint(x + kReceptorPositionX, y + kReceptorPositionY, z);
 }
 
 [[nodiscard]] CameraPoint floorCameraPoint(const QPointF& point, const FloorSide side) {
@@ -77,6 +80,17 @@ struct CameraPoint {
 
     return {kCanvasWidth * 0.5 + focalLength * point.x / point.z,
         kCanvasHeight * 0.5 - focalLength * point.y / point.z};
+}
+
+[[nodiscard]] QTransform textPlaneProjection(const double height, const double depth) {
+    const QPolygonF source{{-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}};
+    QPolygonF destination;
+    for (const QPointF& point : source) {
+        destination.append(project(trackCameraPoint(point.x(), height, depth - point.y())));
+    }
+    QTransform projection;
+    QTransform::quadToQuad(source, destination, projection);
+    return projection;
 }
 
 [[nodiscard]] CameraPoint intersectDepth(const CameraPoint& first, const CameraPoint& second, const double depth) {
@@ -198,6 +212,28 @@ QLineF ConveyorGeometry::skyHorizon() {
     return {skyPoint(0.0, 0.0), skyPoint(1.0, 0.0)};
 }
 
+QTransform ConveyorGeometry::comboTextProjection() {
+    return textPlaneProjection(0.2420000024139881, -0.3600000124424696);
+}
+
+QTransform ConveyorGeometry::keyIndicatorProjection(const std::size_t laneIndex) {
+    if (laneIndex >= 6) {
+        return {};
+    }
+    const FloorSide side = laneIndex == 0 ? FloorSide::LeftOuter
+        : laneIndex == 5 ? FloorSide::RightOuter : FloorSide::Central;
+    const double depthScale = side == FloorSide::Central ? 0.1400560438632965 : 0.17507004737854004;
+    const QPolygonF source{{-0.5, -0.5}, {0.5, -0.5}, {0.5, 0.5}, {-0.5, 0.5}};
+    QPolygonF destination;
+    for (const QPointF& point : source) {
+        destination.append(project(floorCameraPoint({laneIndex * kLaneWidth + point.x() * kLaneWidth * 0.5,
+            1.0 - (0.035 - point.y() * depthScale) / kTrackLength}, side)));
+    }
+    QTransform projection;
+    QTransform::quadToQuad(source, destination, projection);
+    return projection;
+}
+
 QPointF ConveyorGeometry::floorPoint(const double coordinate, const double depthProgress) {
     CameraPoint point = floorCameraPoint({coordinate, depthProgress}, sideForCoordinate(coordinate));
     point.z = std::clamp(point.z, kCameraNearPlane, kCameraFarPlane);
@@ -212,10 +248,25 @@ QPointF ConveyorGeometry::skyPoint(const double coordinate, const double depthPr
     return project(point);
 }
 
+QPointF ConveyorGeometry::judgementTextPosition(const double coordinate) {
+    CameraPoint point = trackCameraPoint(
+        std::lerp(-0.8079997301101685, 0.8120002746582031, std::clamp(coordinate, 0.0, 1.0)),
+        0.46980997920036316, kReceptorPositionZ);
+    point.y += 0.075000003;
+    return project(point);
+}
+
 bool ConveyorGeometry::skyVisible(const double depthProgress) {
     const CameraPoint point = skyCameraPoint({0.5, depthProgress});
 
     return point.z >= kCameraNearPlane && point.z <= kCameraFarPlane;
+}
+
+double ConveyorGeometry::maximumVisibleProgress(const FloorSide side) {
+    const CameraPoint receiver = side == FloorSide::Sky ? skyCameraPoint({0.5, 1.0})
+        : floorCameraPoint({kCentralCenter, 1.0}, FloorSide::Central);
+    const double cosine = 1.0 - 2.0 * kTrackRotationX * kTrackRotationX;
+    return 1.0 + (receiver.z - kCameraNearPlane) / (kTrackLength * cosine);
 }
 
 QPainterPath ConveyorGeometry::floorPath(const QPolygonF& points, const FloorSide side, const bool closed) {
@@ -223,6 +274,10 @@ QPainterPath ConveyorGeometry::floorPath(const QPolygonF& points, const FloorSid
     cameraPoints.reserve(points.size());
     for (const QPointF& point : points) {
         cameraPoints.append(floorCameraPoint(point, side));
+    }
+    if (closed && side == FloorSide::Central) {
+        const double horizonDepth = floorCameraPoint({kCentralCenter, 0.0}, side).z;
+        cameraPoints = clipPolygon(cameraPoints, horizonDepth, false);
     }
 
     return projectedPath(std::move(cameraPoints), closed);

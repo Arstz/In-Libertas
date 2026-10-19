@@ -41,6 +41,8 @@ qt_add_executable(InLibertas WIN32
     src/core/chart_document.cpp
     src/core/chart_document.h
     src/core/chart_types.h
+    src/core/playtest_session.cpp
+    src/core/playtest_session.h
     src/core/field_groups.cpp
     src/core/field_groups.h
     src/core/audio_exporter.cpp
@@ -56,6 +58,7 @@ qt_add_executable(InLibertas WIN32
     src/gui/app/chartbox_dialog.cpp
     src/gui/app/chartbox_dialog.h
     src/gui/app/visual_settings.h
+    src/gui/app/playtest_settings.h
     src/gui/app/handling_settings.h
     src/gui/key_bindings.cpp
     src/gui/key_bindings.h
@@ -127,6 +130,53 @@ add_custom_command(TARGET InLibertas POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/playtest_settings_test.cpp")
+        qt_add_executable(playtest_settings_test
+            tests/gui/playtest_settings_test.cpp
+            src/gui/key_bindings.cpp
+            src/gui/state/audio_playback_stream.cpp
+            src/gui/state/playback_controller.cpp
+            src/gui/state/playback_controller.h
+            src/gui/state/hitsound_bank.cpp
+            src/gui/state/hitsound_bank.h
+            src/core/waveform.cpp
+            src/core/media_assets.cpp
+        )
+        target_include_directories(playtest_settings_test PRIVATE src ${SIGNALSMITH_STRETCH_INCLUDE_DIR} ${FFMPEG_INCLUDE_DIRS})
+        target_link_libraries(playtest_settings_test PRIVATE InLibertasJacketCodec Qt6::Core Qt6::Gui Qt6::Widgets
+            Qt6::Multimedia FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil)
+        add_dependencies(playtest_settings_test InLibertas)
+        add_test(NAME playtest_settings COMMAND playtest_settings_test -platform offscreen)
+        set_tests_properties(playtest_settings PROPERTIES ENVIRONMENT
+            "QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>Qt6/plugins/platforms")
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/conveyor_performance_test.cpp")
+        qt_add_executable(conveyor_performance_test
+            tests/gui/conveyor_performance_test.cpp
+            src/gui/canvas/conveyor_view.h
+            src/gui/canvas/conveyor_geometry.cpp
+            src/core/playtest_session.cpp
+            src/core/chart_document.cpp
+            src/core/field_groups.cpp
+        )
+        target_include_directories(conveyor_performance_test PRIVATE src)
+        target_link_libraries(conveyor_performance_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGLWidgets)
+        add_dependencies(conveyor_performance_test InLibertas)
+        add_test(NAME conveyor_performance COMMAND conveyor_performance_test -platform offscreen)
+        set_tests_properties(conveyor_performance PROPERTIES ENVIRONMENT
+            "QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>Qt6/plugins/platforms")
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/core/playtest_session_test.cpp")
+        qt_add_executable(playtest_session_test
+            tests/core/playtest_session_test.cpp
+            src/core/playtest_session.cpp
+            src/core/chart_document.cpp
+        )
+        target_include_directories(playtest_session_test PRIVATE src)
+        target_link_libraries(playtest_session_test PRIVATE Qt6::Core)
+        add_dependencies(playtest_session_test InLibertas)
+        add_test(NAME playtest_session COMMAND playtest_session_test)
+    endif()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/audio_playback_stream_test.cpp")
         qt_add_executable(audio_playback_stream_test
             tests/gui/audio_playback_stream_test.cpp
