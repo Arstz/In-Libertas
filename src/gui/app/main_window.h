@@ -66,6 +66,7 @@ private:
     void updateVolumeSliderPlacement();
     void buildWorkspace();
     void arrangeSplitters();
+    void updateBottomPanelVisibility();
     void restoreLayout();
     void saveLayout() const;
     void resetLayout();
@@ -130,7 +131,9 @@ private:
     QSplitter* m_mainSplitter = nullptr;
     QSplitter* m_viewerSplitter = nullptr;
     QSplitter* m_bottomSplitter = nullptr;
+    std::array<QWidget*, 4> m_workspacePanels{};
     QToolBar* m_toolsToolbar = nullptr;
+    QMenu* m_windowMenu = nullptr;
     QMenu* m_recentProjectMenu = nullptr;
     QSlider* m_volumeSlider = nullptr;
     QSlider* m_effectsVolumeSlider = nullptr;

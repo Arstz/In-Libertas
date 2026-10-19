@@ -279,6 +279,7 @@ void analyzeDecodedTiming(QPromise<TimingEstimate>& promise, const QByteArray& s
     QWidget* parent,
     QWidget* titleAccessory = nullptr) {
     auto* panel = new QFrame(parent);
+    panel->setWindowTitle(title);
     auto* layout = new QVBoxLayout(panel);
     auto* titleHost = new QWidget(panel);
     auto* titleLayout = new QHBoxLayout(titleHost);
@@ -534,7 +535,7 @@ void MainWindow::buildInterface() {
     setCentralWidget(centralWidget);
     auto* fileMenu = menuBar()->addMenu(QStringLiteral("File"));
     auto* editMenu = menuBar()->addMenu(QStringLiteral("Edit"));
-    auto* windowMenu = menuBar()->addMenu(QStringLiteral("Window"));
+    m_windowMenu = menuBar()->addMenu(QStringLiteral("Window"));
     auto* settingsMenu = menuBar()->addMenu(QStringLiteral("Settings"));
     auto* chartboxAction = menuBar()->addAction(QStringLiteral("Chartbox"));
     auto* newProjectAction = fileMenu->addAction(QStringLiteral("New project..."));
@@ -564,7 +565,7 @@ void MainWindow::buildInterface() {
     auto* groupingAction = addEditAction(QStringLiteral("Group selection"), KeyCommand::ToggleFieldGrouping);
     auto* resnapAllAction = addEditAction(QStringLiteral("Resnap all hit objects"), KeyCommand::ResnapAll);
     auto* verifyAction = addEditAction(QStringLiteral("Refresh verification"), KeyCommand::RefreshVerification);
-    auto* resetLayoutAction = windowMenu->addAction(QStringLiteral("Reset layout"));
+    auto* resetLayoutAction = m_windowMenu->addAction(QStringLiteral("Reset layout"));
     auto* settingsAction = settingsMenu->addAction(QStringLiteral("Settings..."));
     m_keyBindings->registerAction(KeyCommand::NewProject, newProjectAction);
     m_keyBindings->registerAction(KeyCommand::OpenProject, openProjectAction);
@@ -723,6 +724,11 @@ void MainWindow::arrangeSplitters() {
     m_bottomSplitter->setSizes({310, 360, 420});
 }
 
+void MainWindow::updateBottomPanelVisibility() {
+    m_bottomSplitter->setVisible(std::any_of(m_workspacePanels.cbegin() + 1, m_workspacePanels.cend(),
+        [](const QWidget* panel) { return !panel->isHidden(); }));
+}
+
 void MainWindow::restoreLayout() {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     m_flatView->setWaveformWidth(settings.value(QStringLiteral("layout/waveform_width"),
@@ -739,6 +745,10 @@ void MainWindow::restoreLayout() {
     const bool restoredMain = restoreSplitter(m_mainSplitter, QStringLiteral("layout/main_splitter"));
     const bool restoredViewer = restoreSplitter(m_viewerSplitter, QStringLiteral("layout/viewer_splitter"));
     const bool restoredBottom = restoreSplitter(m_bottomSplitter, QStringLiteral("layout/bottom_splitter"));
+    for (QWidget* panel : m_workspacePanels) {
+        panel->setVisible(settings.value(QStringLiteral("layout/panels/%1").arg(panel->windowTitle()), true).toBool());
+    }
+    updateBottomPanelVisibility();
     const bool restoredSplitters = restoredRoot || restoredMain || restoredViewer || restoredBottom;
     m_splittersArranged = restoredSplitters;
 }
@@ -752,11 +762,18 @@ void MainWindow::saveLayout() const {
     settings.setValue(QStringLiteral("layout/viewer_splitter"), m_viewerSplitter->saveState());
     settings.setValue(QStringLiteral("layout/bottom_splitter"), m_bottomSplitter->saveState());
     settings.setValue(QStringLiteral("layout/waveform_width"), m_flatView->waveformWidth());
+    for (const QWidget* panel : m_workspacePanels) {
+        settings.setValue(QStringLiteral("layout/panels/%1").arg(panel->windowTitle()), !panel->isHidden());
+    }
 }
 
 void MainWindow::resetLayout() {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.remove(QStringLiteral("layout"));
+    for (QWidget* panel : m_workspacePanels) {
+        panel->show();
+    }
+    updateBottomPanelVisibility();
     m_flatView->setWaveformWidth(FlatView::kDefaultWaveformWidth);
     resize(1540, 980);
     arrangeSplitters();
@@ -1092,6 +1109,23 @@ void MainWindow::buildWorkspace() {
     m_bottomSplitter->setChildrenCollapsible(false);
     contentLayout->setContentsMargins(0, 0, 0, 0);
     contentLayout->addWidget(m_rootSplitter);
+
+    m_workspacePanels = {timingPanel, propertiesPanel, metadataPanel, verificationPanel};
+    QAction* resetLayoutAction = m_windowMenu->actions().front();
+    for (QWidget* panel : m_workspacePanels) {
+        auto* action = new QAction(panel->windowTitle(), m_windowMenu);
+        action->setCheckable(true);
+        action->setChecked(true);
+        m_windowMenu->insertAction(resetLayoutAction, action);
+        connect(action, &QAction::triggered, panel, [this, panel](const bool visible) {
+            panel->setVisible(visible);
+            updateBottomPanelVisibility();
+        });
+        connect(m_windowMenu, &QMenu::aboutToShow, action, [action, panel] {
+            action->setChecked(!panel->isHidden());
+        });
+    }
+    m_windowMenu->insertSeparator(resetLayoutAction);
 
     connect(m_metadata, &MetadataWidget::metadataEdited, m_state, &EditorState::setMetadata);
     connect(m_metadata, &MetadataWidget::difficultyMetadataEdited, this, [this](DifficultyMetadata metadata) {
