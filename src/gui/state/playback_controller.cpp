@@ -102,12 +102,9 @@ void PlaybackController::setHitsoundMix(std::shared_ptr<AudioMixData> mix) {
 }
 
 void PlaybackController::setHitObjects(const ChartData& chart) {
-    const qint64 currentPosition = m_playbackActive ? clockPosition() : m_positionMilliseconds;
     m_hitsoundEvents = hitsoundEventsForChart(chart);
-    resetAudioPlayback();
-    publishPosition(currentPosition);
-    if (m_playbackActive && !m_usingFallbackClock) {
-        startAudioPlayback();
+    if (m_audioStream) {
+        m_audioStream->setHitsoundEvents(m_manualPlaytest ? QVector<HitsoundEvent>{} : m_hitsoundEvents);
     }
 }
 

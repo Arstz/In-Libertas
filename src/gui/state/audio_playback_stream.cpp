@@ -167,6 +167,16 @@ struct AudioPlaybackStream::ProcessingState {
             const std::lock_guard lock(mix->mutex);
             soundSamples = mix->sounds;
         }
+        {
+            const std::lock_guard lock(soundsMutex);
+            if (soundsChanged) {
+                sounds.swap(pendingSounds);
+                pendingSounds.clear();
+                nextSound = 0;
+                activeSounds.removeIf([](const Sound& sound) { return sound.loop; });
+                soundsChanged = false;
+            }
+        }
         QVector<QByteArray> incomingPreviews;
         std::array<bool, kHitsoundDescriptions.size()> requestedLoops;
         std::array<quint64, kHitsoundDescriptions.size()> requestedGenerations;
@@ -186,7 +196,10 @@ struct AudioPlaybackStream::ProcessingState {
             output[index] *= songVolume;
         }
         while (nextSound < sounds.size() && sounds[nextSound].firstFrame < blockEnd) {
-            activeSounds.append(sounds[nextSound++]);
+            const Sound& sound = sounds[nextSound++];
+            if (sound.loop ? sound.lastFrame > generatedOutputFrames : sound.firstFrame >= generatedOutputFrames) {
+                activeSounds.append(sound);
+            }
         }
         for (QByteArray& samples : incomingPreviews) {
             activeSounds.append({std::move(samples), generatedOutputFrames, 0});
@@ -243,6 +256,7 @@ struct AudioPlaybackStream::ProcessingState {
     std::shared_ptr<AudioPlaybackData> source;
     std::shared_ptr<AudioMixData> mix;
     QVector<Sound> sounds;
+    QVector<Sound> pendingSounds;
     QVector<Sound> activeSounds;
     QVector<QByteArray> previews;
     std::array<bool, kHitsoundDescriptions.size()> liveLoops{};
@@ -250,6 +264,7 @@ struct AudioPlaybackStream::ProcessingState {
     std::array<quint64, kHitsoundDescriptions.size()> mixedLoopGenerations{};
     std::array<qint64, kHitsoundDescriptions.size()> liveLoopFrames{};
     std::mutex previewMutex;
+    std::mutex soundsMutex;
     QByteArray pending;
     QAudioFormat format;
     signalsmith::stretch::SignalsmithStretch<float> stretcher{0};
@@ -264,6 +279,7 @@ struct AudioPlaybackStream::ProcessingState {
     qreal playbackRate = kNormalPlaybackRate;
     qreal fractionalInputFrames = 0.0;
     bool primed = true;
+    bool soundsChanged = false;
 };
 
 AudioPlaybackStream::AudioPlaybackStream(QByteArray samples, const QAudioFormat& format,
@@ -288,8 +304,14 @@ void AudioPlaybackStream::sourceUpdated() {
 }
 
 void AudioPlaybackStream::setMix(std::shared_ptr<AudioMixData> mix, const QVector<HitsoundEvent>& events) {
+    m_processing->mix = std::move(mix);
+    setHitsoundEvents(events);
+}
+
+void AudioPlaybackStream::setHitsoundEvents(const QVector<HitsoundEvent>& events) {
     auto& state = *m_processing;
-    state.mix = std::move(mix);
+    QVector<ProcessingState::Sound> sounds;
+    sounds.reserve(events.size());
     for (const HitsoundEvent& event : events) {
         if ((!event.loop && event.startMilliseconds < state.startMilliseconds)
             || (event.loop && event.endMilliseconds <= state.startMilliseconds)) {
@@ -299,12 +321,15 @@ void AudioPlaybackStream::setMix(std::shared_ptr<AudioMixData> mix, const QVecto
             return static_cast<qint64>(std::llround(
                 (time - state.startMilliseconds) * state.format.sampleRate() / (1000.0 * state.playbackRate)));
         };
-        state.sounds.append({{}, outputFrame(event.startMilliseconds), outputFrame(event.endMilliseconds),
+        sounds.append({{}, outputFrame(event.startMilliseconds), outputFrame(event.endMilliseconds),
             event.kind, event.loop});
     }
-    std::stable_sort(state.sounds.begin(), state.sounds.end(), [](const auto& first, const auto& second) {
+    std::stable_sort(sounds.begin(), sounds.end(), [](const auto& first, const auto& second) {
         return first.firstFrame < second.firstFrame;
     });
+    const std::lock_guard lock(state.soundsMutex);
+    state.pendingSounds = std::move(sounds);
+    state.soundsChanged = true;
 }
 
 void AudioPlaybackStream::preview(QByteArray samples) {
