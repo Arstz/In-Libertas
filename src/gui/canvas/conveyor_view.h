@@ -28,6 +28,7 @@ public:
         infalsus::DifficultyMetadata difficultyMetadata, QImage jacket);
     void setNoteSpeed(double noteSpeed);
     void setPlaytestLaneKeys(const std::array<Qt::Key, 6>& keys);
+    void setPlaytestAutoplayKey(Qt::Key key);
     void setPlaybackPosition(qint64 positionMilliseconds);
     void setPlaytestFrame(const infalsus::PlaytestSession& session, const QString& status,
         const QVector<infalsus::PlaytestJudgement>& judgements);
@@ -81,6 +82,7 @@ private:
     void drawControlHints(QPainter& painter) const;
     void drawPlaytestInput(QPainter& painter) const;
     void drawPlaytestCombo(QPainter& painter) const;
+    void drawPlaytestAutoplay(QPainter& painter) const;
     void drawPlaytestJudgements(QPainter& painter) const;
     void drawPlaytestOverlay(QPainter& painter) const;
 
@@ -109,6 +111,8 @@ private:
     QHash<std::uint64_t, qint64> m_playtestNoteStarts;
     infalsus::PlaytestResult m_playtestResult;
     QString m_comboText;
+    QPainterPath m_autoplayLabel;
+    bool m_playtestAutoplay = false;
     QString m_scoreText;
     std::array<QPainterPath, 6> m_keyIndicatorGlyphs;
     std::array<bool, 6> m_playtestHeld{};
@@ -116,6 +120,7 @@ private:
     double m_sweepLeft = 0.5;
     double m_sweepRight = 0.5;
     QString m_playtestStatus;
+    QString m_autoplayHint;
     std::array<QImage, 7> m_judgementImages;
     QVector<infalsus::PlaytestJudgement> m_judgements;
 };

@@ -322,6 +322,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
     m_playtestSettings = SettingsDialog::loadPlaytestSettings();
     m_viewer->setPlaytestLaneKeys(m_playtestSettings.laneKeys);
+    m_viewer->setPlaytestAutoplayKey(m_playtestSettings.autoplayKey);
     restoreLayout();
     qApp->installEventFilter(this);
     m_playtestTimer = new QTimer(this);
@@ -353,9 +354,19 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             }
             if (!m_playtestFinished) {
                 const int code = keyBindingCombination(*key).key();
+                if (code != Qt::Key_unknown && code == m_playtestSettings.autoplayKey) {
+                    if (down) {
+                        const auto clock = samplePlaytestClock();
+                        m_playtestSession.advance(clock.chartTime, clock.monotonicTime);
+                        m_playtestSession.setAutoplay(!m_playtestSession.autoplay());
+                        m_playtestSession.advance(clock.chartTime, clock.monotonicTime);
+                        publishPlaytest();
+                    }
+                    return true;
+                }
                 const auto& keys = m_playtestSettings.laneKeys;
                 const auto found = std::find(keys.begin(), keys.end(), code);
-                if (code != Qt::Key_unknown && found != keys.end()) {
+                if (!m_playtestSession.autoplay() && code != Qt::Key_unknown && found != keys.end()) {
                     const int lane = static_cast<int>(std::distance(keys.begin(), found));
                     const auto clock = samplePlaytestClock();
                     const double now = clock.monotonicTime;
@@ -411,7 +422,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
     if (eventType == "windows_generic_MSG" && message != nullptr) {
         const auto* nativeMessage = static_cast<MSG*>(message);
-        if (m_playtest && nativeMessage->message == WM_INPUT && !m_playtestFinished) {
+        if (m_playtest && nativeMessage->message == WM_INPUT && !m_playtestFinished && !m_playtestSession.autoplay()) {
             RAWINPUT input{};
             UINT size = sizeof(input);
             if (GetRawInputData(reinterpret_cast<HRAWINPUT>(nativeMessage->lParam), RID_INPUT,
@@ -971,6 +982,7 @@ void MainWindow::openSettings() {
         m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
         m_playtestSettings = dialog.selectedPlaytestSettings();
         m_viewer->setPlaytestLaneKeys(m_playtestSettings.laneKeys);
+        m_viewer->setPlaytestAutoplayKey(m_playtestSettings.autoplayKey);
     }
 }
 

@@ -66,7 +66,9 @@ public:
     void release(int lane, double chartTime, double monotonicTime, double eventTime = -1.0);
     void move(double normalizedDelta, double chartTime, double monotonicTime, double eventTime = -1.0);
     void clearInput(double monotonicTime);
+    void setAutoplay(bool enabled);
 
+    [[nodiscard]] bool autoplay() const { return m_autoplay; }
     [[nodiscard]] const QVector<PlaytestNoteState>& notes() const { return m_notes; }
     [[nodiscard]] const PlaytestResult& result() const { return m_result; }
     [[nodiscard]] const std::array<bool, 6>& heldLanes() const { return m_held; }
@@ -95,6 +97,7 @@ private:
     };
 
     void evaluate(double time, double monotonicTime);
+    void evaluateAutoplay(double time, double monotonicTime);
     void advanceTo(double chartTime, double monotonicTime, bool evaluateAtEnd);
     void evaluateFloor(PlaytestNoteState& state, double time, double monotonicTime);
     void evaluateFlick(PlaytestNoteState& state, double time);
@@ -116,6 +119,7 @@ private:
     QHash<std::uint64_t, bool> m_contactSkyGroups;
     std::array<Lane, 6> m_lanes{};
     std::array<bool, 6> m_held{};
+    std::array<double, 6> m_autoplayLaneEnds{};
     std::deque<Motion> m_leftMotion;
     std::deque<Motion> m_rightMotion;
     QVector<PlaytestJudgement> m_judgements;
@@ -124,6 +128,8 @@ private:
     double m_time = 0.0;
     double m_monotonicTime = 0.0;
     double m_endTime = 0.0;
+    double m_autoplayStartTime = 0.0;
+    bool m_autoplay = false;
 };
 
 } // namespace infalsus

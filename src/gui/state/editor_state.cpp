@@ -62,7 +62,7 @@ void normalizeHitObject(ChartNote& hitObject) {
 
 void normalizeEvent(TimingPoint& point) {
     constexpr double kMinimumBpm = 1.0;
-    constexpr double kMaximumBpm = 1000.0;
+    constexpr double kMaximumBpm = 100000.0;
     constexpr int kMinimumSignaturePart = 1;
     constexpr int kMaximumNumerator = 32;
     constexpr int kMaximumDenominator = 64;

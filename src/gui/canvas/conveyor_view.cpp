@@ -30,7 +30,6 @@ namespace {
 namespace palette = infalsus::gui::palette;
 
 constexpr double kBaseApproachDistanceMilliseconds = 3333.333334;
-constexpr qint64 kTapDepthMilliseconds = 30;
 constexpr int kFlickTrailSamples = 18;
 constexpr int kSkyCurveSamples = 18;
 constexpr double kPi = 3.14159265358979323846;
@@ -315,6 +314,7 @@ ConveyorView::ConveyorView(QWidget* parent)
     setMinimumSize(400, 225);
     setAutoFillBackground(false);
     setPlaytestLaneKeys(infalsus::gui::kDefaultPlaytestLaneKeys);
+    setPlaytestAutoplayKey(infalsus::gui::kDefaultPlaytestAutoplayKey);
 }
 
 void ConveyorView::setPlaytestLaneKeys(const std::array<Qt::Key, 6>& keys) {
@@ -328,6 +328,12 @@ void ConveyorView::setPlaytestLaneKeys(const std::array<Qt::Key, 6>& keys) {
         transform.scale(scale, scale);
         m_keyIndicatorGlyphs[lane] = transform.map(glyphs);
     }
+    update();
+}
+
+void ConveyorView::setPlaytestAutoplayKey(const Qt::Key key) {
+    m_autoplayHint = key == Qt::Key_unknown ? QString()
+        : QStringLiteral("%1: Autoplay\n").arg(QKeySequence(key).toString(QKeySequence::NativeText));
     update();
 }
 
@@ -412,6 +418,7 @@ void ConveyorView::setPlaytestFrame(const infalsus::PlaytestSession& session, co
     if (!m_playtest) {
         (void)numericAtlas(true);
         (void)numericAtlas(false);
+        m_autoplayLabel = centeredGlyphs(QStringLiteral("AUTOPLAY"), font(), 42.0, QFont::Bold);
         if (m_judgementImages[1].isNull()) {
             m_judgementImages = makeJudgementImages(font());
         }
@@ -466,6 +473,7 @@ void ConveyorView::setPlaytestFrame(const infalsus::PlaytestSession& session, co
         }
     }
     m_playtestResult = session.result();
+    m_playtestAutoplay = session.autoplay();
     m_playtestHeld = session.heldLanes();
     m_playtestCursor = session.cursor();
     m_sweepLeft = session.sweepLeft();
@@ -486,6 +494,7 @@ void ConveyorView::setPlaytestFrame(const infalsus::PlaytestSession& session, co
 
 void ConveyorView::endPlaytest() {
     m_playtest = false;
+    m_playtestAutoplay = false;
     m_playtestNotes.clear();
     m_playtestNoteStarts.clear();
     m_comboText.clear();
@@ -567,6 +576,7 @@ void ConveyorView::paintGL() {
     drawChart(painter);
     if (m_playtest) {
         drawPlaytestCombo(painter);
+        drawPlaytestAutoplay(painter);
         drawPlaytestInput(painter);
         drawPlaytestJudgements(painter);
     }
@@ -586,6 +596,18 @@ void ConveyorView::drawPlaytestCombo(QPainter& painter) const {
     painter.save();
     painter.setTransform(ConveyorGeometry::comboTextProjection(), true);
     drawFixedWidthNumber(painter, m_comboText, numericAtlas(true), kComboEmWorldSize);
+    painter.restore();
+}
+
+void ConveyorView::drawPlaytestAutoplay(QPainter& painter) const {
+    if (!m_playtestAutoplay) {
+        return;
+    }
+    const QPointF comboTop = ConveyorGeometry::comboTextProjection().map(QPointF(0.0, -kComboEmWorldSize * 0.5));
+    painter.save();
+    painter.setOpacity(painter.opacity() * 0.5);
+    painter.translate(ConveyorGeometry::nativeSize().width() * 0.5, comboTop.y() - 40.0);
+    painter.fillPath(m_autoplayLabel, palette::white);
     painter.restore();
 }
 
@@ -744,7 +766,7 @@ void ConveyorView::drawScoreCard(QPainter& painter) const {
 }
 
 void ConveyorView::drawControlHints(QPainter& painter) const {
-    const QString text = m_playtest ? QStringLiteral("Esc: Editor")
+    const QString text = m_playtest ? m_autoplayHint + QStringLiteral("Esc: Editor")
         : QStringLiteral("F5: Playtest from current time");
     painter.save();
     QFont hintFont = painter.font();
@@ -1085,20 +1107,24 @@ void ConveyorView::drawDivisors(QPainter& painter) {
 }
 
 void ConveyorView::drawFloorNote(QPainter& painter, const ChartNote& note) {
-    const qint64 rawEnd = note.kind == NoteKind::Hold ? note.endMilliseconds : note.startMilliseconds + kTapDepthMilliseconds;
+    const bool tap = note.kind == NoteKind::Tap;
+    const qint64 rawEnd = tap ? note.startMilliseconds : note.endMilliseconds;
     if (!m_playtest && rawEnd <= m_playbackPositionMilliseconds) {
         return;
     }
-    const qint64 noteStart = m_playtest ? m_playtestNoteStarts.value(note.id, note.startMilliseconds)
+    const qint64 noteStart = tap ? note.startMilliseconds
+        : m_playtest ? m_playtestNoteStarts.value(note.id, note.startMilliseconds)
         : std::max(note.startMilliseconds, m_playbackPositionMilliseconds);
-    if (noteStart >= rawEnd) {
+    if (!tap && noteStart >= rawEnd) {
         return;
     }
     const FloorSpan startSpan = floorSpan(note.side, note.startX, note.startWidth);
-    const FloorSpan endSpan = floorSpan(note.side, note.endX, note.endWidth);
+    const FloorSpan endSpan = tap ? startSpan : floorSpan(note.side, note.endX, note.endWidth);
+    const double startProgress = projectionProgress(noteStart);
+    const double endProgress = tap ? ConveyorGeometry::floorTapEndProgress(startProgress) : projectionProgress(rawEnd);
     const QPainterPath shape = ConveyorGeometry::floorPath({
-        {startSpan.left, projectionProgress(noteStart)}, {startSpan.right, projectionProgress(noteStart)},
-        {endSpan.right, projectionProgress(rawEnd)}, {endSpan.left, projectionProgress(rawEnd)}}, note.side);
+        {startSpan.left, startProgress}, {startSpan.right, startProgress},
+        {endSpan.right, endProgress}, {endSpan.left, endProgress}}, note.side);
     const bool outerHold = note.kind == NoteKind::Hold
         && (note.side == FloorSide::LeftOuter || note.side == FloorSide::RightOuter);
     const QColor color = (m_playtestNotes.value(note.id) & 2) != 0
@@ -1291,7 +1317,7 @@ void ConveyorView::ensureNoteIndexes() {
         if (sideIndex >= 0 && sideIndex < static_cast<int>(m_noteIndexes.size())) {
             m_noteIndexes[sideIndex].append(index);
         }
-        const qint64 end = note.kind == NoteKind::Tap ? note.startMilliseconds + kTapDepthMilliseconds
+        const qint64 end = note.kind == NoteKind::Tap ? note.startMilliseconds
             : note.endMilliseconds;
         const double first = scrollCoordinateAt(note.startMilliseconds);
         const double last = scrollCoordinateAt(end);
@@ -1335,7 +1361,9 @@ void ConveyorView::drawChart(QPainter& painter) {
             }
             const ScrollRange& range = m_noteScrollRanges.at(index);
             const double minimumCoordinate = note->side == FloorSide::Sky ? minimumSkyCoordinate : minimumFloorCoordinate;
-            if (range.maximum < minimumCoordinate) {
+            const double maximumProgress = ConveyorGeometry::maximumVisibleProgress(note->side);
+            if (range.maximum < minimumCoordinate && (note->kind != NoteKind::Tap
+                    || ConveyorGeometry::floorTapEndProgress(projectionProgress(note->startMilliseconds)) > maximumProgress)) {
                 continue;
             }
             if (!m_playtest && completed && (note->kind != NoteKind::Sky

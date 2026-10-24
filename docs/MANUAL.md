@@ -47,7 +47,7 @@ Also non-mandatory fields:
 
 ### 3D view
 
-A non-editable preview on the chart ingame will be played here, an adjustable speed parameter is also present at the titlebar. The view is mosly on par with the game, the only exception is the negative SV sections, the objects will render past the receptor but ingame will be destroyed instantly instead. A small card is displaying current difficulty, jacket and metadata.
+A non-editable preview on the chart ingame will be played here, an adjustable speed parameter is also present at the titlebar. The view is mosly on par with the game, the only exception is the negative SV sections, the objects will render past the receptor but ingame will be destroyed instantly instead. A small card is displaying current difficulty, jacket and metadata. You can enter playtest by pressing `F5`, all playtest keybinds can be reconfigured from `Settings->Playtest`. While in playtest toggle autoplay with `Tab`.
 
 ### Verification
 

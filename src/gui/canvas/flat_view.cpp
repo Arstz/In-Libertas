@@ -8,6 +8,7 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QCursor>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QResizeEvent>
 #include <QtGui/QWheelEvent>
@@ -330,6 +331,7 @@ FlatView::FlatView(QWidget* parent)
     : QOpenGLWidget(parent) {
     setMinimumSize(240, 300);
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
     m_waveformDivider = new WaveformDivider(this, [this](const double position) {
         const double maximumWidth = std::max(0.0,
             width() - 2.0 * kMargin - kWaveformDividerWidth - kMinimumChartWidth);
@@ -347,6 +349,7 @@ FlatView::~FlatView() {
 void FlatView::setChart(const ChartData& chart) {
     m_chart = chart;
     invalidateFieldGroups();
+    updateToolCursor();
     update();
 }
 
@@ -356,6 +359,7 @@ void FlatView::setPlaybackPosition(const qint64 positionMilliseconds) {
     }
 
     m_playbackPositionMilliseconds = positionMilliseconds;
+    updateToolCursor();
     update();
 }
 
@@ -378,6 +382,7 @@ void FlatView::setInvertMousewheelScroll(const bool inverted) {
 
 void FlatView::setMode(const FlatViewMode mode) {
     m_mode = mode;
+    updateToolCursor();
     update();
 }
 
@@ -460,6 +465,7 @@ void FlatView::setSelectedHitObjects(QVector<int> indexes) {
     for (const int index : m_selectedHitObjects) {
         m_selectedHitObjectIndexes.insert(index);
     }
+    updateToolCursor();
     update();
 }
 
@@ -509,6 +515,7 @@ void FlatView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
     m_chart.notes.insert(insertionIndex, hitObject);
     invalidateFieldGroups();
+    updateToolCursor();
     update();
 }
 
@@ -519,6 +526,7 @@ void FlatView::removeHitObject(const int index) {
 
     m_chart.notes.removeAt(index);
     invalidateFieldGroups();
+    updateToolCursor();
     update();
 }
 
@@ -529,6 +537,7 @@ void FlatView::updateHitObject(const int index, const ChartNote& hitObject) {
 
     m_chart.notes[index] = hitObject;
     invalidateFieldGroups();
+    updateToolCursor();
     update();
 }
 
@@ -548,6 +557,7 @@ void FlatView::updateHitObjects(const QVector<int>& indexes, const QVector<Chart
     }
     if (changed) {
         invalidateFieldGroups();
+        updateToolCursor();
         update();
     }
 }
@@ -561,6 +571,7 @@ void FlatView::zoom(const double steps) {
         m_pixelsPerSecond * std::pow(kZoomStepFactor, steps),
         kMinimumPixelsPerSecond,
         kMaximumPixelsPerSecond);
+    updateToolCursor();
     update();
 }
 
@@ -578,6 +589,7 @@ void FlatView::setWaveformWidth(const double width) {
     }
     m_waveformWidth = requestedWidth;
     updateWaveformDividerGeometry();
+    updateToolCursor();
     update();
 }
 
@@ -613,6 +625,7 @@ void FlatView::updateWaveformDividerGeometry() {
 void FlatView::resizeEvent(QResizeEvent* event) {
     QOpenGLWidget::resizeEvent(event);
     updateWaveformDividerGeometry();
+    updateToolCursor();
 }
 
 qint64 FlatView::timeAtY(const double y) const {
@@ -1094,6 +1107,61 @@ FlatView::FieldSegmentAnchor FlatView::fieldSegmentAnchorAt(const QPointF& posit
     return {};
 }
 
+FlatView::PlaceTarget FlatView::placeTargetAt(const QPointF& position, const Qt::KeyboardModifiers modifiers) const {
+    PlaceTarget target;
+    if (canInteractSky()) {
+        target.fieldControl = fieldControlAt(position);
+        target.flickControl = flickControlAt(position);
+        if (modifiers & Qt::AltModifier) {
+            target.segmentAnchor = fieldSegmentAnchorAt(position);
+        }
+        if (target.segmentAnchor.hitObjectIndex >= 0) {
+            target.fieldControl = {};
+        } else if (target.fieldControl.kind == FieldControlKind::None) {
+            const FieldSegmentAnchor timeAnchor = fieldSegmentAnchorAt(position);
+            if (timeAnchor.hitObjectIndex >= 0) {
+                target.fieldControl = {
+                    .kind = timeAnchor.atStart ? FieldControlKind::StartTime : FieldControlKind::EndTime,
+                    .hitObjectIndex = timeAnchor.hitObjectIndex,
+                };
+            }
+        }
+    }
+    if (target.flickControl.kind != FlickControlKind::None) {
+        target.fieldControl = {};
+        target.segmentAnchor = {};
+    }
+    const QVector<int> clickedIndexes = hitObjectsAt(position);
+    const bool continuesClickCycle = QLineF(position, m_clickCyclePosition).length() <= kMouseDragDistance
+        && clickedIndexes == m_clickCycleIndexes;
+    const int nextCycleIndex = continuesClickCycle ? m_clickCycleIndex + 1 : 0;
+    const int cycledIndex = clickedIndexes.isEmpty() ? -1
+        : clickedIndexes.at(nextCycleIndex % clickedIndexes.size());
+    const int fieldIndex = target.fieldControl.kind == FieldControlKind::None
+            && target.segmentAnchor.hitObjectIndex < 0 && !(modifiers & Qt::AltModifier)
+            && cycledIndex >= 0 && m_chart.notes.at(cycledIndex).kind == NoteKind::Sky
+        ? cycledIndex : -1;
+    const int flickIndex = target.fieldControl.kind == FieldControlKind::None
+            && target.flickControl.kind == FlickControlKind::None && fieldIndex < 0
+            && target.segmentAnchor.hitObjectIndex < 0 && !(modifiers & Qt::AltModifier)
+            && cycledIndex >= 0 && m_chart.notes.at(cycledIndex).kind == NoteKind::Flick
+        ? cycledIndex : -1;
+    const int holdEndIndex = target.fieldControl.kind == FieldControlKind::None
+            && target.flickControl.kind == FlickControlKind::None && fieldIndex < 0 && flickIndex < 0
+            && target.segmentAnchor.hitObjectIndex < 0 && canInteractGround()
+        ? holdEndHitObjectAt(position) : -1;
+    target.hitObjectIndex = target.flickControl.kind != FlickControlKind::None ? target.flickControl.hitObjectIndex
+        : target.fieldControl.kind != FieldControlKind::None ? target.fieldControl.hitObjectIndex
+        : fieldIndex >= 0 ? fieldIndex
+        : flickIndex >= 0 ? flickIndex
+        : target.segmentAnchor.hitObjectIndex >= 0 ? -1
+        : holdEndIndex >= 0 ? holdEndIndex
+        : cycledIndex >= 0 ? cycledIndex
+        : canInteractGround() ? hitObjectAt(position) : -1;
+    target.holdEnd = holdEndIndex >= 0;
+    return target;
+}
+
 ChartNote FlatView::hitObjectForPlacement(const QPointF& position, const bool snapToGrid) const {
     if (m_pressModifiers & Qt::ShiftModifier) {
         return flickHitObjectForDrag(position);
@@ -1544,6 +1612,10 @@ bool FlatView::canPlaceSky() const {
 }
 
 void FlatView::updateToolCursor() {
+    updateToolCursor(mapFromGlobal(QCursor::pos()), QGuiApplication::keyboardModifiers());
+}
+
+void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModifiers modifiers) {
     if (m_dragNavigating) {
         setCursor(Qt::ClosedHandCursor);
         return;
@@ -1556,6 +1628,24 @@ void FlatView::updateToolCursor() {
         setCursor(Qt::SizeAllCursor);
         break;
     case EditorTool::Place:
+        if (m_draggingHitObject) {
+            if (!m_selectionOnlyClick && (m_dragOriginal.kind == NoteKind::Hold || m_dragOriginal.kind == NoteKind::Sky)) {
+                setCursor(m_draggingHoldEnd || m_dragFieldControl.kind != FieldControlKind::None
+                    ? Qt::SizeVerCursor : Qt::SizeAllCursor);
+                break;
+            }
+        } else if (!m_placingHitObject && groundArea().contains(position)
+            && !((modifiers & (Qt::AltModifier | Qt::ShiftModifier)) && canPlaceSky())) {
+            const PlaceTarget target = placeTargetAt(position, modifiers);
+            if (target.hitObjectIndex >= 0 && m_selectedHitObjectIndexes.contains(target.hitObjectIndex)) {
+                const NoteKind kind = m_chart.notes.at(target.hitObjectIndex).kind;
+                if (kind == NoteKind::Hold || kind == NoteKind::Sky) {
+                    setCursor(target.holdEnd || target.fieldControl.kind != FieldControlKind::None
+                        ? Qt::SizeVerCursor : Qt::SizeAllCursor);
+                    break;
+                }
+            }
+        }
         unsetCursor();
         break;
     }
@@ -1591,6 +1681,12 @@ bool FlatView::event(QEvent* event) {
     if (event->type() == QEvent::WindowDeactivate || event->type() == QEvent::UngrabMouse
         || event->type() == QEvent::Hide) {
         finishDragNavigation();
+    }
+    if (event->type() == QEvent::Enter || event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
+        updateToolCursor();
+    } else if (event->type() == QEvent::Leave && m_tool == EditorTool::Place
+        && !m_draggingHitObject && !m_dragNavigating) {
+        unsetCursor();
     }
 
     return QOpenGLWidget::event(event);
@@ -1721,30 +1817,6 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    m_dragFieldControl = fieldControlAt(event->position());
-    m_dragFlickControl = flickControlAt(event->position());
-    if (!canInteractSky()) {
-        m_dragFieldControl = {};
-        m_dragFlickControl = {};
-    }
-    m_fieldSegmentAnchor = canInteractSky() && (m_pressModifiers & Qt::AltModifier)
-        ? fieldSegmentAnchorAt(event->position())
-        : FieldSegmentAnchor{};
-    if (m_fieldSegmentAnchor.hitObjectIndex >= 0) {
-        m_dragFieldControl = {};
-    } else if (canInteractSky() && m_dragFieldControl.kind == FieldControlKind::None) {
-        const FieldSegmentAnchor timeAnchor = fieldSegmentAnchorAt(event->position());
-        if (timeAnchor.hitObjectIndex >= 0) {
-            m_dragFieldControl = {
-                .kind = timeAnchor.atStart ? FieldControlKind::StartTime : FieldControlKind::EndTime,
-                .hitObjectIndex = timeAnchor.hitObjectIndex,
-            };
-        }
-    }
-    if (m_dragFlickControl.kind != FlickControlKind::None) {
-        m_dragFieldControl = {};
-        m_fieldSegmentAnchor = {};
-    }
     const QVector<int> clickedIndexes = hitObjectsAt(event->position());
     const bool continuesClickCycle = QLineF(event->position(), m_clickCyclePosition).length() <= kMouseDragDistance
         && clickedIndexes == m_clickCycleIndexes;
@@ -1753,41 +1825,12 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         m_clickCyclePosition = event->position();
         m_clickCycleIndex = -1;
     }
-    const int cycledHitObjectIndex = m_clickCycleIndexes.isEmpty()
-        ? -1
-        : m_clickCycleIndexes.at((m_clickCycleIndex + 1) % m_clickCycleIndexes.size());
-    const int fieldHitObjectIndex = m_dragFieldControl.kind == FieldControlKind::None
-            && m_fieldSegmentAnchor.hitObjectIndex < 0
-            && !(m_pressModifiers & Qt::AltModifier)
-        && cycledHitObjectIndex >= 0
-        && m_chart.notes.at(cycledHitObjectIndex).kind == NoteKind::Sky
-        ? cycledHitObjectIndex
-        : -1;
-    const int flickHitObjectIndex = m_dragFieldControl.kind == FieldControlKind::None
-            && m_dragFlickControl.kind == FlickControlKind::None
-            && fieldHitObjectIndex < 0
-            && m_fieldSegmentAnchor.hitObjectIndex < 0
-            && !(m_pressModifiers & Qt::AltModifier)
-        && cycledHitObjectIndex >= 0
-        && m_chart.notes.at(cycledHitObjectIndex).kind == NoteKind::Flick
-        ? cycledHitObjectIndex
-        : -1;
-    const int holdEndHitObjectIndex = m_dragFieldControl.kind == FieldControlKind::None
-            && m_dragFlickControl.kind == FlickControlKind::None
-            && fieldHitObjectIndex < 0
-            && flickHitObjectIndex < 0
-            && m_fieldSegmentAnchor.hitObjectIndex < 0
-            && canInteractGround()
-        ? holdEndHitObjectAt(event->position())
-        : -1;
-    m_dragHitObjectIndex = m_dragFlickControl.kind != FlickControlKind::None
-        ? m_dragFlickControl.hitObjectIndex
-        : m_dragFieldControl.kind != FieldControlKind::None ? m_dragFieldControl.hitObjectIndex
-        : fieldHitObjectIndex >= 0 ? fieldHitObjectIndex
-        : flickHitObjectIndex >= 0 ? flickHitObjectIndex
-        : m_fieldSegmentAnchor.hitObjectIndex >= 0 ? -1
-        : holdEndHitObjectIndex >= 0 ? holdEndHitObjectIndex : cycledHitObjectIndex >= 0 ? cycledHitObjectIndex : groundHitObjectIndex;
-    m_draggingHoldEnd = holdEndHitObjectIndex >= 0;
+    const PlaceTarget target = placeTargetAt(event->position(), m_pressModifiers);
+    m_dragFieldControl = target.fieldControl;
+    m_dragFlickControl = target.flickControl;
+    m_fieldSegmentAnchor = target.segmentAnchor;
+    m_dragHitObjectIndex = target.hitObjectIndex;
+    m_draggingHoldEnd = target.holdEnd;
     m_draggingHitObject = m_dragHitObjectIndex >= 0;
     m_placingHitObject = m_dragHitObjectIndex < 0;
     if (m_draggingHitObject) {
@@ -1799,6 +1842,7 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         m_dragOriginal = m_chart.notes.at(m_dragHitObjectIndex);
         if (m_selectionOnlyClick || m_tool == EditorTool::Select) {
             m_selectionOnlyClick = true;
+            updateToolCursor(event->position(), event->modifiers());
             event->accept();
             return;
         }
@@ -1825,10 +1869,12 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
+    updateToolCursor(event->position(), event->modifiers());
     event->accept();
 }
 
 void FlatView::mouseMoveEvent(QMouseEvent* event) {
+    updateToolCursor(event->position(), event->modifiers());
     if (m_dragNavigating) {
         if (event->buttons() & Qt::MiddleButton) {
             updateDragNavigation(event->globalPosition());
@@ -2008,6 +2054,7 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
     m_fieldSegmentAnchor = {};
     m_dragLinkedFieldIndexes.clear();
     m_dragLinkedFieldOriginals.clear();
+    updateToolCursor(event->position(), event->modifiers());
     event->accept();
 }
 

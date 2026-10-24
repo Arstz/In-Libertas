@@ -115,6 +115,14 @@ private:
         int hitObjectIndex = -1;
     };
 
+    struct PlaceTarget {
+        int hitObjectIndex = -1;
+        FieldControl fieldControl;
+        FlickControl flickControl;
+        FieldSegmentAnchor segmentAnchor;
+        bool holdEnd = false;
+    };
+
     [[nodiscard]] QRectF groundArea() const;
     [[nodiscard]] QRectF waveformArea() const;
     void updateWaveformDividerGeometry();
@@ -133,6 +141,7 @@ private:
     [[nodiscard]] FlickControl flickControlAt(const QPointF& position) const;
     [[nodiscard]] FieldControl fieldControlAt(const QPointF& position) const;
     [[nodiscard]] FieldSegmentAnchor fieldSegmentAnchorAt(const QPointF& position) const;
+    [[nodiscard]] PlaceTarget placeTargetAt(const QPointF& position, Qt::KeyboardModifiers modifiers) const;
     [[nodiscard]] ChartNote hitObjectForPlacement(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote floorHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote floorHitObjectForMove(const QPointF& position, bool snapToGrid) const;
@@ -154,6 +163,7 @@ private:
     void invalidateFieldGroups();
     void ensureFieldGroups() const;
     void updateToolCursor();
+    void updateToolCursor(const QPointF& position, Qt::KeyboardModifiers modifiers);
     void beginDragNavigation(const QPointF& position);
     void updateDragNavigation(const QPointF& position);
     void finishDragNavigation();

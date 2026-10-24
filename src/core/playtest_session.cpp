@@ -2,6 +2,7 @@
 #include "core/chart_document.h"
 
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace infalsus {
@@ -199,7 +200,7 @@ void PlaytestSession::advanceTo(const double chartTime, const double monotonicTi
 }
 
 void PlaytestSession::press(const int lane, const double chartTime, const double monotonicTime, const double eventTime) {
-    if (lane < 0 || lane >= 6) {
+    if (m_autoplay || lane < 0 || lane >= 6) {
         return;
     }
     if (m_held[lane]) {
@@ -215,7 +216,7 @@ void PlaytestSession::press(const int lane, const double chartTime, const double
 }
 
 void PlaytestSession::release(const int lane, const double chartTime, const double monotonicTime, const double eventTime) {
-    if (lane < 0 || lane >= 6) {
+    if (m_autoplay || lane < 0 || lane >= 6) {
         return;
     }
     advanceTo(chartTime, monotonicTime, false);
@@ -226,7 +227,7 @@ void PlaytestSession::release(const int lane, const double chartTime, const doub
 
 void PlaytestSession::move(const double normalizedDelta, const double chartTime, const double monotonicTime,
     const double eventTime) {
-    if (!std::isfinite(normalizedDelta)) {
+    if (m_autoplay || !std::isfinite(normalizedDelta)) {
         return;
     }
     advance(chartTime, monotonicTime);
@@ -243,6 +244,7 @@ void PlaytestSession::move(const double normalizedDelta, const double chartTime,
 
 void PlaytestSession::clearInput(const double monotonicTime) {
     m_held.fill(false);
+    m_autoplayLaneEnds.fill(m_time);
     for (auto& lane : m_lanes) {
         lane = {false, false, monotonicTime};
     }
@@ -251,6 +253,18 @@ void PlaytestSession::clearInput(const double monotonicTime) {
     for (auto& note : m_notes) {
         note.active = false;
     }
+}
+
+void PlaytestSession::setAutoplay(const bool enabled) {
+    if (m_autoplay == enabled) {
+        return;
+    }
+    clearInput(m_monotonicTime);
+    m_groups.clear();
+    m_activeSkyGroups.clear();
+    m_contactSkyGroups.clear();
+    m_autoplayStartTime = m_time;
+    m_autoplay = enabled;
 }
 
 void PlaytestSession::expireMotion(const double time) {
@@ -289,6 +303,10 @@ double PlaytestSession::coordinate(const double time) const {
 
 void PlaytestSession::evaluate(const double time, const double monotonicTime) {
     expireMotion(monotonicTime);
+    if (m_autoplay) {
+        evaluateAutoplay(time, monotonicTime);
+        return;
+    }
     const double scroll = coordinate(time);
     m_activeSkyGroups.clear();
     m_contactSkyGroups.clear();
@@ -356,6 +374,79 @@ void PlaytestSession::evaluate(const double time, const double monotonicTime) {
         }
         updateSky(group.value(), time, m_activeSkyGroups.value(group.key()));
         ++group;
+    }
+}
+
+void PlaytestSession::evaluateAutoplay(const double time, const double monotonicTime) {
+    double cursorDistance = std::numeric_limits<double>::max();
+    for (int side = 0; side < 4; ++side) {
+        const auto& indexes = m_sides[side];
+        auto& first = m_firstPending[side];
+        while (first < indexes.size() && m_notes[indexes[first]].consumed) {
+            ++first;
+        }
+        for (qsizetype offset = first; offset < indexes.size(); ++offset) {
+            auto& state = m_notes[indexes[offset]];
+            if (state.note.startMilliseconds > time) {
+                break;
+            }
+            if (state.consumed) {
+                continue;
+            }
+            const bool sustained = state.note.kind == NoteKind::Hold || state.note.kind == NoteKind::Sky;
+            state.active = sustained && time < state.note.endMilliseconds;
+            state.recontact = false;
+            if (state.active) {
+                state.successfulUntil = std::max(state.successfulUntil, time);
+                if (state.note.kind == NoteKind::Hold) {
+                    for (int lane = state.firstLane; lane <= state.lastLane; ++lane) {
+                        m_autoplayLaneEnds[lane] = std::max(m_autoplayLaneEnds[lane],
+                            static_cast<double>(state.note.endMilliseconds));
+                    }
+                } else {
+                    const auto [left, right] = skyBounds(state.note, time);
+                    const double center = std::clamp((left + right) * 0.5, 0.0, 1.0);
+                    const double distance = std::abs(center - cursor());
+                    if (distance < cursorDistance) {
+                        cursorDistance = distance;
+                        m_cursor = center;
+                    }
+                }
+            }
+            while (state.nextTick < state.ticks.size()) {
+                auto& tick = state.ticks[state.nextTick];
+                if (tick.time > time) {
+                    break;
+                }
+                if (!tick.finalized) {
+                    if (tick.time >= m_autoplayStartTime) {
+                        if (state.note.kind == NoteKind::Flick) {
+                            m_cursor = std::clamp(state.note.startX, 0.0, 1.0);
+                            const bool right = (state.note.auxiliary & 0x400U) != 0
+                                || (state.note.auxiliary & 0x1000U) == 0;
+                            auto& motion = right ? m_rightMotion : m_leftMotion;
+                            motion.push_back({monotonicTime, std::max(0.05, state.note.startWidth)});
+                            cursorDistance = -1.0;
+                        } else if (state.note.kind == NoteKind::Tap) {
+                            for (int lane = state.firstLane; lane <= state.lastLane; ++lane) {
+                                m_autoplayLaneEnds[lane] = std::max(m_autoplayLaneEnds[lane], tick.time + 50.0);
+                            }
+                        }
+                        commit(state, tick, PlaytestGrade::ExactPlus, tick.time);
+                    } else {
+                        commit(state, tick, tick.grade == PlaytestGrade::Pending ? PlaytestGrade::Miss : tick.grade, time);
+                    }
+                }
+                ++state.nextTick;
+            }
+            state.consumed = state.nextTick == state.ticks.size();
+            if (state.consumed) {
+                state.active = false;
+            }
+        }
+    }
+    for (std::size_t lane = 0; lane < m_held.size(); ++lane) {
+        m_held[lane] = time < m_autoplayLaneEnds[lane];
     }
 }
 

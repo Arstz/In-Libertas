@@ -127,6 +127,8 @@ constexpr int kRightOuterLane = 5;
 [[nodiscard]] QString formatIssue(const VerificationIssue& issue) {
     const QString idRange = issue.hitObjectIds.isEmpty()
         ? QStringLiteral("-")
+        : issue.hitObjectIds.size() == 1
+        ? QString::number(issue.hitObjectIds.constFirst())
         : QStringLiteral("%1 ... %2")
               .arg(issue.hitObjectIds.constFirst())
               .arg(issue.hitObjectIds.constLast());
@@ -422,7 +424,7 @@ QVector<VerificationIssue> VerificationWidget::verifyNegativeSpeedSections(
         issues.append({
             .timestampMilliseconds = start,
             .hitObjectIds = std::move(hitObjectIds),
-            .message = QStringLiteral("Negative SV section from [%1] to [%2], hitobjects will not be visible")
+            .message = QStringLiteral("Negative SV section from [%1] to [%2], hitobjects may not be visible")
                 .arg(start).arg(end),
         });
     };

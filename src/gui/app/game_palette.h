@@ -4,14 +4,14 @@
 
 namespace infalsus::gui::palette {
 
-inline const QColor canvasBackground{9, 17, 27};       
-inline const QColor chrome{25, 38, 53};                
-inline const QColor panel{24, 32, 41};                 
-inline const QColor panelHover{16, 77, 99};            
-inline const QColor gridLine{9, 17, 27};               
-inline const QColor text{214, 255, 255};               
+inline const QColor canvasBackground{9, 17, 27};
+inline const QColor chrome{25, 38, 53};
+inline const QColor panel{24, 32, 41};
+inline const QColor panelHover{16, 77, 99};
+inline const QColor gridLine{9, 17, 27};
+inline const QColor text{214, 255, 255};
 inline const QColor textMuted{143, 227, 230};
-inline const QColor buttonText{192, 224, 227};         
+inline const QColor buttonText{192, 224, 227};
 inline const QColor white{255, 255, 255};
 
 inline const QColor floorNoteBlue{0, 167, 212};

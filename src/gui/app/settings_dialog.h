@@ -65,6 +65,7 @@ private:
     QPushButton* m_playheadColorButton = nullptr;
     QCheckBox* m_invertMousewheelScroll = nullptr;
     std::array<QKeySequenceEdit*, 6> m_playtestLaneEdits{};
+    QKeySequenceEdit* m_playtestAutoplayEdit = nullptr;
     QDoubleSpinBox* m_mouseSensitivity = nullptr;
     QLabel* m_playtestValidationLabel = nullptr;
     HitsoundBank* m_hitsounds = nullptr;

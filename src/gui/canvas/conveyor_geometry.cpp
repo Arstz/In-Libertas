@@ -20,6 +20,7 @@ constexpr double kReceptorPositionX = 0.002000305103138089;
 constexpr double kReceptorPositionY = 0.0011002407409250736;
 constexpr double kReceptorPositionZ = -1.4999990463256836;
 constexpr double kTrackLength = 20.181811332702637;
+constexpr double kTapDepth = 0.2;
 constexpr double kFloorWidth = 1.5999999046325684;
 constexpr double kSkyWidth = 1.6200000047683716;
 constexpr double kSkyHeight = 0.4698088467121124;
@@ -269,14 +270,20 @@ double ConveyorGeometry::maximumVisibleProgress(const FloorSide side) {
     return 1.0 + (receiver.z - kCameraNearPlane) / (kTrackLength * cosine);
 }
 
+double ConveyorGeometry::floorTapEndProgress(const double approachProgress) {
+    const double depth = kTapDepth * (1.0 + 2.0 * std::abs(1.0 - approachProgress));
+
+    return approachProgress - depth / kTrackLength;
+}
+
 QPainterPath ConveyorGeometry::floorPath(const QPolygonF& points, const FloorSide side, const bool closed) {
     QVector<CameraPoint> cameraPoints;
     cameraPoints.reserve(points.size());
     for (const QPointF& point : points) {
         cameraPoints.append(floorCameraPoint(point, side));
     }
-    if (closed && side == FloorSide::Central) {
-        const double horizonDepth = floorCameraPoint({kCentralCenter, 0.0}, side).z;
+    if (closed) {
+        const double horizonDepth = floorCameraPoint({kCentralCenter, 0.0}, FloorSide::Central).z;
         cameraPoints = clipPolygon(cameraPoints, horizonDepth, false);
     }
 

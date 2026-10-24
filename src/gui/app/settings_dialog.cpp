@@ -213,6 +213,8 @@ PlaytestSettings SettingsDialog::selectedPlaytestSettings() const {
         const QKeySequence sequence = m_playtestLaneEdits[lane]->keySequence();
         result.laneKeys[lane] = sequence.isEmpty() ? Qt::Key_unknown : sequence[0].key();
     }
+    const QKeySequence autoplay = m_playtestAutoplayEdit->keySequence();
+    result.autoplayKey = autoplay.isEmpty() ? Qt::Key_unknown : autoplay[0].key();
     result.mouseSensitivity = m_mouseSensitivity->value();
     return result;
 }
@@ -232,6 +234,10 @@ PlaytestSettings SettingsDialog::loadPlaytestSettings(QSettings& settings) {
         }
     }
     bool valid = false;
+    const int autoplayKey = settings.value(QStringLiteral("playtest/autoplay_key"), result.autoplayKey).toInt(&valid);
+    if (valid && autoplayKey > 0 && autoplayKey <= Qt::Key_unknown && autoplayKey != Qt::Key_Escape) {
+        result.autoplayKey = static_cast<Qt::Key>(autoplayKey);
+    }
     const double sensitivity = settings.value(QStringLiteral("playtest/mouse_sensitivity"),
         result.mouseSensitivity).toDouble(&valid);
     if (valid && std::isfinite(sensitivity)) {
@@ -356,7 +362,7 @@ void SettingsDialog::buildPlaytestPage(QStackedWidget* pages, const PlaytestSett
     auto* scrollArea = new QScrollArea(pages);
     auto* page = new QWidget(scrollArea);
     auto* pageLayout = new QVBoxLayout(page);
-    auto* description = new QLabel(QStringLiteral("Choose one key for each lane. Clear a keybind to disable it."), page);
+    auto* description = new QLabel(QStringLiteral("Choose one key for each playtest control. Clear a keybind to disable it."), page);
     auto* rows = new QFormLayout;
     auto* resetControls = new QHBoxLayout;
     auto* resetAll = new QPushButton(QStringLiteral("Reset All"), page);
@@ -388,6 +394,24 @@ void SettingsDialog::buildPlaytestPage(QStackedWidget* pages, const PlaytestSett
             m_playtestLaneEdits[lane]->setKeySequence(QKeySequence(kDefaultPlaytestLaneKeys[lane]));
         });
     }
+    auto* autoplayControls = new QWidget(page);
+    auto* autoplayLayout = new QHBoxLayout(autoplayControls);
+    const QKeySequence autoplaySequence = playtest.autoplayKey == Qt::Key_unknown ? QKeySequence()
+        : QKeySequence(playtest.autoplayKey);
+    m_playtestAutoplayEdit = new PlaytestKeyEdit(autoplaySequence, autoplayControls);
+    auto* autoplayReset = new QPushButton(QStringLiteral("Reset"), autoplayControls);
+    m_playtestAutoplayEdit->setObjectName(QStringLiteral("playtest_autoplay_key"));
+    m_playtestAutoplayEdit->setClearButtonEnabled(true);
+    m_playtestAutoplayEdit->setMaximumSequenceLength(1);
+    autoplayLayout->setContentsMargins(0, 0, 0, 0);
+    autoplayLayout->setSpacing(kControlSpacing);
+    autoplayLayout->addWidget(m_playtestAutoplayEdit, 1);
+    autoplayLayout->addWidget(autoplayReset);
+    rows->addRow(QStringLiteral("Toggle autoplay"), autoplayControls);
+    connect(m_playtestAutoplayEdit, &QKeySequenceEdit::keySequenceChanged, this, [this] { updatePlaytestConflicts(); });
+    connect(autoplayReset, &QPushButton::clicked, this, [this] {
+        m_playtestAutoplayEdit->setKeySequence(QKeySequence(kDefaultPlaytestAutoplayKey));
+    });
     auto* controls = new QWidget(page);
     auto* controlsLayout = new QHBoxLayout(controls);
     auto* reset = new QPushButton(QStringLiteral("Reset"), controls);
@@ -418,15 +442,19 @@ void SettingsDialog::buildPlaytestPage(QStackedWidget* pages, const PlaytestSett
         for (std::size_t lane = 0; lane < m_playtestLaneEdits.size(); ++lane) {
             m_playtestLaneEdits[lane]->setKeySequence(QKeySequence(kDefaultPlaytestLaneKeys[lane]));
         }
+        m_playtestAutoplayEdit->setKeySequence(QKeySequence(kDefaultPlaytestAutoplayKey));
         m_mouseSensitivity->setValue(kDefaultPlaytestMouseSensitivity);
     });
 }
 
 bool SettingsDialog::updatePlaytestConflicts() {
-    std::array<bool, 6> conflicts{};
+    std::array<QKeySequenceEdit*, 7> edits{};
+    std::copy(m_playtestLaneEdits.begin(), m_playtestLaneEdits.end(), edits.begin());
+    edits.back() = m_playtestAutoplayEdit;
+    std::array<bool, 7> conflicts{};
     QString message;
-    for (std::size_t lane = 0; lane < m_playtestLaneEdits.size(); ++lane) {
-        const QKeySequence sequence = m_playtestLaneEdits[lane]->keySequence();
+    for (std::size_t lane = 0; lane < edits.size(); ++lane) {
+        const QKeySequence sequence = edits[lane]->keySequence();
         if (sequence.isEmpty()) {
             continue;
         }
@@ -435,20 +463,20 @@ bool SettingsDialog::updatePlaytestConflicts() {
             || sequence[0].keyboardModifiers() != Qt::NoModifier) {
             conflicts[lane] = true;
             message = key == Qt::Key_Escape ? QStringLiteral("Escape is reserved for returning to the editor.")
-                : QStringLiteral("Choose a single key for each lane.");
+                : QStringLiteral("Choose a single key for each playtest control.");
         }
         for (std::size_t other = 0; other < lane; ++other) {
-            if (!m_playtestLaneEdits[other]->keySequence().isEmpty()
-                && m_playtestLaneEdits[other]->keySequence()[0].key() == key) {
+            if (!edits[other]->keySequence().isEmpty()
+                && edits[other]->keySequence()[0].key() == key) {
                 conflicts[lane] = conflicts[other] = true;
                 if (message.isEmpty()) {
-                    message = QStringLiteral("Conflicting lane keybinds. Assign different keys before saving.");
+                    message = QStringLiteral("Conflicting playtest keybinds. Assign different keys before saving.");
                 }
             }
         }
     }
     for (std::size_t lane = 0; lane < conflicts.size(); ++lane) {
-        setShortcutConflictStyle(m_playtestLaneEdits[lane], conflicts[lane]);
+        setShortcutConflictStyle(edits[lane], conflicts[lane]);
     }
     m_playtestValidationLabel->setText(message);
     return std::none_of(conflicts.begin(), conflicts.end(), [](const bool conflict) { return conflict; });
@@ -463,6 +491,11 @@ void SettingsDialog::savePlaytestSettings(const PlaytestSettings& playtest) {
         } else {
             settings.setValue(id, static_cast<int>(playtest.laneKeys[lane]));
         }
+    }
+    if (playtest.autoplayKey == kDefaultPlaytestAutoplayKey) {
+        settings.remove(QStringLiteral("playtest/autoplay_key"));
+    } else {
+        settings.setValue(QStringLiteral("playtest/autoplay_key"), static_cast<int>(playtest.autoplayKey));
     }
     if (playtest.mouseSensitivity == kDefaultPlaytestMouseSensitivity) {
         settings.remove(QStringLiteral("playtest/mouse_sensitivity"));
