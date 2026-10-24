@@ -117,6 +117,7 @@ internal sealed class CustomSongConfig
 
     private static string GameRoot => MelonLoader.Utils.MelonEnvironment.GameRootDirectory;
     public static string CustomChartsRoot => Path.Combine(GameRoot, "CustomCharts");
+    internal static string SongIdRegistryPath => Path.Combine(GameRoot, "UserData", "InLibertas", "song-ids.json");
 
     public string AudioPath => Path.Combine(ContentDirectory ?? throw new InvalidOperationException(
         "A custom song must be loaded from a chart folder."), AudioFile);

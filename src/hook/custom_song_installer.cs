@@ -190,6 +190,7 @@ internal static class CustomSongInstaller
 
                 try
                 {
+                    _installing = true;
                     if (config.IsLibrary)
                         InstallLibrary(dataAccess, config);
                     else
@@ -206,6 +207,10 @@ internal static class CustomSongInstaller
                     // terminal; do not repeatedly mutate or spam the log.
                     _complete = true;
                     CustomSongMod.Log.Error("[CustomSong] install failed: " + exception);
+                }
+                finally
+                {
+                    _installing = false;
                 }
                 return;
             }
@@ -322,17 +327,9 @@ internal static class CustomSongInstaller
         bool rebuildingEarlyCache = songData._Ffb is not null;
         if (rebuildingEarlyCache)
         {
-            // This build deserializes SongData before its sibling assets, so
-            // the pre-_yOA prefix cannot construct a coherent library. We are
-            // still before any selector scene exists; invalidate every
-            // length-coupled SongData cache and rebuild below after all arrays
-            // have reached their final sizes.
             if (Resources.FindObjectsOfTypeAll(Il2CppType.Of<SongSelectScene>()).Length != 0)
                 throw new InvalidOperationException(
                     "SongSelectScene already exists; refusing to replace its cached SongData filter.");
-            songData._Ffb = null;
-            songData._Efb = null;
-            CustomSongMod.Log.Msg("[CustomSong] rebuilding startup SongData caches after early deserialization.");
         }
 
         List<LibrarySong> planned = new();
@@ -353,7 +350,7 @@ internal static class CustomSongInstaller
             if (!string.IsNullOrWhiteSpace(pack.Slug)) usedPackSlugs.Add(pack.Slug);
         }
 
-        int nextSongId = oldSongs.Length;
+        using CustomSongIdRegistry songIds = CustomSongIdRegistry.Open(CustomSongConfig.SongIdRegistryPath, oldSongs.Length);
         int[] stylePackIds = new int[root.Collections.Length];
         for (int collectionIndex = 0; collectionIndex < root.Collections.Length; collectionIndex++) {
             CustomSongCollection collection = root.Collections[collectionIndex];
@@ -372,8 +369,6 @@ internal static class CustomSongInstaller
             stylePackIds[collectionIndex] = oldPacks[stylePackIndex].Id.Value;
             foreach (CustomSongConfig config in collection.Songs)
             {
-                if (nextSongId > ushort.MaxValue)
-                    throw new InvalidOperationException("custom library exceeds the SongId range.");
                 if (config.TemplateSongId >= oldSongs.Length || oldSongs[config.TemplateSongId] is null)
                     throw new InvalidOperationException($"templateSongId {config.TemplateSongId} is not populated.");
 
@@ -389,7 +384,7 @@ internal static class CustomSongInstaller
                     charts.Add(new LibraryChart(entry, FindTemplateChart(templateSong, entry.Difficulty)));
                 planned.Add(new LibrarySong(
                     collectionIndex,
-                    new SongId { Value = (ushort)nextSongId++ },
+                    new SongId { Value = songIds.GetOrAllocate(baseName) },
                     config,
                     baseName,
                     templateSong,
@@ -397,7 +392,13 @@ internal static class CustomSongInstaller
             }
         }
 
-        Il2CppReferenceArray<SongInfo> nextSongs = new(oldSongs.Length + planned.Count);
+        songIds.Commit();
+        if (rebuildingEarlyCache) {
+            songData._Ffb = null;
+            songData._Efb = null;
+            CustomSongMod.Log.Msg("[CustomSong] rebuilding startup SongData caches after early deserialization.");
+        }
+        Il2CppReferenceArray<SongInfo> nextSongs = new(songIds.SongTableLength);
         for (int index = 0; index < oldSongs.Length; index++) nextSongs[index] = oldSongs[index];
 
         foreach (LibrarySong item in planned)
@@ -459,6 +460,7 @@ internal static class CustomSongInstaller
         _stockPackCount = oldPacks.Length;
         _collectionStylePackIds = stylePackIds;
         _libraryInstalled = true;
+        CustomSongMod.Log.Msg($"[CustomSong] persistent SongId registry: {CustomSongConfig.SongIdRegistryPath}; reservedTableLength={songIds.SongTableLength}");
         CustomSongMod.Log.Msg(
             $"[CustomSong] expanded SongData {oldSongs.Length}->{nextSongs.Length}; PackData {oldPacks.Length}->{packData.PackInfo.Length}; selectorFilter={songData._Ffb?.Length ?? -1}; rebuiltEarlyCache={rebuildingEarlyCache}");
     }
