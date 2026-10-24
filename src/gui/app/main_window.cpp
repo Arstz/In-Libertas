@@ -1,6 +1,7 @@
 #include "gui/app/main_window.h"
 #include "gui/app/settings_dialog.h"
 #include "gui/app/chartbox_dialog.h"
+#include "gui/app/sv_interpolation_dialog.h"
 #include "gui/key_bindings.h"
 
 #include "core/chart_project.h"
@@ -574,6 +575,7 @@ void MainWindow::buildInterface() {
     auto* mirrorAction = addEditAction(QStringLiteral("Mirror selection"), KeyCommand::MirrorSelection);
     auto* verticalFlipAction = addEditAction(QStringLiteral("Flip selection vertically"), KeyCommand::FlipSelectionVertically);
     auto* groupingAction = addEditAction(QStringLiteral("Group selection"), KeyCommand::ToggleFieldGrouping);
+    auto* interpolateAction = addEditAction(QStringLiteral("Interpolate SV events..."), KeyCommand::InterpolateSpeedEvents);
     auto* resnapAllAction = addEditAction(QStringLiteral("Resnap all hit objects"), KeyCommand::ResnapAll);
     auto* verifyAction = addEditAction(QStringLiteral("Refresh verification"), KeyCommand::RefreshVerification);
     auto* resetLayoutAction = m_windowMenu->addAction(QStringLiteral("Reset layout"));
@@ -605,6 +607,7 @@ void MainWindow::buildInterface() {
     connect(mirrorAction, &QAction::triggered, m_state, &EditorState::mirrorSelectedHitObjects);
     connect(verticalFlipAction, &QAction::triggered, m_state, &EditorState::flipSelectedHitObjectsVertically);
     connect(groupingAction, &QAction::triggered, m_state, &EditorState::toggleSelectedFieldGrouping);
+    connect(interpolateAction, &QAction::triggered, this, &MainWindow::interpolateSpeedEvents);
     connect(resnapAllAction, &QAction::triggered, m_state, &EditorState::resnapAllHitObjects);
     connect(verifyAction, &QAction::triggered, this, [this] {
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
@@ -971,6 +974,21 @@ void MainWindow::setSkyGridSize(const int divisor) {
     m_flatView->setSkyGridDivisor(divisor);
 }
 
+void MainWindow::interpolateSpeedEvents() {
+    const QString selectionError = m_state->speedInterpolationSelectionError();
+    if (!selectionError.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Cannot interpolate SV events"), selectionError);
+        return;
+    }
+    SvInterpolationDialog dialog(m_state->divisor(), this);
+    if (dialog.exec() == QDialog::Accepted) {
+        const QString error = m_state->interpolateSelectedSpeedEvents(dialog.options());
+        if (!error.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("Cannot interpolate SV events"), error);
+        }
+    }
+}
+
 void MainWindow::openSettings() {
     SettingsDialog dialog(m_keyBindings, m_visualSettings, m_handlingSettings, m_playtestSettings,
         m_hitsounds, m_playback, this);
@@ -1306,13 +1324,19 @@ void MainWindow::buildWorkspace() {
             QStringLiteral("[%1] already has an event of type [%2], edit existing instead of placing new one")
                 .arg(formatPreciseTimestamp(collision.timeMilliseconds), collision.type));
     });
-    connect(m_state, &EditorState::eventPasteCollisionsFound, this, [this](const QVector<EventCollision>& collisions) {
+    const auto showEventCollisions = [this](const QVector<EventCollision>& collisions, const QString& title) {
         QStringList messages;
         for (const EventCollision& collision : collisions) {
             messages.append(QStringLiteral("Could not place event [%1] at [%2] - already exists.")
                 .arg(collision.type, formatPreciseTimestamp(collision.timeMilliseconds)));
         }
-        QMessageBox::warning(this, QStringLiteral("Event paste collisions"), messages.join(QLatin1Char('\n')));
+        QMessageBox::warning(this, title, messages.join(QLatin1Char('\n')));
+    };
+    connect(m_state, &EditorState::eventPasteCollisionsFound, this, [showEventCollisions](const QVector<EventCollision>& collisions) {
+        showEventCollisions(collisions, QStringLiteral("Event paste collisions"));
+    });
+    connect(m_state, &EditorState::eventInterpolationCollisionsFound, this, [showEventCollisions](const QVector<EventCollision>& collisions) {
+        showEventCollisions(collisions, QStringLiteral("SV interpolation collisions"));
     });
     connect(m_state, &EditorState::toolChanged, this, &MainWindow::updateStatus);
     connect(m_state, &EditorState::divisorChanged, this, &MainWindow::updateStatus);

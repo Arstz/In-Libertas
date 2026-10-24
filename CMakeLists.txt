@@ -57,6 +57,8 @@ qt_add_executable(InLibertas WIN32
     src/gui/app/settings_dialog.h
     src/gui/app/chartbox_dialog.cpp
     src/gui/app/chartbox_dialog.h
+    src/gui/app/sv_interpolation_dialog.cpp
+    src/gui/app/sv_interpolation_dialog.h
     src/gui/app/visual_settings.h
     src/gui/app/playtest_settings.h
     src/gui/app/handling_settings.h

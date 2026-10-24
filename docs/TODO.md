@@ -1,3 +1,2 @@
 - Investigate score DB persistance for different sizes 
 - Save and retrieve custom field presents
-- Implement sv interpolation tool

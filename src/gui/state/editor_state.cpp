@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <numeric>
+#include <numbers>
 #include <type_traits>
 
 namespace infalsus::gui {
@@ -434,6 +436,126 @@ void EditorState::addSpeedEventAtPlaybackPosition() {
     setSpeedEvents(m_speedEvents);
     setSelectedSpeedEvent(insertionIndex);
     appendEventHistory(std::move(before));
+}
+
+QString EditorState::speedInterpolationSelectionError() const {
+    if (m_selectedSpeedEvents.size() != 2 || selectedEventCount() != 2 || !m_selectedHitObjects.isEmpty()) {
+        return QStringLiteral("Select exactly two SV events to interpolate.");
+    }
+    const SpeedEvent& first = m_speedEvents.at(m_selectedSpeedEvents.front());
+    const SpeedEvent& second = m_speedEvents.at(m_selectedSpeedEvents.back());
+    if (first.timeMilliseconds == second.timeMilliseconds) {
+        return QStringLiteral("The selected SV events must have different timestamps.");
+    }
+    if (first.speed == second.speed) {
+        return QStringLiteral("The selected SV events must have different SV values.");
+    }
+    return {};
+}
+
+QString EditorState::interpolateSelectedSpeedEvents(const SpeedInterpolationOptions& options) {
+    const QString selectionError = speedInterpolationSelectionError();
+    if (!selectionError.isEmpty()) {
+        return selectionError;
+    }
+    if (options.spacing == SpeedInterpolationOptions::Spacing::Time && options.everyMilliseconds < 1) {
+        return QStringLiteral("The interval must be at least 1 ms.");
+    }
+    if (options.spacing == SpeedInterpolationOptions::Spacing::Divisor
+        && std::find(kSupportedDivisors.begin(), kSupportedDivisors.end(), options.divisor) == kSupportedDivisors.end()) {
+        return QStringLiteral("Choose a supported divisor.");
+    }
+
+    const SpeedEvent first = m_speedEvents.at(m_selectedSpeedEvents.front());
+    const SpeedEvent second = m_speedEvents.at(m_selectedSpeedEvents.back());
+    const double maximum = std::max(first.speed, second.speed);
+    const double minimum = std::min(first.speed, second.speed);
+    const double duration = static_cast<double>(second.timeMilliseconds - first.timeMilliseconds);
+    QVector<SpeedEvent> generated;
+    QVector<EventCollision> collisions;
+    auto existing = m_speedEvents.cbegin();
+    qint64 lastTime = first.timeMilliseconds;
+    const auto addEvent = [&](const qint64 time) {
+        if (time <= lastTime || time >= second.timeMilliseconds) {
+            return;
+        }
+        lastTime = time;
+        while (existing != m_speedEvents.cend() && existing->timeMilliseconds < time) {
+            ++existing;
+        }
+        if (existing != m_speedEvents.cend() && existing->timeMilliseconds == time) {
+            collisions.append({QStringLiteral("SV"), time});
+            return;
+        }
+        const double u = first.speed > second.speed
+            ? static_cast<double>(time - first.timeMilliseconds) / duration
+            : static_cast<double>(second.timeMilliseconds - time) / duration;
+        double speed = 0.0;
+        switch (options.easing) {
+        case SpeedInterpolationOptions::Easing::Sine:
+            speed = std::lerp(maximum, minimum, std::sin(u * std::numbers::pi / 2.0));
+            break;
+        case SpeedInterpolationOptions::Easing::Cosine:
+            speed = std::lerp(minimum, maximum, std::cos(u * std::numbers::pi / 2.0));
+            break;
+        case SpeedInterpolationOptions::Easing::Linear:
+            speed = std::lerp(maximum, minimum, u);
+            break;
+        }
+        generated.append({.timeMilliseconds = time, .speed = speed});
+    };
+
+    if (options.spacing == SpeedInterpolationOptions::Spacing::Time) {
+        qint64 time = first.timeMilliseconds;
+        while (options.everyMilliseconds < second.timeMilliseconds - time) {
+            time += options.everyMilliseconds;
+            addEvent(time);
+        }
+    } else {
+        for (int index = 0; index < m_timingPoints.size(); ++index) {
+            const TimingPoint& point = m_timingPoints.at(index);
+            const qint64 sectionEnd = index + 1 < m_timingPoints.size()
+                ? std::min(second.timeMilliseconds, m_timingPoints.at(index + 1).timeMilliseconds)
+                : second.timeMilliseconds;
+            if (sectionEnd <= first.timeMilliseconds || point.timeMilliseconds >= second.timeMilliseconds) {
+                continue;
+            }
+            const double step = detail::measureDurationMilliseconds(point) / options.divisor;
+            qint64 tick = std::max<qint64>(0, static_cast<qint64>(std::floor(
+                (first.timeMilliseconds - point.timeMilliseconds) / step)));
+            while (true) {
+                const qint64 time = point.timeMilliseconds + static_cast<qint64>(std::llround(tick * step));
+                if (time >= sectionEnd) {
+                    break;
+                }
+                addEvent(time);
+                tick = std::max(tick + 1, static_cast<qint64>(std::ceil(
+                    (static_cast<double>(time - point.timeMilliseconds) + 0.5) / step)));
+            }
+        }
+    }
+
+    if (!generated.isEmpty()) {
+        EventSnapshot before = eventSnapshot();
+        const QVector<int> selection{m_selectedSpeedEvents.front(),
+            m_selectedSpeedEvents.back() + static_cast<int>(generated.size())};
+        QVector<SpeedEvent> merged;
+        merged.reserve(m_speedEvents.size() + generated.size());
+        std::merge(m_speedEvents.cbegin(), m_speedEvents.cend(), generated.cbegin(), generated.cend(),
+            std::back_inserter(merged), [](const SpeedEvent& a, const SpeedEvent& b) {
+                return a.timeMilliseconds < b.timeMilliseconds;
+            });
+        m_speedEvents = std::move(merged);
+        emit speedEventsChanged();
+        setSelectedEvents({}, {}, selection);
+        appendEventHistory(std::move(before));
+    }
+    if (!collisions.isEmpty()) {
+        emit eventInterpolationCollisionsFound(collisions);
+    } else if (generated.isEmpty()) {
+        return QStringLiteral("No SV events fit between the selected endpoints at this interval.");
+    }
+    return {};
 }
 
 void EditorState::removeTimingPoint(const int index) {

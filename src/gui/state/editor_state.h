@@ -25,6 +25,16 @@ struct EventCollision {
     qint64 timeMilliseconds = 0;
 };
 
+struct SpeedInterpolationOptions {
+    enum class Spacing { Time, Divisor };
+    enum class Easing { Sine, Cosine, Linear };
+
+    Spacing spacing = Spacing::Time;
+    qint64 everyMilliseconds = 1;
+    int divisor = 4;
+    Easing easing = Easing::Linear;
+};
+
 class EditorState final : public QObject {
     Q_OBJECT
 
@@ -59,6 +69,8 @@ public:
     void addTimingPointAtPlaybackPosition();
     void addLaneEventAtPlaybackPosition();
     void addSpeedEventAtPlaybackPosition();
+    [[nodiscard]] QString speedInterpolationSelectionError() const;
+    [[nodiscard]] QString interpolateSelectedSpeedEvents(const SpeedInterpolationOptions& options);
     void removeTimingPoint(int index);
     void removeLaneEvent(int index);
     void removeSpeedEvent(int index);
@@ -115,6 +127,7 @@ signals:
     void lastTimingPointRemovalRejected();
     void eventPlacementRejected(const infalsus::gui::EventCollision& collision);
     void eventPasteCollisionsFound(const QVector<infalsus::gui::EventCollision>& collisions);
+    void eventInterpolationCollisionsFound(const QVector<infalsus::gui::EventCollision>& collisions);
     void playbackPositionChanged(qint64 positionMilliseconds);
     void divisorChanged(int divisor);
     void difficultyChanged(infalsus::Difficulty difficulty);
