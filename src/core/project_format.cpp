@@ -132,6 +132,24 @@ constexpr quint32 kPngPolynomial = 3988292384U;
 
 } // namespace
 
+QJsonObject songNameLocalizationsToJson(const SongNameLocalizations& names) {
+    return {
+        {QStringLiteral("ja"), names.japanese},
+        {QStringLiteral("ko"), names.korean},
+        {QStringLiteral("zh-Hans"), names.simplifiedChinese},
+        {QStringLiteral("zh-Hant"), names.traditionalChinese},
+    };
+}
+
+SongNameLocalizations songNameLocalizationsFromJson(const QJsonObject& object) {
+    return {
+        .japanese = object.value(QStringLiteral("ja")).toString(),
+        .korean = object.value(QStringLiteral("ko")).toString(),
+        .simplifiedChinese = object.value(QStringLiteral("zh-Hans")).toString(),
+        .traditionalChinese = object.value(QStringLiteral("zh-Hant")).toString(),
+    };
+}
+
 bool isValidProjectChartId(const QString& chartId) {
     static const QRegularExpression kAllowed(QStringLiteral("\\A[A-Za-z0-9_-]+\\z"));
     static const QRegularExpression kReserved(QStringLiteral("\\A(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])\\z"),

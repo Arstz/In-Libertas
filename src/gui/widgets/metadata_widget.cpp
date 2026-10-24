@@ -40,6 +40,9 @@ MetadataWidget::MetadataWidget(QWidget* parent)
     : QWidget(parent) {
     auto* layout = new QFormLayout(this);
     m_songName = new QLineEdit(this);
+    m_songNameLanguage = new QComboBox(this);
+    m_songNameLanguage->addItems({QStringLiteral("English"), QStringLiteral("\u65e5\u672c\u8a9e"), QStringLiteral("\ud55c\uad6d\uc5b4"),
+        QStringLiteral("\u7b80\u4f53\u4e2d\u6587"), QStringLiteral("\u7e41\u9ad4\u4e2d\u6587")});
     m_artistName = new QLineEdit(this);
     m_previewStartMilliseconds = new QSpinBox(this);
     m_previewEndMilliseconds = new QSpinBox(this);
@@ -67,7 +70,12 @@ MetadataWidget::MetadataWidget(QWidget* parent)
             QString::number(option.value));
     }
 
-    layout->addRow(QStringLiteral("Song"), m_songName);
+    auto* songRow = new QWidget(this);
+    auto* songLayout = new QHBoxLayout(songRow);
+    songLayout->setContentsMargins(0, 0, 0, 0);
+    songLayout->addWidget(m_songNameLanguage);
+    songLayout->addWidget(m_songName, 1);
+    layout->addRow(QStringLiteral("Song"), songRow);
     layout->addRow(QStringLiteral("Artist"), m_artistName);
     auto* previewStartRow = new QWidget(this);
     auto* previewStartLayout = new QHBoxLayout(previewStartRow);
@@ -92,6 +100,18 @@ MetadataWidget::MetadataWidget(QWidget* parent)
     setJacketEditingEnabled(false);
 
     connect(m_songName, &QLineEdit::editingFinished, this, &MetadataWidget::emitMetadata);
+    connect(m_songName, &QLineEdit::textEdited, this, [this](const QString& text) {
+        selectedSongName() = text;
+    });
+    connect(m_songNameLanguage, &QComboBox::currentIndexChanged, this, [this](const int index) {
+        const bool modified = m_songName->isModified();
+        selectedSongName() = m_songName->text();
+        m_songNameLanguageIndex = index;
+        updateSongName();
+        if (modified) {
+            emitMetadata();
+        }
+    });
     connect(m_artistName, &QLineEdit::editingFinished, this, &MetadataWidget::emitMetadata);
     connect(m_previewStartMilliseconds, qOverload<int>(&QSpinBox::valueChanged), this, [this] { emitMetadata(); });
     connect(m_previewEndMilliseconds, qOverload<int>(&QSpinBox::valueChanged), this, [this] { emitMetadata(); });
@@ -120,7 +140,9 @@ void MetadataWidget::setMetadata(const ChartMetadata& metadata) {
     const QSignalBlocker previewEndBlocker(m_previewEndMilliseconds);
     const QSignalBlocker backgroundBlocker(m_gameplayBackground);
     const QSignalBlocker jacketDesignerBlocker(m_jacketDesigner);
-    m_songName->setText(metadata.songName);
+    m_englishSongName = metadata.songName;
+    m_songNameLocalizations = metadata.songNameLocalizations;
+    updateSongName();
     m_artistName->setText(metadata.artistName);
     m_jacketDesigner->setText(metadata.jacketDesigner);
     m_previewStartMilliseconds->setValue(static_cast<int>(metadata.previewStartSeconds * 1000.0));
@@ -173,13 +195,31 @@ void MetadataWidget::setPreviewEndMilliseconds(const qint64 milliseconds) {
     m_previewEndMilliseconds->setValue(static_cast<int>(milliseconds));
 }
 
+QString& MetadataWidget::selectedSongName() {
+    switch (m_songNameLanguageIndex) {
+    case 1: return m_songNameLocalizations.japanese;
+    case 2: return m_songNameLocalizations.korean;
+    case 3: return m_songNameLocalizations.simplifiedChinese;
+    case 4: return m_songNameLocalizations.traditionalChinese;
+    default: return m_englishSongName;
+    }
+}
+
+void MetadataWidget::updateSongName() {
+    const QSignalBlocker blocker(m_songName);
+    m_songName->setText(selectedSongName());
+    m_songName->setPlaceholderText(m_songNameLanguageIndex == 0 ? QString() : m_englishSongName);
+}
+
 void MetadataWidget::emitMetadata() {
     if (m_loading) {
         return;
     }
+    selectedSongName() = m_songName->text();
     emit metadataEdited({
         .artistName = m_artistName->text(),
-        .songName = m_songName->text(),
+        .songName = m_englishSongName,
+        .songNameLocalizations = m_songNameLocalizations,
         .jacketDesigner = m_jacketDesigner->text(),
         // The hook's JSON contract uses seconds, but editor input and the
         // playback clock use integral milliseconds.

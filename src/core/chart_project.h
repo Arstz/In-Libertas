@@ -16,9 +16,17 @@ enum class Difficulty {
     Forbidden,
 };
 
+struct SongNameLocalizations {
+    QString japanese;
+    QString korean;
+    QString simplifiedChinese;
+    QString traditionalChinese;
+};
+
 struct ChartMetadata {
     QString artistName;
     QString songName;
+    SongNameLocalizations songNameLocalizations;
     QString jacketDesigner;
     double previewStartSeconds = 0.0;
     double previewEndSeconds = 0.0;

@@ -504,7 +504,7 @@ internal static class CustomSongInstaller
         CustomSongConfig config)
     {
         AppendText(dynamicStrings?.songIdTitleTypeMapping, songId,
-            string.IsNullOrWhiteSpace(config.SongTitle) ? "Custom Song" : config.SongTitle, "title");
+            string.IsNullOrWhiteSpace(config.SongTitle) ? "Custom Song" : config.SongTitle, "title", config.SongTitleLocalizations);
         AppendText(dynamicStrings?.songIdArtistTypeMapping, songId,
             string.IsNullOrWhiteSpace(config.Artist) ? "Custom Artist" : config.Artist, "artist");
         AppendText(dynamicStrings?.jacketIllustratorNameTypeMapping, songId,
@@ -525,18 +525,12 @@ internal static class CustomSongInstaller
         DynamicStringMapping.StringTypeMapping<T> mapping,
         T id,
         string text,
-        string fieldName)
+        string fieldName,
+        LocalizedSongTitles localizations = null)
     {
         if (mapping is null || mapping.Ids is null || mapping.IdValues is null)
             throw new InvalidOperationException($"{fieldName} mapping is unavailable.");
-        DynamicStringMapping.TextMappingValues values = new()
-        {
-            English = text,
-            Japanese = text,
-            Korean = text,
-            TraditionalChinese = text,
-            SimplifiedChinese = text,
-        };
+        DynamicStringMapping.TextMappingValues values = CreateTextValues(text, localizations);
         int existingIndex = -1;
         for (int index = 0; index < mapping.Ids.Count; index++)
         {
@@ -562,6 +556,14 @@ internal static class CustomSongInstaller
         }
         mapping._TZA();
     }
+
+    private static DynamicStringMapping.TextMappingValues CreateTextValues(string text, LocalizedSongTitles localizations) => new() {
+        English = text,
+        Japanese = localizations?.Japanese ?? text,
+        Korean = localizations?.Korean ?? text,
+        TraditionalChinese = localizations?.TraditionalChinese ?? text,
+        SimplifiedChinese = localizations?.SimplifiedChinese ?? text,
+    };
 
     /// <summary>
     /// DynamicStringMapping can deserialize after the early SongData install.
@@ -988,7 +990,7 @@ internal static class CustomSongInstaller
         // Slot 66 already has serialized placeholder entries. Replace those
         // values in memory rather than adding duplicate SongId keys. The live
         // Str.Strings provider delegates to this same mapping object.
-        ReplaceSongText(dynamicStrings.songIdTitleTypeMapping, customSongId, config.SongTitle, "title");
+        ReplaceSongText(dynamicStrings.songIdTitleTypeMapping, customSongId, config.SongTitle, "title", config.SongTitleLocalizations);
         ReplaceSongText(dynamicStrings.songIdArtistTypeMapping, customSongId, config.Artist, "artist");
         ReplaceSongText(dynamicStrings.jacketIllustratorNameTypeMapping, customSongId, config.JacketDesigner, "jacket illustrator");
     }
@@ -997,7 +999,8 @@ internal static class CustomSongInstaller
         DynamicStringMapping.StringTypeMapping<SongId> mapping,
         SongId songId,
         string text,
-        string fieldName)
+        string fieldName,
+        LocalizedSongTitles localizations = null)
     {
         if (mapping is null || mapping.Ids is null || mapping.IdValues is null)
             throw new InvalidOperationException($"Song {fieldName} mapping is unavailable.");
@@ -1015,14 +1018,7 @@ internal static class CustomSongInstaller
             throw new InvalidOperationException($"SongId {songId.Value} has no reserved {fieldName} mapping slot.");
 
         string resolved = string.IsNullOrWhiteSpace(text) ? "Custom Song" : text;
-        DynamicStringMapping.TextMappingValues values = new()
-        {
-            English = resolved,
-            Japanese = resolved,
-            Korean = resolved,
-            TraditionalChinese = resolved,
-            SimplifiedChinese = resolved,
-        };
+        DynamicStringMapping.TextMappingValues values = CreateTextValues(resolved, localizations);
         mapping.IdValues[index] = values;
         if (mapping.IdStr is not null && index < mapping.IdStr.Count)
             mapping.IdStr[index] = resolved;

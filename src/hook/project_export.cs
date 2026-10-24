@@ -15,7 +15,7 @@ internal sealed class ExportOwnership {
 }
 
 internal static class ProjectExport {
-    internal const int kConverterRevision = 5;
+    internal const int kConverterRevision = 6;
     internal const string kOwnershipFile = ".inlibertas-export.json";
     internal static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
 
@@ -40,6 +40,7 @@ internal static class ProjectExport {
             enabled = true, templateSongId = 2, chartId = package.ChartId, baseName = package.ChartId,
             audioFile = "audio.ogg", jacketLargeFile = "jacketLarge.webp", jacketSmallFile = "jacketSmall.webp", enableLoosePngJackets = true,
             songTitle = ProjectReader.Text(metadata, "song_name"), artist = ProjectReader.Text(metadata, "artist_name"),
+            songTitleLocalizations = LocalizedSongTitles.FromMetadata(metadata),
             jacketDesigner = ProjectReader.Text(metadata, "jacket_designer"),
             previewStartSeconds = ProjectReader.Number(metadata, "preview_start_seconds"), previewEndSeconds = ProjectReader.Number(metadata, "preview_end_seconds"),
             characterIdentifier = OptionalText(metadata, "character_identifier"), gameplayBackground = OptionalText(metadata, "gameplay_background"), difficulties,

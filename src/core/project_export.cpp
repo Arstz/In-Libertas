@@ -47,6 +47,9 @@ QString projectExportError(const ChartProject& project) {
     if (!isValidProjectChartId(project.chartId)) {
         return QStringLiteral("Enter a filename-safe Chart ID before exporting.");
     }
+    if (project.metadata.songName.trimmed().isEmpty()) {
+        return QStringLiteral("Enter an English name before exporting.");
+    }
     if (!std::isfinite(project.metadata.previewStartSeconds) || !std::isfinite(project.metadata.previewEndSeconds)
         || project.metadata.previewStartSeconds < 0 || project.metadata.previewStartSeconds >= project.metadata.previewEndSeconds) {
         return QStringLiteral("Preview start time must be nonnegative and earlier than preview end time.");
@@ -80,6 +83,7 @@ QJsonObject projectExportConfig(const ChartProject& project) {
         {QStringLiteral("jacketSmallFile"), QStringLiteral("jacketSmall.webp")},
         {QStringLiteral("enableLoosePngJackets"), true},
         {QStringLiteral("songTitle"), project.metadata.songName}, {QStringLiteral("artist"), project.metadata.artistName},
+        {QStringLiteral("songTitleLocalizations"), songNameLocalizationsToJson(project.metadata.songNameLocalizations)},
         {QStringLiteral("jacketDesigner"), project.metadata.jacketDesigner},
         {QStringLiteral("previewStartSeconds"), project.metadata.previewStartSeconds},
         {QStringLiteral("previewEndSeconds"), project.metadata.previewEndSeconds},

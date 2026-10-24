@@ -51,6 +51,7 @@ internal sealed class CustomSongConfig
     public string JacketSmallFile { get; set; } = "jacketSmall.png";
     public bool EnableLoosePngJackets { get; set; }
     public string SongTitle { get; set; } = "Custom Song";
+    public LocalizedSongTitles SongTitleLocalizations { get; set; }
     public string Artist { get; set; } = "Custom Artist";
     public string ChartDesigner { get; set; } = "Custom chart";
     public string JacketDesigner { get; set; } = "Custom jacket";
@@ -102,6 +103,7 @@ internal sealed class CustomSongConfig
                 JacketSmallFile = JacketSmallFile,
                 EnableLoosePngJackets = EnableLoosePngJackets,
                 SongTitle = SongTitle,
+                SongTitleLocalizations = SongTitleLocalizations,
                 Artist = Artist,
                 ChartDesigner = difficulty.ChartDesigner ?? ChartDesigner,
                 JacketDesigner = string.IsNullOrWhiteSpace(difficulty.JacketDesigner) ? JacketDesigner : difficulty.JacketDesigner,

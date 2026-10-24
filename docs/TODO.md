@@ -1,2 +1,1 @@
-- Investigate score DB persistance for different sizes 
-- Save and retrieve custom field presents
+- Save and retrieve custom field present

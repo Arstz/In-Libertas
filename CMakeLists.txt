@@ -135,6 +135,9 @@ if(BUILD_TESTING)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/playtest_settings_test.cpp")
         qt_add_executable(playtest_settings_test
             tests/gui/playtest_settings_test.cpp
+            src/core/chart_project.cpp
+            src/gui/widgets/metadata_widget.cpp
+            src/gui/widgets/metadata_widget.h
             src/gui/key_bindings.cpp
             src/gui/state/audio_playback_stream.cpp
             src/gui/state/playback_controller.cpp

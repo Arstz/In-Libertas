@@ -29,6 +29,7 @@
     <Reference Include="Il2Cppmscorlib"><HintPath>$(Il2CppDir)\Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppGame"><HintPath>$(Il2CppDir)\Il2CppGame.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppGame.Data"><HintPath>$(Il2CppDir)\Il2CppGame.Data.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppStr"><HintPath>$(Il2CppDir)\Il2CppStr.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppGame.Common"><HintPath>$(Il2CppDir)\Il2CppGame.Common.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppGame.UI.Common"><HintPath>$(Il2CppDir)\Il2CppGame.UI.Common.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2CppGame.Input"><HintPath>$(Il2CppDir)\Il2CppGame.Input.dll</HintPath><Private>false</Private></Reference>

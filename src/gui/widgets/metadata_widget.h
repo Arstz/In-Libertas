@@ -37,9 +37,15 @@ signals:
 
 private:
     void emitMetadata();
+    void updateSongName();
+    [[nodiscard]] QString& selectedSongName();
     void emitDifficultyMetadata();
 
     QLineEdit* m_songName = nullptr;
+    QComboBox* m_songNameLanguage = nullptr;
+    QString m_englishSongName;
+    SongNameLocalizations m_songNameLocalizations;
+    int m_songNameLanguageIndex = 0;
     QLineEdit* m_artistName = nullptr;
     QSpinBox* m_previewStartMilliseconds = nullptr;
     QSpinBox* m_previewEndMilliseconds = nullptr;

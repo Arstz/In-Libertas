@@ -90,6 +90,8 @@ internal sealed class ProjectImporter {
             sourceHash = ProjectExport.HashStream(source);
             source.Position = 0;
             ProjectPackage package = ProjectReader.Read(source);
+            if (ProjectReader.Text(package.Metadata, "song_name").Any(character => character > 127))
+                m_log("English name contains non-ASCII symbols");
             if (package.ChartId != expectedChartId) throw new InvalidDataException("Project identity changed during discovery.");
             if (Directory.Exists(target)) {
                 ExportOwnership existing = ProjectExport.Verify(target, package.ChartId);

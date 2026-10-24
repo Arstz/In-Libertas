@@ -175,6 +175,7 @@ constexpr char kProjectMagic[] = "10NO";
         {QStringLiteral("metadata"), QJsonObject{
             {QStringLiteral("artist_name"), project.metadata.artistName},
             {QStringLiteral("song_name"), project.metadata.songName},
+            {QStringLiteral("song_name_localizations"), songNameLocalizationsToJson(project.metadata.songNameLocalizations)},
             {QStringLiteral("jacket_designer"), project.metadata.jacketDesigner},
             {QStringLiteral("preview_start_seconds"), project.metadata.previewStartSeconds},
             {QStringLiteral("preview_end_seconds"), project.metadata.previewEndSeconds},
@@ -207,6 +208,7 @@ constexpr char kProjectMagic[] = "10NO";
     loaded.metadata = {
         .artistName = metadata.value(QStringLiteral("artist_name")).toString(),
         .songName = metadata.value(QStringLiteral("song_name")).toString(),
+        .songNameLocalizations = songNameLocalizationsFromJson(metadata.value(QStringLiteral("song_name_localizations")).toObject()),
         .jacketDesigner = metadata.value(QStringLiteral("jacket_designer")).toString(),
         .previewStartSeconds = metadata.value(QStringLiteral("preview_start_seconds")).toDouble(),
         .previewEndSeconds = metadata.value(QStringLiteral("preview_end_seconds")).toDouble(),

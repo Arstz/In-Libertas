@@ -187,8 +187,9 @@ struct ImportedSpcIdentity {
 
 [[nodiscard]] QStringList exportWarningsFor(const ChartProject& project) {
     QStringList warnings;
-    if (project.metadata.songName.trimmed().isEmpty()) {
-        warnings.append(QStringLiteral("Song name is empty."));
+    if (std::any_of(project.metadata.songName.cbegin(), project.metadata.songName.cend(),
+        [](const QChar character) { return character.unicode() > 127; })) {
+        warnings.append(QStringLiteral("English name contains non-ASCII symbols"));
     }
     if (project.metadata.artistName.trimmed().isEmpty()) {
         warnings.append(QStringLiteral("Artist name is empty."));

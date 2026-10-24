@@ -59,6 +59,8 @@ internal static class ProjectReader {
         JsonElement[] difficulties = DifficultyNames.Select(name => manifest.GetProperty("difficulties").GetProperty(name).Clone()).ToArray();
         foreach (JsonElement chart in difficulties) Text(chart.GetProperty("metadata"), "charters");
         JsonElement metadata = manifest.GetProperty("metadata").Clone();
+        if (string.IsNullOrWhiteSpace(Text(metadata, "song_name")))
+            throw new InvalidDataException("Enter an English name before exporting.");
         double previewStart = Number(metadata, "preview_start_seconds");
         double previewEnd = Number(metadata, "preview_end_seconds");
         if (previewStart < 0 || previewStart >= previewEnd)
