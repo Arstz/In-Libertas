@@ -32,6 +32,7 @@ constexpr GameplayBackgroundOption kGameplayBackgroundOptions[] = {
     {"fochaos", 34}, {"memoire", 36}, {"kiretsu", 37}, {"codeleviathan", 38},
     {"chronophobia", 39}, {"moonsliders", 40}, {"phylaxron", 41}, {"thingsitreasure", 42},
     {"hanabi", 43}, {"chaoticismlegacy", 44}, {"everything", 45}, {"toccatafunebre", 46},
+    {"roki", 47}, {"monitoring", 48}, {"megameteor", 49}, {"disruptorarray", 50},
 };
 
 } // namespace
