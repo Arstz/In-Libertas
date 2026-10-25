@@ -33,7 +33,7 @@ Widget will show editable properties of a currently selected hitObject or event.
 ### Metadata
 
 Here you can edit your metadata (obviously), most important in order:
-- Song (5 variants) - English name is mandatory and would be assigned to translations by default if not specified, the game sorts by this field in song select menu.
+- Song (5 variants) - English name is mandatory and would be assigned to translations by default if not specified, the game sorts by this field in song select menu, other names will be displayed based on configured game language.
 - Chart ID - this would be injected into the game DB, the game sorts by this field so it will affect where the chart is placed, pick something unique and make sure it does not collide with any existing ids or other chart ids already installed;
 - Jacket - an image to be used as a jacket inside song select menu and during gameplay (preferred size square, ideally 2048x2048);
 - Song/Artist - this would be used as the display metadata in the song selection screen as well as during gameplay;

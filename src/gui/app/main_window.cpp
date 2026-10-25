@@ -1831,18 +1831,22 @@ void MainWindow::openProject() {
     loadProject(path);
 }
 
-void MainWindow::openRecentProject(const QString& path) {
+void MainWindow::openProjectFile(const QString& path) {
     if (!confirmDiscardUnsavedChanges(QStringLiteral("opening another project"))) {
         return;
     }
     loadProject(path);
 }
 
+void MainWindow::openRecentProject(const QString& path) {
+    openProjectFile(path);
+}
+
 void MainWindow::loadProject(const QString& path) {
     const QFileInfo fileInfo(path);
     if (!isProjectDocumentFile(fileInfo)) {
         QMessageBox::warning(this, QStringLiteral("Open project"),
-            QStringLiteral("The selected recent project is no longer available."));
+            QStringLiteral("The selected project is unavailable or is not a .10no file."));
         refreshRecentProjectMenu();
         return;
     }

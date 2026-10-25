@@ -1,4 +1,5 @@
 #include "gui/app/settings_dialog.h"
+#include "gui/app/system_integration.h"
 #include "core/media_assets.h"
 #include "gui/state/hitsound_bank.h"
 #include "gui/state/playback_controller.h"
@@ -124,7 +125,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     setWindowTitle(QStringLiteral("Settings"));
     resize(kSettingsWidth, kSettingsHeight);
     navigation->addItems({QStringLiteral("Keybinds"), QStringLiteral("Visuals"), QStringLiteral("Handling"),
-        QStringLiteral("Hitsounds"), QStringLiteral("Playtest")});
+        QStringLiteral("Hitsounds"), QStringLiteral("Playtest"), QStringLiteral("System")});
     navigation->setCurrentRow(0);
     navigation->setFixedWidth(kNavigationWidth);
     navigation->setUniformItemSizes(true);
@@ -162,6 +163,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     buildHandlingPage(pages, handling);
     buildHitsoundsPage(pages, hitsounds);
     buildPlaytestPage(pages, playtest);
+    buildSystemPage(pages);
     contentLayout->addWidget(navigation);
     contentLayout->addWidget(pages, 1);
     layout->addLayout(contentLayout, 1);
@@ -274,6 +276,14 @@ void SettingsDialog::accept() {
         QMessageBox::information(this, QStringLiteral("Hitsounds"), QStringLiteral("Please wait for the sounds to finish loading."));
         return;
     }
+#ifdef Q_OS_WIN
+    QString associationError;
+    if (!setProjectFileAssociationEnabled(m_projectFileAssociation->isChecked(), &associationError)) {
+        QMessageBox::warning(this, QStringLiteral("File Association"), associationError);
+        updateFileAssociationStatus();
+        return;
+    }
+#endif
     const QVector<KeyBinding> bindings = editedBindings();
     m_keyBindings->setBindings(bindings);
     saveKeybinds(bindings);
@@ -282,6 +292,52 @@ void SettingsDialog::accept() {
     savePlaytestSettings(selectedPlaytestSettings());
     m_hitsounds->save();
     QDialog::accept();
+}
+
+void SettingsDialog::buildSystemPage(QStackedWidget* pages) {
+    auto* scrollArea = new QScrollArea(pages);
+    auto* page = new QWidget(scrollArea);
+    auto* pageLayout = new QVBoxLayout(page);
+    auto* rows = new QFormLayout;
+    auto* association = new QWidget(page);
+    auto* associationLayout = new QVBoxLayout(association);
+    m_projectFileAssociation = new QCheckBox(QStringLiteral("Associate .10no files with this application"), association);
+    m_projectFileAssociationStatus = new QLabel(association);
+
+    pages->addWidget(scrollArea);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setWidget(page);
+    associationLayout->setContentsMargins(0, 0, 0, 0);
+    associationLayout->addWidget(m_projectFileAssociation);
+    associationLayout->addWidget(m_projectFileAssociationStatus);
+    m_projectFileAssociationStatus->setWordWrap(true);
+    m_projectFileAssociation->setChecked(projectFileAssociationState() != ProjectFileAssociationState::NotRegistered);
+#ifndef Q_OS_WIN
+    m_projectFileAssociation->setEnabled(false);
+#endif
+    rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    rows->addRow(QStringLiteral("File association"), association);
+    pageLayout->addLayout(rows);
+    pageLayout->addStretch();
+    connect(m_projectFileAssociation, &QCheckBox::toggled, this, &SettingsDialog::updateFileAssociationStatus);
+    updateFileAssociationStatus();
+}
+
+void SettingsDialog::updateFileAssociationStatus() {
+#ifdef Q_OS_WIN
+    if (!m_projectFileAssociation->isChecked()) {
+        m_projectFileAssociationStatus->setText(QStringLiteral("Not registered"));
+        return;
+    }
+    const ProjectFileAssociationState state = projectFileAssociationState();
+    m_projectFileAssociationStatus->setText(state == ProjectFileAssociationState::Registered
+        ? QStringLiteral("Registered to this application")
+        : state == ProjectFileAssociationState::NeedsRepair
+            ? QStringLiteral("Registered; apply settings to update it")
+            : QStringLiteral("Will be registered when settings are applied"));
+#else
+    m_projectFileAssociationStatus->setText(QStringLiteral("File association is available only on Windows."));
+#endif
 }
 
 void SettingsDialog::buildVisualsPage(QStackedWidget* pages) {

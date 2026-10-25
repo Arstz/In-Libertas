@@ -42,6 +42,8 @@ protected:
     void accept() override;
 
 private:
+    void buildSystemPage(QStackedWidget* pages);
+    void updateFileAssociationStatus();
     void buildVisualsPage(QStackedWidget* pages);
     void choosePlayheadColor();
     void updateVisualControls();
@@ -76,6 +78,8 @@ private:
     QVector<KeyBinding> m_bindings;
     QVector<QKeySequenceEdit*> m_shortcutEdits;
     QLabel* m_validationLabel = nullptr;
+    QCheckBox* m_projectFileAssociation = nullptr;
+    QLabel* m_projectFileAssociationStatus = nullptr;
 };
 
 } // namespace infalsus::gui

@@ -55,6 +55,8 @@ qt_add_executable(InLibertas WIN32
     src/gui/app/main_window.h
     src/gui/app/settings_dialog.cpp
     src/gui/app/settings_dialog.h
+    src/gui/app/system_integration.cpp
+    src/gui/app/system_integration.h
     src/gui/app/chartbox_dialog.cpp
     src/gui/app/chartbox_dialog.h
     src/gui/app/sv_interpolation_dialog.cpp
@@ -97,6 +99,40 @@ qt_add_executable(InLibertas WIN32
 )
 
 set_target_properties(InLibertas PROPERTIES OUTPUT_NAME "In Libertas")
+
+qt_add_resources(InLibertas system_icons
+    PREFIX "/system"
+    BASE "assets/system"
+    FILES "assets/system/Logo.png"
+)
+
+if(WIN32)
+    enable_language(RC)
+    find_program(POWERSHELL_EXECUTABLE NAMES powershell
+        HINTS "$ENV{SystemRoot}/System32/WindowsPowerShell/v1.0"
+        NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    set(INLIBERTAS_APPLICATION_ICON "${CMAKE_CURRENT_BINARY_DIR}/system-icons/application.ico")
+    set(INLIBERTAS_PROJECT_ICON "${CMAKE_CURRENT_BINARY_DIR}/system-icons/project.ico")
+    add_custom_command(
+        OUTPUT "${INLIBERTAS_APPLICATION_ICON}" "${INLIBERTAS_PROJECT_ICON}"
+        COMMAND "${POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_system_icons.ps1"
+            -SourceDirectory "${CMAKE_CURRENT_SOURCE_DIR}/assets/system"
+            -OutputDirectory "${CMAKE_CURRENT_BINARY_DIR}/system-icons"
+        DEPENDS tools/generate_system_icons.ps1
+            "assets/system/Logo.png" "assets/system/File small.png" "assets/system/File big.png"
+        VERBATIM
+    )
+    add_custom_target(InLibertasSystemIcons
+        DEPENDS "${INLIBERTAS_APPLICATION_ICON}" "${INLIBERTAS_PROJECT_ICON}")
+    add_dependencies(InLibertas InLibertasSystemIcons)
+    set(INLIBERTAS_WINDOWS_RESOURCES "${CMAKE_CURRENT_BINARY_DIR}/windows_resources.rc")
+    configure_file(src/gui/app/windows_resources.rc.in "${INLIBERTAS_WINDOWS_RESOURCES}" @ONLY)
+    set_property(SOURCE "${INLIBERTAS_WINDOWS_RESOURCES}" APPEND PROPERTY OBJECT_DEPENDS
+        "${INLIBERTAS_APPLICATION_ICON}" "${INLIBERTAS_PROJECT_ICON}")
+    target_sources(InLibertas PRIVATE "${INLIBERTAS_WINDOWS_RESOURCES}")
+    target_link_libraries(InLibertas PRIVATE shell32 user32)
+endif()
 
 add_custom_target(InLibertasAssets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -146,10 +182,14 @@ if(BUILD_TESTING)
             src/gui/state/hitsound_bank.h
             src/core/waveform.cpp
             src/core/media_assets.cpp
+            src/gui/app/system_integration.cpp
         )
         target_include_directories(playtest_settings_test PRIVATE src ${SIGNALSMITH_STRETCH_INCLUDE_DIR} ${FFMPEG_INCLUDE_DIRS})
         target_link_libraries(playtest_settings_test PRIVATE InLibertasJacketCodec Qt6::Core Qt6::Gui Qt6::Widgets
             Qt6::Multimedia FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil)
+        if(WIN32)
+            target_link_libraries(playtest_settings_test PRIVATE shell32 user32)
+        endif()
         add_dependencies(playtest_settings_test InLibertas)
         add_test(NAME playtest_settings COMMAND playtest_settings_test -platform offscreen)
         set_tests_properties(playtest_settings PROPERTIES ENVIRONMENT
