@@ -45,6 +45,8 @@ qt_add_executable(InLibertas WIN32
     src/core/playtest_session.h
     src/core/field_groups.cpp
     src/core/field_groups.h
+    src/core/field_presets.cpp
+    src/core/field_presets.h
     src/core/audio_exporter.cpp
     src/core/audio_exporter.h
     src/core/media_assets.cpp
@@ -83,6 +85,8 @@ qt_add_executable(InLibertas WIN32
     src/gui/widgets/playback_controls.h
     src/gui/widgets/timing_widget.cpp
     src/gui/widgets/timing_widget.h
+    src/gui/widgets/field_presets_widget.cpp
+    src/gui/widgets/field_presets_widget.h
     src/gui/widgets/verification_widget.cpp
     src/gui/widgets/verification_widget.h
     src/gui/state/playback_controller.cpp
@@ -168,6 +172,24 @@ add_custom_command(TARGET InLibertas POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/core/field_presets_test.cpp")
+        qt_add_executable(field_presets_test tests/core/field_presets_test.cpp
+            src/core/field_presets.cpp src/core/chart_document.cpp src/core/chart_project.cpp)
+        target_include_directories(field_presets_test PRIVATE src)
+        target_link_libraries(field_presets_test PRIVATE Qt6::Core)
+        add_test(NAME field_presets COMMAND field_presets_test)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/repair_field_segments.cpp")
+        qt_add_executable(repair_field_segments tests/repair_field_segments.cpp
+            src/core/chart_document.cpp src/core/chart_project.cpp)
+        target_include_directories(repair_field_segments PRIVATE src)
+        target_link_libraries(repair_field_segments PRIVATE Qt6::Core)
+    endif()
+    if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/hook/native_runtime_overrides_test.cpp")
+        add_executable(native_runtime_overrides_test tests/hook/native_runtime_overrides_test.cpp)
+        set_target_properties(native_runtime_overrides_test PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+        add_test(NAME native_runtime_overrides COMMAND native_runtime_overrides_test)
+    endif()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/playtest_settings_test.cpp")
         qt_add_executable(playtest_settings_test
             tests/gui/playtest_settings_test.cpp

@@ -4,12 +4,32 @@ using System.Runtime.InteropServices;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+using Il2Cpp_b;
+using Il2Cppifapp.Game.Data;
+using Il2CppStr;
 using UnityEngine;
 using UnityEngine.ResourceManagement.AsyncOperations;
 
 namespace InFalsusCustomSongHook;
 
 internal static class NativeMethodLookup {
+    internal static IntPtr ResolveChartStateConstructor() {
+        IntPtr owner = Il2CppClassPointerStore<_T>.NativeClassPtr;
+        IntPtr methodInfo = IL2CPP.il2cpp_class_get_method_from_name(owner, ".ctor", 0);
+        if (methodInfo == IntPtr.Zero || IL2CPP.il2cpp_method_get_class(methodInfo) != owner)
+            throw new MissingMethodException("The native chart state constructor is unavailable.");
+        return GetEntryPoint(methodInfo);
+    }
+
+    internal static IntPtr ResolveLocalizedStringResolver() {
+        IntPtr owner = Il2CppClassPointerStore<DynamicStringMapping.TextMappingValues>.NativeClassPtr;
+        IntPtr localization = Il2CppClassPointerStore<Strings.Localization>.NativeClassPtr;
+        IntPtr methodInfo = IL2CPP.il2cpp_class_get_method_from_name(owner,
+            nameof(DynamicStringMapping.TextMappingValues._WLA), 1);
+        RequireSignature(methodInfo, owner, RequireClass("mscorlib.dll", "System", "String"), localization);
+        return GetEntryPoint(methodInfo);
+    }
+
     internal static IntPtr ResolveMaterialLoader(int expectedHandleSize) {
         IntPtr owner = RequireClass("Unity.Addressables.dll", "UnityEngine.AddressableAssets", "AddressablesImpl");
         IntPtr objectClass = RequireClass("mscorlib.dll", "System", "Object");

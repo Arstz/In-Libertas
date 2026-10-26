@@ -41,6 +41,7 @@ class PropertiesPanel;
 class PlaybackControls;
 class TimelineWidget;
 class EventsWidget;
+class FieldPresetsWidget;
 class VerificationWidget;
 
 class MainWindow final : public QMainWindow {
@@ -127,13 +128,17 @@ private:
     PlaybackControls* m_playbackControls = nullptr;
     MetadataWidget* m_metadata = nullptr;
     EventsWidget* m_timing = nullptr;
+    FieldPresetsWidget* m_fieldPresets = nullptr;
+    QWidget* m_fieldPresetsPanel = nullptr;
+    QWidget* m_eventsColumn = nullptr;
+    QSplitter* m_eventsSplitter = nullptr;
     PropertiesPanel* m_properties = nullptr;
     VerificationWidget* m_verification = nullptr;
     QSplitter* m_rootSplitter = nullptr;
     QSplitter* m_mainSplitter = nullptr;
     QSplitter* m_viewerSplitter = nullptr;
     QSplitter* m_bottomSplitter = nullptr;
-    std::array<QWidget*, 4> m_workspacePanels{};
+    std::array<QWidget*, 5> m_workspacePanels{};
     QToolBar* m_toolsToolbar = nullptr;
     QMenu* m_windowMenu = nullptr;
     QMenu* m_recentProjectMenu = nullptr;
@@ -166,7 +171,7 @@ private:
     QWidget* m_viewerEditorParent = nullptr;
     QPointer<QWidget> m_editorFocus;
     QByteArray m_playtestWindowState;
-    std::array<QByteArray, 4> m_playtestSplitters;
+    std::array<QByteArray, 5> m_playtestSplitters;
     QPoint m_editorCursor;
     qint64 m_editorPosition = 0;
     qint64 m_pendingDuration = 0;

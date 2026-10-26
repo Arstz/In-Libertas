@@ -158,9 +158,12 @@ internal static class ProjectChartEncoder {
         uint start = ProjectReader.Time(element, "start_ms"), end = ProjectReader.Time(element, "end_ms");
         double startX = ProjectReader.Number(element, "start_x"), endX = ProjectReader.Number(element, "end_x");
         double startWidth = ProjectReader.Number(element, "start_width"), endWidth = ProjectReader.Number(element, "end_width");
+        if (kind == 3 && end >= start && end - start < 2)
+            throw new InvalidDataException("Field segments must be at least 2 ms long to compile their judgement ticks.");
         if (kind < 0 || kind > 3 || side < 0 || side > 3 || (kind >= 2) != (side == 3)
             || end < start || ((kind == 1 || kind == 3) && end == start)
-            || startWidth <= 0 || endWidth <= 0 || Math.Abs(startX) > 2147 || Math.Abs(endX) > 2147
+            || startWidth < 0 || endWidth < 0 || (kind != 3 && (startWidth == 0 || endWidth == 0))
+            || Math.Abs(startX) > 2147 || Math.Abs(endX) > 2147
             || startWidth > 1.25 || endWidth > 1.25)
             throw new InvalidDataException("Invalid project note geometry or type.");
         if (side == 0 && (!ValidFloorSpan(startX, startWidth) || !ValidFloorSpan(endX, endWidth)))

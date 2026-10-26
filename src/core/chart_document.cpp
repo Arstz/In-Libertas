@@ -370,6 +370,9 @@ void appendU16(QByteArray& bytes, const std::uint16_t value) {
 
 [[nodiscard]] QString exportValidationError(const ChartData& chart) {
     for (const ChartNote& note : chart.notes) {
+        if (note.kind == NoteKind::Sky && note.endMilliseconds - note.startMilliseconds < 2) {
+            return QStringLiteral("Field %1 must be at least 2 ms long to compile its judgement ticks.").arg(note.id);
+        }
         if ((note.kind == NoteKind::Tap || note.kind == NoteKind::Hold)
             && note.side == FloorSide::Central && !hasValidCentralFloorSpan(note)) {
             return QStringLiteral("Hit object %1 has an invalid central lane span. "

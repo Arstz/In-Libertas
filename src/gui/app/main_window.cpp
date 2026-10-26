@@ -15,6 +15,7 @@
 #include "gui/widgets/timeline_widget.h"
 #include "gui/widgets/playback_controls.h"
 #include "gui/widgets/timing_widget.h"
+#include "gui/widgets/field_presets_widget.h"
 #include "gui/widgets/verification_widget.h"
 #include "core/chart_document.h"
 #include "core/project_document.h"
@@ -734,14 +735,18 @@ void MainWindow::buildInterface() {
 
 void MainWindow::arrangeSplitters() {
     m_rootSplitter->setSizes({220, 1320});
+    m_eventsSplitter->setSizes({450, 350});
     m_mainSplitter->setSizes({580, 980});
     m_viewerSplitter->setSizes({650, 280});
     m_bottomSplitter->setSizes({310, 360, 420});
 }
 
 void MainWindow::updateBottomPanelVisibility() {
-    m_bottomSplitter->setVisible(std::any_of(m_workspacePanels.cbegin() + 1, m_workspacePanels.cend(),
+    m_bottomSplitter->setVisible(std::any_of(m_workspacePanels.cbegin() + 1, m_workspacePanels.cbegin() + 4,
         [](const QWidget* panel) { return !panel->isHidden(); }));
+    const bool eventsVisible = !m_workspacePanels.front()->isHidden();
+    const bool presetsVisible = !m_fieldPresetsPanel->isHidden();
+    m_eventsColumn->setVisible(eventsVisible || presetsVisible);
 }
 
 void MainWindow::restoreLayout() {
@@ -760,8 +765,12 @@ void MainWindow::restoreLayout() {
     const bool restoredMain = restoreSplitter(m_mainSplitter, QStringLiteral("layout/main_splitter"));
     const bool restoredViewer = restoreSplitter(m_viewerSplitter, QStringLiteral("layout/viewer_splitter"));
     const bool restoredBottom = restoreSplitter(m_bottomSplitter, QStringLiteral("layout/bottom_splitter"));
+    if (!restoreSplitter(m_eventsSplitter, QStringLiteral("layout/events_splitter"))) {
+        m_eventsSplitter->setSizes({450, 350});
+    }
     for (QWidget* panel : m_workspacePanels) {
-        panel->setVisible(settings.value(QStringLiteral("layout/panels/%1").arg(panel->windowTitle()), true).toBool());
+        panel->setVisible(settings.value(QStringLiteral("layout/panels/%1").arg(panel->windowTitle()),
+            panel != m_fieldPresetsPanel).toBool());
     }
     updateBottomPanelVisibility();
     const bool restoredSplitters = restoredRoot || restoredMain || restoredViewer || restoredBottom;
@@ -776,6 +785,7 @@ void MainWindow::saveLayout() const {
     settings.setValue(QStringLiteral("layout/main_splitter"), m_mainSplitter->saveState());
     settings.setValue(QStringLiteral("layout/viewer_splitter"), m_viewerSplitter->saveState());
     settings.setValue(QStringLiteral("layout/bottom_splitter"), m_bottomSplitter->saveState());
+    settings.setValue(QStringLiteral("layout/events_splitter"), m_eventsSplitter->saveState());
     settings.setValue(QStringLiteral("layout/waveform_width"), m_flatView->waveformWidth());
     for (const QWidget* panel : m_workspacePanels) {
         settings.setValue(QStringLiteral("layout/panels/%1").arg(panel->windowTitle()), !panel->isHidden());
@@ -786,7 +796,7 @@ void MainWindow::resetLayout() {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.remove(QStringLiteral("layout"));
     for (QWidget* panel : m_workspacePanels) {
-        panel->show();
+        panel->setVisible(panel != m_fieldPresetsPanel);
     }
     updateBottomPanelVisibility();
     m_flatView->setWaveformWidth(FlatView::kDefaultWaveformWidth);
@@ -1054,12 +1064,19 @@ void MainWindow::updateVolumeSliderPlacement() {
 void MainWindow::buildWorkspace() {
     m_metadata = new MetadataWidget(this);
     m_timing = new EventsWidget(this);
+    m_fieldPresets = new FieldPresetsWidget(m_state, this);
     m_properties = new PropertiesPanel(this);
     m_verification = new VerificationWidget(this);
     auto* timingHost = new QWidget(this);
     auto* timingLayout = new QVBoxLayout(timingHost);
     m_verification->setMinimumSize(260, 180);
     m_rootSplitter = new QSplitter(Qt::Horizontal, m_contentHost);
+    m_eventsColumn = new QWidget(m_rootSplitter);
+    auto* eventsColumnLayout = new QVBoxLayout(m_eventsColumn);
+    eventsColumnLayout->setContentsMargins(0, 0, 0, 0);
+    eventsColumnLayout->setSpacing(2);
+    m_eventsSplitter = new QSplitter(Qt::Vertical, m_eventsColumn);
+    m_eventsSplitter->setChildrenCollapsible(false);
     m_mainSplitter = new QSplitter(Qt::Horizontal, m_rootSplitter);
     m_viewerSplitter = new QSplitter(Qt::Vertical, m_mainSplitter);
     m_bottomSplitter = new QSplitter(Qt::Horizontal, m_viewerSplitter);
@@ -1071,8 +1088,15 @@ void MainWindow::buildWorkspace() {
     timingLayout->setContentsMargins(0, 0, 0, 0);
     timingLayout->setSpacing(2);
     timingLayout->addWidget(m_timing, 1);
-    timingLayout->addWidget(m_timingPositionLabel);
-    auto* timingPanel = createPanel(QStringLiteral("Events"), timingHost, m_rootSplitter);
+    auto* timingPanel = createPanel(QStringLiteral("Events"), timingHost, m_eventsSplitter);
+    m_fieldPresetsPanel = createPanel(QStringLiteral("Field presets"), m_fieldPresets, m_eventsSplitter);
+    m_eventsSplitter->addWidget(timingPanel);
+    m_eventsSplitter->addWidget(m_fieldPresetsPanel);
+    m_eventsSplitter->setStretchFactor(0, 1);
+    m_eventsSplitter->setStretchFactor(1, 1);
+    eventsColumnLayout->addWidget(m_eventsSplitter, 1);
+    eventsColumnLayout->addWidget(m_timingPositionLabel);
+    m_fieldPresetsPanel->hide();
     auto* flatControls = new QWidget(this);
     auto* flatControlsLayout = new QHBoxLayout(flatControls);
     flatControlsLayout->setContentsMargins(0, 0, 0, 0);
@@ -1132,7 +1156,7 @@ void MainWindow::buildWorkspace() {
     m_viewerSplitter->addWidget(m_bottomSplitter);
     m_mainSplitter->addWidget(flatPanel);
     m_mainSplitter->addWidget(m_viewerSplitter);
-    m_rootSplitter->addWidget(timingPanel);
+    m_rootSplitter->addWidget(m_eventsColumn);
     m_rootSplitter->addWidget(rightHost);
     m_rootSplitter->setChildrenCollapsible(false);
     m_mainSplitter->setChildrenCollapsible(false);
@@ -1141,12 +1165,12 @@ void MainWindow::buildWorkspace() {
     contentLayout->setContentsMargins(0, 0, 0, 0);
     contentLayout->addWidget(m_rootSplitter);
 
-    m_workspacePanels = {timingPanel, propertiesPanel, metadataPanel, verificationPanel};
+    m_workspacePanels = {timingPanel, propertiesPanel, metadataPanel, verificationPanel, m_fieldPresetsPanel};
     QAction* resetLayoutAction = m_windowMenu->actions().front();
     for (QWidget* panel : m_workspacePanels) {
         auto* action = new QAction(panel->windowTitle(), m_windowMenu);
         action->setCheckable(true);
-        action->setChecked(true);
+        action->setChecked(!panel->isHidden());
         m_windowMenu->insertAction(resetLayoutAction, action);
         connect(action, &QAction::triggered, panel, [this, panel](const bool visible) {
             panel->setVisible(visible);
@@ -1501,8 +1525,9 @@ void MainWindow::enterPlaytest() {
     m_editorMenuVisible = menuBar()->isVisible();
     m_editorToolsVisible = m_toolsToolbar->isVisible();
     m_playtestWindowState = saveState();
-    const std::array<QSplitter*, 4> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter};
-    for (int index = 0; index < 4; ++index) {
+    const std::array<QSplitter*, 5> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter,
+        m_eventsSplitter};
+    for (int index = 0; index < splitters.size(); ++index) {
         m_playtestSplitters[index] = splitters[index]->saveState();
     }
     m_viewerEditorParent = m_viewer->parentWidget();
@@ -1568,8 +1593,9 @@ void MainWindow::leavePlaytest() {
     restoreState(m_playtestWindowState);
     menuBar()->setVisible(m_editorMenuVisible);
     m_toolsToolbar->setVisible(m_editorToolsVisible);
-    const std::array<QSplitter*, 4> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter};
-    for (int index = 0; index < 4; ++index) {
+    const std::array<QSplitter*, 5> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter,
+        m_eventsSplitter};
+    for (int index = 0; index < splitters.size(); ++index) {
         splitters[index]->restoreState(m_playtestSplitters[index]);
     }
     if (m_pendingDuration > 0) {

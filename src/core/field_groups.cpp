@@ -13,7 +13,7 @@ namespace {
 
 constexpr qint64 kEndpointTimeToleranceMilliseconds = 1;
 constexpr double kEndpointEdgeTolerance = 0.0001;
-constexpr qint64 kMinimumFieldDurationMilliseconds = 1;
+constexpr qint64 kMinimumFieldDurationMilliseconds = 2;
 
 struct FieldEndpoint {
     qint64 timeMilliseconds = 0;

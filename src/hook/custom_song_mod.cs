@@ -30,6 +30,8 @@ public sealed class CustomSongMod : MelonMod
             Log.Warning("[CustomSong] project preparation failed; existing folders remain available: " + exception.Message);
         }
         HarmonyInstance.PatchAll(Assembly.GetExecutingAssembly());
+        CustomSongTitleLocalizationPatch.Install();
+        ChartEventBufferPatch.Install();
         NativeJacketResolverOverride.Install();
         Log.Msg("[CustomSong] loaded; waiting for game data to become ready.");
     }
@@ -57,8 +59,11 @@ public sealed class CustomSongMod : MelonMod
     }
 
     public override void OnDeinitializeMelon() {
+        ChartEventBufferPatch.Dispose();
+        CustomSongTitleLocalizationPatch.Dispose();
         CustomSongAudioOverride.Dispose();
         CustomPackJacketOverride.Dispose();
         CustomJacketOverride.Dispose();
+        NativeRuntimeOverrideBridge.Dispose();
     }
 }
