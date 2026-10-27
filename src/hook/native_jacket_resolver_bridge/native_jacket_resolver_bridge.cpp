@@ -158,28 +158,6 @@ static constexpr BYTE kLocalizedResolverCode[] = {
     0x03, 0x48, 0x8B, 0x01, 0xC3
 };
 
-static constexpr SIZE_T kEventAllocationOffset = 696;
-static constexpr BYTE kEventAllocationCode[] = {
-    0xBA, 0x00, 0x04, 0x00, 0x00, 0x48, 0x8B, 0x0D,
-    0xBC, 0x44, 0xC4, 0x02, 0xE8, 0x07, 0x66, 0xDD,
-    0xFF, 0x4C, 0x8B, 0x05, 0x90, 0xD5, 0xC3, 0x02,
-    0x48, 0x8D, 0x4C, 0x24, 0x20, 0x48, 0x8B, 0xD0,
-    0xE8, 0x03, 0x54, 0x6A, 0x00, 0x0F, 0x28, 0x44,
-    0x24, 0x20, 0xBA, 0x00, 0x10, 0x00, 0x00, 0x0F,
-    0x11, 0x46, 0x50
-};
-static constexpr SIZE_T kEventCoordinateAllocationOffset = 925;
-static constexpr BYTE kEventCoordinateAllocationCode[] = {
-    0xBA, 0xA0, 0x1F, 0x00, 0x00, 0x0F, 0x11, 0x86,
-    0x90, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x0D, 0xB0,
-    0xAA, 0xC3, 0x02, 0xE8, 0x1B, 0x65, 0xDD, 0xFF,
-    0x4C, 0x8B, 0x05, 0xCC, 0xC5, 0xC3, 0x02, 0x48,
-    0x8D, 0x4C, 0x24, 0x20, 0x48, 0x8B, 0xD0, 0xE8,
-    0x17, 0x53, 0x6A, 0x00, 0x0F, 0x28, 0x44, 0x24,
-    0x20, 0xBA, 0x80, 0x7E, 0x00, 0x00, 0x0F, 0x11,
-    0x86, 0xA0, 0x00, 0x00, 0x00
-};
-
 struct LocalizedDisplayStrings {
     void* english;
     void* japanese;
@@ -191,7 +169,6 @@ static_assert(sizeof(LocalizedDisplayStrings) == 40);
 
 static BYTE* g_localizedResolverTarget = nullptr;
 static BYTE g_localizedResolverOriginal[16]{};
-static BYTE* g_eventCapacityConstructor = nullptr;
 
 extern "C" __declspec(dllexport) void* __fastcall ResolveLocalizedDisplayString(
     const LocalizedDisplayStrings* values, int localization, void*) {
@@ -240,35 +217,4 @@ extern "C" __declspec(dllexport) BOOL __fastcall RemoveLocalizedStringResolver()
     return TRUE;
 }
 
-static BOOL setChartEventCapacities(BYTE* constructor, int eventCapacity, int coordinateCapacity) {
-    BYTE* eventOperand = constructor + kEventAllocationOffset + 1;
-    BYTE* coordinateOperand = constructor + kEventCoordinateAllocationOffset + 1;
-    constexpr SIZE_T span = kEventCoordinateAllocationOffset - kEventAllocationOffset + sizeof(int);
-    DWORD oldProtection = 0;
-    if (!VirtualProtect(eventOperand, span, PAGE_EXECUTE_READWRITE, &oldProtection)) return FALSE;
-    memcpy(eventOperand, &eventCapacity, sizeof(eventCapacity));
-    memcpy(coordinateOperand, &coordinateCapacity, sizeof(coordinateCapacity));
-    DWORD ignored = 0;
-    VirtualProtect(eventOperand, span, oldProtection, &ignored);
-    FlushInstructionCache(GetCurrentProcess(), eventOperand, span);
-    return TRUE;
-}
-
-extern "C" __declspec(dllexport) BOOL __fastcall InstallChartEventCapacityOverride(void* constructor, int capacity) {
-    if (constructor == nullptr || capacity != 100000) return FALSE;
-    BYTE* source = static_cast<BYTE*>(constructor);
-    if (g_eventCapacityConstructor != nullptr) return g_eventCapacityConstructor == source;
-    if (memcmp(source + kEventAllocationOffset, kEventAllocationCode, sizeof(kEventAllocationCode)) != 0
-        || memcmp(source + kEventCoordinateAllocationOffset, kEventCoordinateAllocationCode,
-            sizeof(kEventCoordinateAllocationCode)) != 0) return FALSE;
-    if (!setChartEventCapacities(source, capacity, capacity)) return FALSE;
-    g_eventCapacityConstructor = source;
-    return TRUE;
-}
-
-extern "C" __declspec(dllexport) BOOL __fastcall RemoveChartEventCapacityOverride() {
-    if (g_eventCapacityConstructor == nullptr) return TRUE;
-    if (!setChartEventCapacities(g_eventCapacityConstructor, 1024, 8096)) return FALSE;
-    g_eventCapacityConstructor = nullptr;
-    return TRUE;
-}
+#include "chart_event_capacity_override.h"

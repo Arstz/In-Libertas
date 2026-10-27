@@ -13,12 +13,28 @@ using UnityEngine.ResourceManagement.AsyncOperations;
 namespace InFalsusCustomSongHook;
 
 internal static class NativeMethodLookup {
-    internal static IntPtr ResolveChartStateConstructor() {
+    internal static IntPtr ResolveChartStateConstructor(out int recordFieldOffset, out int coordinateFieldOffset) {
         IntPtr owner = Il2CppClassPointerStore<_T>.NativeClassPtr;
         IntPtr methodInfo = IL2CPP.il2cpp_class_get_method_from_name(owner, ".ctor", 0);
         if (methodInfo == IntPtr.Zero || IL2CPP.il2cpp_method_get_class(methodInfo) != owner)
             throw new MissingMethodException("The native chart state constructor is unavailable.");
+        recordFieldOffset = RequireMemoryFieldOffset(owner, nameof(_T._zC));
+        coordinateFieldOffset = RequireMemoryFieldOffset(owner, nameof(_T._Bd));
         return GetEntryPoint(methodInfo);
+    }
+
+    private static int RequireMemoryFieldOffset(IntPtr owner, string name) {
+        IntPtr field = IL2CPP.il2cpp_class_get_field_from_name(owner, name);
+        if (field == IntPtr.Zero) throw new MissingFieldException("The native chart state field " + name + " is unavailable.");
+        IntPtr memoryClass = IL2CPP.il2cpp_class_from_type(IL2CPP.il2cpp_field_get_type(field));
+        uint alignment = 0;
+        int offset = checked((int)IL2CPP.il2cpp_field_get_offset(field));
+        if (memoryClass == IntPtr.Zero || !IL2CPP.il2cpp_class_is_valuetype(memoryClass)
+            || IL2CPP.il2cpp_class_value_size(memoryClass, ref alignment) != 2 * IntPtr.Size
+            || alignment != IntPtr.Size || offset < 2 * IntPtr.Size
+            || (long)offset + 2 * IntPtr.Size > IL2CPP.il2cpp_class_instance_size(owner))
+            throw new InvalidOperationException("The native chart state field " + name + " has an incompatible memory layout.");
+        return offset;
     }
 
     internal static IntPtr ResolveLocalizedStringResolver() {

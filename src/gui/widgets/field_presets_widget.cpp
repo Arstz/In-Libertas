@@ -4,6 +4,7 @@
 #include "gui/app/game_palette.h"
 #include "gui/state/editor_state.h"
 
+#include <QtCore/QHash>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -43,10 +44,16 @@ double ease(const std::uint32_t auxiliary, const bool right, const double progre
     return progress;
 }
 
-QPainterPath previewPath(const FieldPreset& preset) {
-    QPainterPath path;
-    path.setFillRule(Qt::WindingFill);
+QVector<QPainterPath> previewPaths(const FieldPreset& preset) {
+    QVector<QPainterPath> paths;
+    QHash<std::uint32_t, qsizetype> groups;
     for (const FieldPresetSegment& segment : preset.segments) {
+        if (!groups.contains(segment.group)) {
+            groups.insert(segment.group, paths.size());
+            paths.append(QPainterPath{});
+            paths.back().setFillRule(Qt::WindingFill);
+        }
+        QPainterPath& path = paths[groups.value(segment.group)];
         QPolygonF polygon;
         for (const bool right : {false, true}) {
             const double sign = right ? 0.5 : -0.5;
@@ -61,17 +68,23 @@ QPainterPath previewPath(const FieldPreset& preset) {
         path.addPolygon(polygon);
         path.closeSubpath();
     }
-    return path;
+    for (QPainterPath& path : paths) {
+        path = path.simplified();
+    }
+    return paths;
 }
 
 class PresetTile final : public QPushButton {
 public:
     PresetTile(const FieldPreset& preset, QWidget* parent)
-        : QPushButton(preset.name, parent), m_path(previewPath(preset)) {
+        : QPushButton(preset.name, parent), m_paths(previewPaths(preset)) {
         setFixedSize(132, 132);
         setToolTip(preset.name);
         setAccessibleName(preset.name);
         setCursor(Qt::PointingHandCursor);
+        for (const QPainterPath& path : m_paths) {
+            m_bounds = m_bounds.united(path.boundingRect());
+        }
     }
 
 protected:
@@ -84,15 +97,20 @@ protected:
         painter.drawRect(rect().adjusted(2, 2, -3, -3));
         const QRectF preview(23, 12, 86, 86);
         painter.fillRect(preview, palette::canvasBackground);
-        const QRectF bounds = m_path.boundingRect();
-        if (bounds.width() > 0.0 && bounds.height() > 0.0) {
+        if (m_bounds.width() > 0.0 && m_bounds.height() > 0.0) {
             const QRectF conveyor = preview.adjusted(3, 3, -3, -3);
             painter.save();
             painter.setClipRect(conveyor);
             painter.translate(conveyor.topLeft());
-            painter.scale(conveyor.width(), conveyor.height() / bounds.height());
-            painter.translate(0.0, -bounds.top());
-            painter.fillPath(m_path, palette::skyArea);
+            painter.scale(conveyor.width(), conveyor.height() / m_bounds.height());
+            painter.translate(0.0, -m_bounds.top());
+            QPen contour(palette::withAlpha(palette::skyArea.lighter(115), 220), 1.0);
+            contour.setCosmetic(true);
+            painter.setPen(contour);
+            painter.setBrush(palette::withAlpha(palette::skyArea, 130));
+            for (const QPainterPath& path : m_paths) {
+                painter.drawPath(path);
+            }
             painter.restore();
         }
         painter.setPen(isEnabled() ? palette::text : palette::textMuted);
@@ -101,7 +119,8 @@ protected:
     }
 
 private:
-    QPainterPath m_path;
+    QVector<QPainterPath> m_paths;
+    QRectF m_bounds;
 };
 
 }
@@ -255,31 +274,8 @@ void FieldPresetsWidget::loadPresets() {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     const QJsonDocument document = QJsonDocument::fromJson(settings.value(QStringLiteral("fields/presets_v2")).toByteArray());
     for (const QJsonValue& value : document.array()) {
-        const QJsonObject object = value.toObject();
-        FieldPreset preset{.name = object.value(QStringLiteral("name")).toString().trimmed()};
-        bool valid = !preset.name.isEmpty();
-        for (const QJsonValue& entry : object.value(QStringLiteral("segments")).toArray()) {
-            const QJsonArray values = entry.toArray();
-            if (values.size() != 7 || !std::all_of(values.cbegin(), values.cend(), [](const QJsonValue& number) {
-                    return number.isDouble() && std::isfinite(number.toDouble());
-                })) {
-                valid = false;
-                break;
-            }
-            FieldPresetSegment segment{.start = values.at(0).toDouble(), .end = values.at(1).toDouble(),
-                .startX = values.at(2).toDouble(), .endX = values.at(3).toDouble(),
-                .startWidth = values.at(4).toDouble(), .endWidth = values.at(5).toDouble()};
-            const double auxiliary = values.at(6).toDouble();
-            if (segment.start < 0.0 || segment.end > 1.0 || segment.end <= segment.start
-                || segment.startWidth < 0.0 || segment.endWidth < 0.0
-                || auxiliary < 0.0 || auxiliary > std::numeric_limits<std::uint32_t>::max()) {
-                valid = false;
-                break;
-            }
-            segment.auxiliary = static_cast<std::uint32_t>(auxiliary);
-            preset.segments.append(segment);
-        }
-        if (valid && !preset.segments.isEmpty()) {
+        FieldPreset preset = fieldPresetFromJson(value.toObject());
+        if (!preset.segments.isEmpty()) {
             m_presets.append(std::move(preset));
         }
     }
@@ -288,13 +284,7 @@ void FieldPresetsWidget::loadPresets() {
 void FieldPresetsWidget::savePresets() const {
     QJsonArray presets;
     for (int index = 1; index < m_presets.size(); ++index) {
-        const FieldPreset& preset = m_presets.at(index);
-        QJsonArray segments;
-        for (const FieldPresetSegment& segment : preset.segments) {
-            segments.append(QJsonArray{segment.start, segment.end, segment.startX, segment.endX,
-                segment.startWidth, segment.endWidth, static_cast<double>(segment.auxiliary)});
-        }
-        presets.append(QJsonObject{{QStringLiteral("name"), preset.name}, {QStringLiteral("segments"), segments}});
+        presets.append(fieldPresetToJson(m_presets.at(index)));
     }
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("fields/presets_v2"), QJsonDocument(presets).toJson(QJsonDocument::Compact));

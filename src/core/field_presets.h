@@ -2,6 +2,8 @@
 
 #include "core/chart_types.h"
 
+class QJsonObject;
+
 namespace infalsus {
 
 struct FieldPresetSegment {
@@ -12,6 +14,7 @@ struct FieldPresetSegment {
     double startWidth = 0.0;
     double endWidth = 0.0;
     std::uint32_t auxiliary = 0x24U;
+    std::uint32_t group = 0;
 };
 
 struct FieldPreset {
@@ -24,5 +27,7 @@ struct FieldPreset {
 [[nodiscard]] FieldPreset captureFieldPreset(const QVector<ChartNote>& fields, const QString& name);
 [[nodiscard]] QVector<ChartNote> instantiateFieldPreset(const FieldPreset& preset, qint64 startMilliseconds,
     qint64 durationMilliseconds);
+[[nodiscard]] QJsonObject fieldPresetToJson(const FieldPreset& preset);
+[[nodiscard]] FieldPreset fieldPresetFromJson(const QJsonObject& object);
 
 }

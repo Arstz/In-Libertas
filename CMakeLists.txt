@@ -297,6 +297,7 @@ if(BUILD_TESTING)
     qt_add_executable(field_groups_test
         tests/core/field_groups_test.cpp
         src/core/field_groups.cpp
+        src/core/field_presets.cpp
         src/core/chart_document.cpp
         src/core/chart_project.cpp
         src/core/project_document.cpp

@@ -1,5 +1,9 @@
 #include "core/field_presets.h"
 
+#include <QtCore/QHash>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonObject>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -51,7 +55,11 @@ FieldPreset captureFieldPreset(const QVector<ChartNote>& fields, const QString& 
         end = std::max(end, field.endMilliseconds);
     }
     const double duration = static_cast<double>(end - start);
+    QHash<std::uint64_t, std::uint32_t> groups;
     for (const ChartNote& field : fields) {
+        if (!groups.contains(field.groupId)) {
+            groups.insert(field.groupId, static_cast<std::uint32_t>(groups.size()));
+        }
         preset.segments.append({
             .start = (field.startMilliseconds - start) / duration,
             .end = (field.endMilliseconds - start) / duration,
@@ -60,6 +68,7 @@ FieldPreset captureFieldPreset(const QVector<ChartNote>& fields, const QString& 
             .startWidth = field.startWidth,
             .endWidth = field.endWidth,
             .auxiliary = field.auxiliary,
+            .group = groups.value(field.groupId),
         });
     }
     return preset;
@@ -90,7 +99,7 @@ QVector<ChartNote> instantiateFieldPreset(const FieldPreset& preset, const qint6
             ? circleWidthAt(start, durationMilliseconds) : segment.startWidth;
         const double endWidth = preset.circle
             ? circleWidthAt(end, durationMilliseconds) : segment.endWidth;
-        fields.append({.auxiliary = segment.auxiliary,
+        fields.append({.groupId = segment.group, .auxiliary = segment.auxiliary,
             .startMilliseconds = startMilliseconds + start, .endMilliseconds = startMilliseconds + end,
             .startX = segment.startX,
             .endX = segment.endX,
@@ -99,6 +108,48 @@ QVector<ChartNote> instantiateFieldPreset(const FieldPreset& preset, const qint6
         previousEnd = end;
     }
     return fields;
+}
+
+QJsonObject fieldPresetToJson(const FieldPreset& preset) {
+    QJsonArray segments;
+    for (const FieldPresetSegment& segment : preset.segments) {
+        segments.append(QJsonArray{segment.start, segment.end, segment.startX, segment.endX,
+            segment.startWidth, segment.endWidth, static_cast<double>(segment.auxiliary),
+            static_cast<double>(segment.group)});
+    }
+    return {{QStringLiteral("name"), preset.name}, {QStringLiteral("segments"), segments}};
+}
+
+FieldPreset fieldPresetFromJson(const QJsonObject& object) {
+    FieldPreset preset{.name = object.value(QStringLiteral("name")).toString().trimmed()};
+    if (preset.name.isEmpty()) {
+        return {};
+    }
+    for (const QJsonValue& entry : object.value(QStringLiteral("segments")).toArray()) {
+        const QJsonArray values = entry.toArray();
+        if ((values.size() != 7 && values.size() != 8)
+            || !std::all_of(values.cbegin(), values.cend(), [](const QJsonValue& number) {
+                return number.isDouble() && std::isfinite(number.toDouble());
+            })) {
+            return {};
+        }
+        const double auxiliary = values.at(6).toDouble();
+        const double group = values.size() == 8 ? values.at(7).toDouble() : 0.0;
+        FieldPresetSegment segment{.start = values.at(0).toDouble(), .end = values.at(1).toDouble(),
+            .startX = values.at(2).toDouble(), .endX = values.at(3).toDouble(),
+            .startWidth = values.at(4).toDouble(), .endWidth = values.at(5).toDouble()};
+        if (segment.start < 0.0 || segment.end > 1.0 || segment.end <= segment.start
+            || segment.startWidth < 0.0 || segment.endWidth < 0.0
+            || auxiliary < 0.0 || auxiliary > std::numeric_limits<std::uint32_t>::max()
+            || auxiliary != std::trunc(auxiliary)
+            || group < 0.0 || group > std::numeric_limits<std::uint32_t>::max() || group != std::trunc(group)) {
+            return {};
+        }
+        segment.auxiliary = static_cast<std::uint32_t>(auxiliary);
+        segment.group = static_cast<std::uint32_t>(group);
+        preset.segments.append(segment);
+    }
+    return preset;
 }
 
 }
