@@ -4,11 +4,11 @@ Please read this guide in full before using the editor, this would answer many o
 
 ## Main workflow
 
-Start by creating a new project file via `File->New project...` or importing spc with `File->Import SPC...`. When creating new project the editor will ask to provide a valid audio file and a jacket (2048x2048 is preferred), if importing instead, place them in the same folder as the spc itself (if you are importing spc, the files should be already named and arranged as needed and editor will recognize them). After you have created a project you can save it with `File->Save project...` and it will be written on disk as a .10no file (remember to save periodically), which you can then open later, a single instance of an editor can open one project file at the time. To export a project use `File->Export project...` and select CustomCharts folder in your game installation.
+Start by creating a new project file via `File->New project...` or importing spc with `File->Import SPC...`. When creating new project the editor will ask to provide a valid audio file and a jacket (2048x2048 is preferred), if importing instead, place them in the same folder as the spc itself (if you are importing spc, the files should be already named and arranged as needed and editor will recognize them). After you have created a project you can save it with `File->Save project...` and it will be written on disk as a .10no file (remember to save periodically), which you can then open later, a single instance of an editor can open one project file at the time. To export a project use `File->Export project...` and select the CustomCharts folder in your game installation.
 
 ## Handling files
 
-In Libertas primary format is .10no - a zlib container with json metadata and packed assets (audio - ogg vorbis, image - webp). .10no files are also the prefered method of distribution of the charts, to import .10no file use `File->Open project...` in the GUI, to load it ingame drop into `CustomCharts` folder in your game installation and hook will unpack it into a exported folder on next run. Unpacked charts will stay like this as folders, it is not advised to edit the exported files directly, better use the GUI and re-export if you dont know what you are doing. If you want to override the default Custom Charts pack jacket place packLarge (2048x512) and packSmall (1024x256) png or webp directly into `CustomCharts` folder.
+In Libertas primary format is .10no - a zlib container with json metadata and packed assets (audio - ogg vorbis, image - webp). .10no files are also the prefered method of distribution of the charts, to import .10no file use `File->Open project...` in the GUI, to load it ingame drop into `CustomCharts` folder in your game installation and hook will unpack it into an exported folder on next run. Unpacked charts will stay like this as folders, it is not advised to edit the exported files directly, better use the GUI and re-export if you dont know what you are doing. If you want to override the default Custom Charts pack jacket, place packLarge (2048x512) and packSmall (1024x256) png or webp directly into the `CustomCharts` folder.
 
 ## GUI
 
@@ -48,11 +48,15 @@ Also non-mandatory fields:
 
 ### 3D view
 
-A non-editable preview on the chart ingame will be played here, an adjustable speed parameter is also present at the titlebar. The view is mosly on par with the game, the only exception is the negative SV sections, the objects will render past the receptor but ingame will be destroyed instantly instead. A small card is displaying current difficulty, jacket and metadata. You can enter playtest by pressing `F5`, all playtest keybinds can be reconfigured from `Settings->Playtest`. While in playtest toggle autoplay with `Tab`.
+A non-editable preview on the chart ingame will be played here, an adjustable speed parameter is also present at the titlebar. The view is mostly on par with the game, the only exception is the negative SV sections, the objects will render past the receptor but ingame will be destroyed instantly instead. A small card is displaying current difficulty, jacket and metadata. You can enter playtest by pressing `F5`, all playtest keybinds can be reconfigured from `Settings->Playtest`. While in playtest toggle autoplay with `Tab`.
 
 ### Verification
 
 Here you are able to see non-blocking messages that would protect you against making accidental errors like placing 2 notes at the same time, or covering a note with a hold on top, these are only tips and you can ignore them if you know what you are doing. You can navigate to the timestamp by `double-click` on the relevant line.
+
+## Field presets
+
+Disabled by default, enable with `Window->Field presets`. Stores saved fields between sessions. To place a field `left click` on the tile with its preview, to save select field(s) in Flat view and press `Add current selection` button, to remove `right click` and `Delete preset` after. Fields are placed on current playhead position with duration set by `Time/Divisor` selector + value to the right.
 
 ## Actually placing hitObjects
 
@@ -65,7 +69,7 @@ The main way to place hitObjects is to use the Place tool:
 
 ## Editing existing hitObjects
 
-Last placed hitObject will be selected by default, indicated by an outline for ground hitObjects and handles for sky hitObjects. A Place tool works with 1 hitObject at the time, a `left click` on unselected hitObject will select it, then it could be moved if by dragging its body, hold endTime can be modified by dragging its end. Sky hitObject can be moved by the body as well as adjusting their size by the handles. Flicks have 2 handles, defining their size and X position, Fields have 2 pairs instead for their start and end segments, also 2 more on the sides which control the easing per side, either sine-in, sine-out or linear. A Fields can be snapped while moving to another one if they have approximately the same segment size, snapped Fields will share handles per segment. Fields have group ID - the game will batch the ones with same ID to threat as a single continuous region, edit their groupID directly via properties widget or group the selection with `Control + G`. With vertical grid enabled the handles will snap to nearby grid lines.
+Last placed hitObject will be selected by default, indicated by an outline for ground hitObjects and handles for sky hitObjects. A Place tool works with 1 hitObject at the time, a `left click` on unselected hitObject will select it, then it could be moved if by dragging its body, hold endTime can be modified by dragging its end. Sky hitObject can be moved by the body as well as adjusting their size by the handles. Flicks have 2 handles, defining their size and X position, Fields have 2 pairs instead for their start and end segments, also 2 more on the sides which control the easing per side, either sine-in, sine-out or linear. A Fields can be snapped while moving to another one if they have approximately the same segment size, snapped Fields will share handles per segment. Fields have group ID - the game will batch the ones with same ID to threat as a single continuous region, edit their groupID directly via properties widget or group the selection with `Control + G`. With the vertical grid enabled the handles will snap to nearby grid lines.
 
 ## Batch operations
 
