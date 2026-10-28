@@ -1620,6 +1620,14 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
         setCursor(Qt::ClosedHandCursor);
         return;
     }
+    const auto interactionCursor = [](const bool holdEnd, const FieldControlKind fieldControl) {
+        if (fieldControl == FieldControlKind::StartLeft || fieldControl == FieldControlKind::StartRight
+            || fieldControl == FieldControlKind::EndLeft || fieldControl == FieldControlKind::EndRight
+            || fieldControl == FieldControlKind::LeftSide || fieldControl == FieldControlKind::RightSide) {
+            return Qt::SizeHorCursor;
+        }
+        return holdEnd || fieldControl != FieldControlKind::None ? Qt::SizeVerCursor : Qt::SizeAllCursor;
+    };
     switch (m_tool) {
     case EditorTool::Select:
         setCursor(Qt::CrossCursor);
@@ -1630,8 +1638,7 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
     case EditorTool::Place:
         if (m_draggingHitObject) {
             if (!m_selectionOnlyClick && (m_dragOriginal.kind == NoteKind::Hold || m_dragOriginal.kind == NoteKind::Sky)) {
-                setCursor(m_draggingHoldEnd || m_dragFieldControl.kind != FieldControlKind::None
-                    ? Qt::SizeVerCursor : Qt::SizeAllCursor);
+                setCursor(interactionCursor(m_draggingHoldEnd, m_dragFieldControl.kind));
                 break;
             }
         } else if (!m_placingHitObject && groundArea().contains(position)
@@ -1640,8 +1647,7 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
             if (target.hitObjectIndex >= 0 && m_selectedHitObjectIndexes.contains(target.hitObjectIndex)) {
                 const NoteKind kind = m_chart.notes.at(target.hitObjectIndex).kind;
                 if (kind == NoteKind::Hold || kind == NoteKind::Sky) {
-                    setCursor(target.holdEnd || target.fieldControl.kind != FieldControlKind::None
-                        ? Qt::SizeVerCursor : Qt::SizeAllCursor);
+                    setCursor(interactionCursor(target.holdEnd, target.fieldControl.kind));
                     break;
                 }
             }
