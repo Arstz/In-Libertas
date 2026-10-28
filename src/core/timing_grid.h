@@ -139,7 +139,7 @@ namespace detail {
 
 [[nodiscard]] inline bool isValidDivisorTime(const QVector<TimingPoint>& timingPoints,
     const qint64 timestampMilliseconds) {
-    return !timingPoints.isEmpty() && nearestValidDivisorTime(timingPoints, timestampMilliseconds) == timestampMilliseconds;
+    return unroundedValidDivisorTime(timingPoints, timestampMilliseconds).has_value();
 }
 
 } // namespace infalsus

@@ -63,6 +63,7 @@ private:
     [[nodiscard]] double noteOpacity(qint64 chartTimeMilliseconds) const;
     [[nodiscard]] double scrollCoordinateAt(double chartTimeMilliseconds) const;
     [[nodiscard]] double scrollDistanceTo(qint64 chartTimeMilliseconds) const;
+    [[nodiscard]] ScrollRange scrollRange(qint64 startMilliseconds, qint64 endMilliseconds) const;
     [[nodiscard]] bool isVisible(qint64 startMilliseconds, qint64 endMilliseconds) const;
     [[nodiscard]] QPointF skyPointAt(double coordinate, qint64 chartTimeMilliseconds) const;
     [[nodiscard]] double easingFor(std::uint32_t auxiliary, bool rightSide, double progress) const;
@@ -93,6 +94,7 @@ private:
     QVector<infalsus::LaneEvent> m_laneEvents;
     QVector<infalsus::SpeedEvent> m_speedEvents;
     QVector<ScrollPoint> m_scrollPoints{{0, 0.0, 1.0}};
+    QVector<ScrollRange> m_scrollRangeTree{{0.0, 0.0}, {0.0, 0.0}};
     std::array<QVector<int>, 4> m_noteIndexes;
     QVector<ScrollRange> m_noteScrollRanges;
     QVector<MeasureMarker> m_measureMarkers;

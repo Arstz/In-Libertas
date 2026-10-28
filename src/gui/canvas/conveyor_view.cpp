@@ -382,6 +382,17 @@ void ConveyorView::setSpeedEvents(QVector<infalsus::SpeedEvent> speedEvents) {
             m_scrollPoints.append({event.timeMilliseconds, coordinate, event.speed});
         }
     }
+    const qsizetype count = m_scrollPoints.size();
+    m_scrollRangeTree.resize(count * 2);
+    for (qsizetype index = 0; index < count; ++index) {
+        const double coordinate = m_scrollPoints.at(index).coordinate;
+        m_scrollRangeTree[count + index] = {coordinate, coordinate};
+    }
+    for (qsizetype index = count - 1; index > 0; --index) {
+        const ScrollRange& left = m_scrollRangeTree.at(index * 2);
+        const ScrollRange& right = m_scrollRangeTree.at(index * 2 + 1);
+        m_scrollRangeTree[index] = {std::min(left.minimum, right.minimum), std::max(left.maximum, right.maximum)};
+    }
     m_noteIndexesDirty = true;
     m_measureMarkersDirty = true;
     update();
@@ -910,27 +921,37 @@ bool ConveyorView::isVisible(const qint64 startMilliseconds, const qint64 endMil
         return false;
     }
     const double approachDistance = approachDistanceMilliseconds();
-    QVector<qint64> breakpoints{std::max(startMilliseconds, m_playbackPositionMilliseconds), endMilliseconds};
-    for (const infalsus::SpeedEvent& event : m_speedEvents) {
-        if (event.timeMilliseconds > breakpoints.first() && event.timeMilliseconds < endMilliseconds) {
-            breakpoints.append(event.timeMilliseconds);
-        }
-    }
-    std::sort(breakpoints.begin(), breakpoints.end());
-    breakpoints.erase(std::unique(breakpoints.begin(), breakpoints.end()), breakpoints.end());
+    const ScrollRange range = scrollRange(std::max(startMilliseconds, m_playbackPositionMilliseconds), endMilliseconds);
+    return range.minimum - m_frameScrollCoordinate <= approachDistance
+        && range.maximum - m_frameScrollCoordinate >= -approachDistance;
+}
 
-    if (breakpoints.size() == 1) {
-        return std::abs(scrollDistanceTo(breakpoints.constFirst())) <= approachDistance;
-    }
-
-    for (int index = 1; index < breakpoints.size(); ++index) {
-        const double first = scrollDistanceTo(breakpoints.at(index - 1));
-        const double second = scrollDistanceTo(breakpoints.at(index));
-        if (std::min(first, second) <= approachDistance && std::max(first, second) >= -approachDistance) {
-            return true;
+ConveyorView::ScrollRange ConveyorView::scrollRange(const qint64 startMilliseconds, const qint64 endMilliseconds) const {
+    const double first = scrollCoordinateAt(startMilliseconds);
+    const double last = scrollCoordinateAt(endMilliseconds);
+    ScrollRange range{std::min(first, last), std::max(first, last)};
+    const auto begin = std::upper_bound(m_scrollPoints.cbegin(), m_scrollPoints.cend(), startMilliseconds,
+        [](const double time, const ScrollPoint& point) { return time < point.time; });
+    const auto end = std::lower_bound(begin, m_scrollPoints.cend(), endMilliseconds,
+        [](const ScrollPoint& point, const double time) { return point.time < time; });
+    qsizetype left = m_scrollPoints.size() + (begin - m_scrollPoints.cbegin());
+    qsizetype right = m_scrollPoints.size() + (end - m_scrollPoints.cbegin());
+    const auto include = [&](const qsizetype index) {
+        const ScrollRange& node = m_scrollRangeTree.at(index);
+        range.minimum = std::min(range.minimum, node.minimum);
+        range.maximum = std::max(range.maximum, node.maximum);
+    };
+    while (left < right) {
+        if (left & 1) {
+            include(left++);
         }
+        if (right & 1) {
+            include(--right);
+        }
+        left /= 2;
+        right /= 2;
     }
-    return false;
+    return range;
 }
 
 QPointF ConveyorView::skyPointAt(const double coordinate, const qint64 chartTimeMilliseconds) const {
@@ -1050,17 +1071,9 @@ void ConveyorView::ensureMeasureMarkers() {
     }
     chartEnd += initialMeasureDuration * 10.0;
     const auto speedBefore = [this](const double time) {
-        double speed = 1.0;
-        for (const infalsus::SpeedEvent& event : m_speedEvents) {
-            if (event.timeMilliseconds >= time && event.timeMilliseconds > 0) {
-                break;
-            }
-            if (event.timeMilliseconds >= 0 && std::isfinite(event.speed)) {
-                speed = event.speed;
-            }
-        }
-
-        return speed;
+        const auto point = std::lower_bound(m_scrollPoints.cbegin(), m_scrollPoints.cend(), time,
+            [](const ScrollPoint& candidate, const double timestamp) { return candidate.time < timestamp; });
+        return point == m_scrollPoints.cbegin() ? point->speed : std::prev(point)->speed;
     };
     if (std::isfinite(initialMeasureDuration) && initialMeasureDuration > 0.0 && speedBefore(0.0) >= 0.0) {
         for (int measureIndex = -9; measureIndex <= 0; ++measureIndex) {
@@ -1319,16 +1332,7 @@ void ConveyorView::ensureNoteIndexes() {
         }
         const qint64 end = note.kind == NoteKind::Tap ? note.startMilliseconds
             : note.endMilliseconds;
-        const double first = scrollCoordinateAt(note.startMilliseconds);
-        const double last = scrollCoordinateAt(end);
-        ScrollRange range{std::min(first, last), std::max(first, last)};
-        auto point = std::upper_bound(m_scrollPoints.cbegin(), m_scrollPoints.cend(), note.startMilliseconds,
-            [](const double time, const ScrollPoint& candidate) { return time < candidate.time; });
-        for (; point != m_scrollPoints.cend() && point->time < end; ++point) {
-            range.minimum = std::min(range.minimum, point->coordinate);
-            range.maximum = std::max(range.maximum, point->coordinate);
-        }
-        m_noteScrollRanges[index] = range;
+        m_noteScrollRanges[index] = scrollRange(note.startMilliseconds, end);
     }
     for (auto& indexes : m_noteIndexes) {
         std::stable_sort(indexes.begin(), indexes.end(), [this](const int firstIndex, const int secondIndex) {

@@ -3,6 +3,7 @@
 #include "core/chart_project.h"
 
 #include <QtWidgets/QWidget>
+#include <QtGui/QPixmap>
 
 class QMouseEvent;
 class QPainter;
@@ -33,11 +34,14 @@ protected:
 
 private:
     [[nodiscard]] qint64 positionForX(double x) const;
+    void ensureEventMarkers();
 
     qint64 m_durationMilliseconds = 1;
     qint64 m_playbackPositionMilliseconds = 0;
     QVector<TimingPoint> m_timingPoints;
     QVector<SpeedEvent> m_speedEvents;
+    QPixmap m_eventMarkers;
+    bool m_eventMarkersDirty = true;
     bool m_dragging = false;
 };
 

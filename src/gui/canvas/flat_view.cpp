@@ -662,13 +662,10 @@ qint64 FlatView::snappedTimeAtY(const double y) const {
             static_cast<double>(time) / m_gridDurationMilliseconds)) * m_gridDurationMilliseconds;
     }
 
-    const TimingPoint* timingPoint = &m_timingPoints.front();
-    for (const TimingPoint& candidate : m_timingPoints) {
-        if (candidate.timeMilliseconds > time) {
-            break;
-        }
-        timingPoint = &candidate;
-    }
+    const auto nextPoint = std::upper_bound(m_timingPoints.cbegin(), m_timingPoints.cend(), time,
+        [](const qint64 timestamp, const TimingPoint& point) { return timestamp < point.timeMilliseconds; });
+    const TimingPoint* timingPoint = nextPoint == m_timingPoints.cbegin()
+        ? &m_timingPoints.front() : &*std::prev(nextPoint);
     const double beatDurationMilliseconds = 60000.0 / timingPoint->beatsPerMinute;
     const double measureDurationMilliseconds = beatDurationMilliseconds
         * timingPoint->timeSignatureNumerator * 4.0
@@ -1620,8 +1617,10 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
         setCursor(Qt::ClosedHandCursor);
         return;
     }
-    const auto interactionCursor = [](const bool holdEnd, const FieldControlKind fieldControl) {
-        if (fieldControl == FieldControlKind::StartLeft || fieldControl == FieldControlKind::StartRight
+    const auto interactionCursor = [](const bool holdEnd, const FieldControlKind fieldControl,
+                                      const FlickControlKind flickControl) {
+        if (flickControl != FlickControlKind::None
+            || fieldControl == FieldControlKind::StartLeft || fieldControl == FieldControlKind::StartRight
             || fieldControl == FieldControlKind::EndLeft || fieldControl == FieldControlKind::EndRight
             || fieldControl == FieldControlKind::LeftSide || fieldControl == FieldControlKind::RightSide) {
             return Qt::SizeHorCursor;
@@ -1637,8 +1636,9 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
         break;
     case EditorTool::Place:
         if (m_draggingHitObject) {
-            if (!m_selectionOnlyClick && (m_dragOriginal.kind == NoteKind::Hold || m_dragOriginal.kind == NoteKind::Sky)) {
-                setCursor(interactionCursor(m_draggingHoldEnd, m_dragFieldControl.kind));
+            if (!m_selectionOnlyClick && (m_dragOriginal.kind == NoteKind::Hold || m_dragOriginal.kind == NoteKind::Sky
+                || m_dragFlickControl.kind != FlickControlKind::None)) {
+                setCursor(interactionCursor(m_draggingHoldEnd, m_dragFieldControl.kind, m_dragFlickControl.kind));
                 break;
             }
         } else if (!m_placingHitObject && groundArea().contains(position)
@@ -1646,8 +1646,8 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
             const PlaceTarget target = placeTargetAt(position, modifiers);
             if (target.hitObjectIndex >= 0 && m_selectedHitObjectIndexes.contains(target.hitObjectIndex)) {
                 const NoteKind kind = m_chart.notes.at(target.hitObjectIndex).kind;
-                if (kind == NoteKind::Hold || kind == NoteKind::Sky) {
-                    setCursor(interactionCursor(target.holdEnd, target.fieldControl.kind));
+                if (kind == NoteKind::Hold || kind == NoteKind::Sky || target.flickControl.kind != FlickControlKind::None) {
+                    setCursor(interactionCursor(target.holdEnd, target.fieldControl.kind, target.flickControl.kind));
                     break;
                 }
             }
@@ -2209,18 +2209,18 @@ void FlatView::drawWaveformEvents(QPainter& painter, const QRectF& area) const {
     const qint64 visibleStart = timeAtY(area.bottom());
     const qint64 visibleEnd = timeAtY(area.top());
 
-    for (const TimingPoint& point : m_timingPoints) {
-        if (point.timeMilliseconds < visibleStart || point.timeMilliseconds > visibleEnd) {
-            continue;
-        }
+    auto timing = std::lower_bound(m_timingPoints.cbegin(), m_timingPoints.cend(), visibleStart,
+        [](const TimingPoint& point, const qint64 time) { return point.timeMilliseconds < time; });
+    for (; timing != m_timingPoints.cend() && timing->timeMilliseconds <= visibleEnd; ++timing) {
+        const TimingPoint& point = *timing;
         labels[point.timeMilliseconds].append({QStringLiteral("%1 | %2/%3")
             .arg(point.beatsPerMinute, 0, 'g', kWaveformEventValuePrecision)
             .arg(point.timeSignatureNumerator).arg(point.timeSignatureDenominator), palette::outerNoteRed});
     }
-    for (const SpeedEvent& event : m_speedEvents) {
-        if (event.timeMilliseconds < visibleStart || event.timeMilliseconds > visibleEnd) {
-            continue;
-        }
+    auto speed = std::lower_bound(m_speedEvents.cbegin(), m_speedEvents.cend(), visibleStart,
+        [](const SpeedEvent& event, const qint64 time) { return event.timeMilliseconds < time; });
+    for (; speed != m_speedEvents.cend() && speed->timeMilliseconds <= visibleEnd; ++speed) {
+        const SpeedEvent& event = *speed;
         labels[event.timeMilliseconds].append({QString::number(event.speed, 'g', kWaveformEventValuePrecision),
             palette::guideGreen});
     }
@@ -2245,9 +2245,15 @@ void FlatView::drawDividers(QPainter& painter, const QRectF& area) const {
 
     const qint64 visibleStart = timeAtY(area.bottom());
     const qint64 visibleEnd = timeAtY(area.top());
-    for (int pointIndex = 0; pointIndex < m_timingPoints.size(); ++pointIndex) {
+    const auto nextPoint = std::upper_bound(m_timingPoints.cbegin(), m_timingPoints.cend(), visibleStart,
+        [](const qint64 time, const TimingPoint& point) { return time < point.timeMilliseconds; });
+    const int firstPoint = std::max(0, static_cast<int>(nextPoint - m_timingPoints.cbegin()) - 1);
+    for (int pointIndex = firstPoint; pointIndex < m_timingPoints.size(); ++pointIndex) {
         const TimingPoint& point = m_timingPoints.at(pointIndex);
         const qint64 sectionStart = point.timeMilliseconds;
+        if (sectionStart > visibleEnd) {
+            break;
+        }
         const qint64 sectionEnd = pointIndex + 1 < m_timingPoints.size()
             ? m_timingPoints.at(pointIndex + 1).timeMilliseconds
             : std::max(m_chart.durationMilliseconds, visibleEnd);

@@ -4,12 +4,11 @@
 
 #include <QtWidgets/QWidget>
 
-class QScrollArea;
-class QVBoxLayout;
+class QListView;
 
 namespace infalsus::gui {
 
-class EventRow;
+class EventsModel;
 
 class EventsWidget final : public QWidget {
     Q_OBJECT
@@ -39,15 +38,14 @@ signals:
 
 private:
     void setSelected(EntryType type, int index);
-    void setRowsSelected(const QSet<EventRow*>& rows, EventRow* anchor);
-    void activateRow(EventRow* row, Qt::KeyboardModifiers modifiers, bool seek);
+    void setRowsSelected(const QSet<int>& rows, int anchor);
+    void activateRow(int row, Qt::KeyboardModifiers modifiers, bool seek);
     void emitCurrentSelection(bool seek);
 
-    QScrollArea* m_points = nullptr;
-    QVBoxLayout* m_rowsLayout = nullptr;
-    QVector<EventRow*> m_rows;
-    QSet<EventRow*> m_selectedRows;
-    EventRow* m_selectionAnchor = nullptr;
+    QListView* m_points = nullptr;
+    EventsModel* m_model = nullptr;
+    QSet<int> m_selectedRows;
+    int m_selectionAnchor = -1;
 };
 
 } // namespace infalsus::gui

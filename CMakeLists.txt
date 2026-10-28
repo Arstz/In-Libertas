@@ -172,6 +172,19 @@ add_custom_command(TARGET InLibertas POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/event_performance_test.cpp")
+        qt_add_executable(event_performance_test
+            tests/gui/event_performance_test.cpp
+            src/gui/widgets/timing_widget.h
+            src/gui/widgets/timeline_widget.h
+        )
+        target_include_directories(event_performance_test PRIVATE src)
+        target_link_libraries(event_performance_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+        add_dependencies(event_performance_test InLibertas)
+        add_test(NAME event_performance COMMAND event_performance_test -platform offscreen)
+        set_tests_properties(event_performance PROPERTIES ENVIRONMENT
+            "QT_QPA_PLATFORM_PLUGIN_PATH=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>Qt6/plugins/platforms")
+    endif()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/core/field_presets_test.cpp")
         qt_add_executable(field_presets_test tests/core/field_presets_test.cpp
             src/core/field_presets.cpp src/core/chart_document.cpp src/core/chart_project.cpp)

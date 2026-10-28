@@ -17,6 +17,7 @@ TimelineWidget::TimelineWidget(QWidget* parent)
 
 void TimelineWidget::setDuration(const qint64 durationMilliseconds) {
     m_durationMilliseconds = std::max(durationMilliseconds, qint64(1));
+    m_eventMarkersDirty = true;
     update();
 }
 
@@ -27,11 +28,13 @@ void TimelineWidget::setPlaybackPosition(const qint64 positionMilliseconds) {
 
 void TimelineWidget::setTimingPoints(QVector<TimingPoint> timingPoints) {
     m_timingPoints = std::move(timingPoints);
+    m_eventMarkersDirty = true;
     update();
 }
 
 void TimelineWidget::setSpeedEvents(QVector<SpeedEvent> speedEvents) {
     m_speedEvents = std::move(speedEvents);
+    m_eventMarkersDirty = true;
     update();
 }
 
@@ -65,6 +68,27 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
     painter.setBrush(palette::gridLine);
     painter.drawRoundedRect(track, 4.0, 4.0);
 
+    ensureEventMarkers();
+    painter.drawPixmap(0, 0, m_eventMarkers);
+
+    const double playheadProgress = static_cast<double>(m_playbackPositionMilliseconds) / m_durationMilliseconds;
+    const double playheadX = track.left() + std::clamp(playheadProgress, 0.0, 1.0) * track.width();
+    painter.setPen(QPen(palette::text, 2.0));
+    painter.drawLine(QPointF(playheadX, 2.0), QPointF(playheadX, height() - 2.0));
+}
+
+void TimelineWidget::ensureEventMarkers() {
+    const qreal pixelRatio = devicePixelRatioF();
+    const QSize markerSize = size() * pixelRatio;
+    if (!m_eventMarkersDirty && m_eventMarkers.size() == markerSize
+        && m_eventMarkers.devicePixelRatio() == pixelRatio) {
+        return;
+    }
+    m_eventMarkers = QPixmap(markerSize);
+    m_eventMarkers.setDevicePixelRatio(pixelRatio);
+    m_eventMarkers.fill(Qt::transparent);
+    QPainter painter(&m_eventMarkers);
+    const QRectF track = rect().adjusted(8.0, 11.0, -8.0, -11.0);
     painter.setPen(QPen(palette::outerNoteRed, 2.0));
     for (const TimingPoint& point : m_timingPoints) {
         const double progress = static_cast<double>(point.timeMilliseconds) / m_durationMilliseconds;
@@ -82,10 +106,7 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
         painter.drawRect(QRectF(x - 2.0, track.center().y(), 4.0, track.height() * 0.5));
     }
 
-    const double playheadProgress = static_cast<double>(m_playbackPositionMilliseconds) / m_durationMilliseconds;
-    const double playheadX = track.left() + std::clamp(playheadProgress, 0.0, 1.0) * track.width();
-    painter.setPen(QPen(palette::text, 2.0));
-    painter.drawLine(QPointF(playheadX, 2.0), QPointF(playheadX, height() - 2.0));
+    m_eventMarkersDirty = false;
 }
 
 qint64 TimelineWidget::positionForX(const double x) const {

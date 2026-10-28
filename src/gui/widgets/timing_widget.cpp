@@ -1,15 +1,20 @@
 #include "gui/widgets/timing_widget.h"
 
+#include <QtCore/QAbstractListModel>
+#include <QtCore/QItemSelectionModel>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QPainter>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QListView>
 #include <QtWidgets/QPushButton>
-#include <QtWidgets/QScrollArea>
+#include <QtWidgets/QStyledItemDelegate>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 
 #ifdef Q_OS_WIN
@@ -20,6 +25,8 @@
 namespace infalsus::gui {
 
 namespace {
+
+constexpr int kRowHeight = 26;
 
 [[nodiscard]] bool isControlHeld(const Qt::KeyboardModifiers modifiers) {
     if ((modifiers & Qt::ControlModifier) != 0
@@ -61,64 +68,148 @@ void addField(QHBoxLayout* layout, QWidget* parent, const QString& text, const i
     layout->addWidget(label, stretch);
 }
 
-} // namespace
-
-class EventRow final : public QWidget {
+class EventsListView final : public QListView {
 public:
-    using ActivateCallback = std::function<void(EventRow*, Qt::KeyboardModifiers, bool)>;
+    using ActivateCallback = std::function<void(int, Qt::KeyboardModifiers, bool)>;
 
-    EventRow(const EventsWidget::EntryType type, const int index, const QStringList& fields,
-        ActivateCallback activated, QWidget* parent)
-        : QWidget(parent)
-        , m_type(type)
-        , m_index(index)
-        , m_activated(std::move(activated)) {
-        auto* layout = new QHBoxLayout(this);
-        layout->setContentsMargins(6, 1, 6, 1);
-        layout->setSpacing(4);
-        addField(layout, this, fields.value(0), 3);
-        addDivider(layout, this);
-        addField(layout, this, fields.value(1), 4);
-        addDivider(layout, this);
-        addField(layout, this, fields.value(2), 3);
-        setMinimumHeight(26);
-        setAutoFillBackground(true);
-        setSelected(false);
-    }
-
-    [[nodiscard]] EventsWidget::EntryType type() const { return m_type; }
-    [[nodiscard]] int index() const { return m_index; }
-
-    void setSelected(const bool selected) {
-        QPalette rowPalette = palette();
-        rowPalette.setColor(QPalette::Window, rowPalette.color(selected ? QPalette::Highlight : QPalette::Base));
-        rowPalette.setColor(QPalette::WindowText, rowPalette.color(selected ? QPalette::HighlightedText : QPalette::Text));
-        setPalette(rowPalette);
-    }
+    EventsListView(ActivateCallback activated, QWidget* parent)
+        : QListView(parent), m_activated(std::move(activated)) {}
 
 protected:
     void mousePressEvent(QMouseEvent* event) override {
-        if (event->button() == Qt::LeftButton && m_activated) {
-            m_activated(this, event->modifiers(), false);
+        if (event->button() == Qt::LeftButton) {
+            m_activated(indexAt(event->position().toPoint()).row(), event->modifiers(), false);
             event->accept();
             return;
         }
-        QWidget::mousePressEvent(event);
+        QListView::mousePressEvent(event);
     }
 
     void mouseDoubleClickEvent(QMouseEvent* event) override {
-        if (event->button() == Qt::LeftButton && m_activated) {
-            m_activated(this, event->modifiers(), true);
+        if (event->button() == Qt::LeftButton) {
+            m_activated(indexAt(event->position().toPoint()).row(), event->modifiers(), true);
             event->accept();
             return;
         }
-        QWidget::mouseDoubleClickEvent(event);
+        QListView::mouseDoubleClickEvent(event);
     }
 
 private:
-    EventsWidget::EntryType m_type;
-    int m_index = -1;
     ActivateCallback m_activated;
+};
+
+class EventDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
+        return {0, kRowHeight};
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        const bool selected = (option.state & QStyle::State_Selected) != 0;
+        const QStringList fields = index.data(Qt::UserRole).toStringList();
+        painter->save();
+        painter->setClipRect(option.rect);
+        painter->fillRect(option.rect, option.palette.brush(selected ? QPalette::Highlight : QPalette::Base));
+        painter->setFont(option.font);
+        const QRect contents = option.rect.adjusted(6, 1, -6, -1);
+        const int fieldWidth = std::max(0, contents.width() - 20);
+        const std::array<int, 3> widths{fieldWidth * 3 / 10, fieldWidth * 4 / 10,
+            fieldWidth - fieldWidth * 3 / 10 - fieldWidth * 4 / 10};
+        int left = contents.left();
+        for (int field = 0; field < 3; ++field) {
+            painter->setPen(option.palette.color(selected ? QPalette::HighlightedText : QPalette::Text));
+            const QRect bounds(left, contents.top(), widths[field], contents.height());
+            painter->drawText(bounds, Qt::AlignLeft | Qt::AlignVCenter,
+                option.fontMetrics.elidedText(fields.value(field), Qt::ElideRight, bounds.width()));
+            left += widths[field];
+            if (field < 2) {
+                painter->setPen(option.palette.color(QPalette::Mid));
+                painter->drawLine(left + 4, contents.top(), left + 4, contents.bottom());
+                left += 10;
+            }
+        }
+        painter->restore();
+    }
+};
+
+} // namespace
+
+class EventsModel final : public QAbstractListModel {
+public:
+    struct Entry { EventsWidget::EntryType type; int index; qint64 timeMilliseconds; };
+
+    using QAbstractListModel::QAbstractListModel;
+
+    int rowCount(const QModelIndex& parent = {}) const override {
+        return parent.isValid() ? 0 : static_cast<int>(m_entries.size());
+    }
+
+    QVariant data(const QModelIndex& index, const int role) const override {
+        if (!index.isValid() || index.row() < 0 || index.row() >= rowCount()
+            || (role != Qt::DisplayRole && role != Qt::UserRole)) {
+            return {};
+        }
+        const Entry& entry = m_entries.at(index.row());
+        QStringList fields;
+        if (entry.type == EventsWidget::EntryType::Timing) {
+            const TimingPoint& point = m_timingEvents.at(entry.index);
+            fields = {QStringLiteral("%1 ms").arg(point.timeMilliseconds),
+                QStringLiteral("%1 BPM").arg(point.beatsPerMinute, 0, 'f', 2),
+                QStringLiteral("%1/%2").arg(point.timeSignatureNumerator).arg(point.timeSignatureDenominator)};
+        } else if (entry.type == EventsWidget::EntryType::Lane) {
+            const LaneEvent& event = m_laneEvents.at(entry.index);
+            fields = {QStringLiteral("%1 ms").arg(event.timeMilliseconds), QStringLiteral("Lane %1").arg(event.lane),
+                event.enabled ? QStringLiteral("ON") : QStringLiteral("OFF")};
+        } else {
+            const SpeedEvent& event = m_speedEvents.at(entry.index);
+            fields = {QStringLiteral("%1 ms").arg(event.timeMilliseconds), QStringLiteral("SV"),
+                QStringLiteral("%1x").arg(event.speed, 0, 'f', 3)};
+        }
+        return role == Qt::UserRole ? QVariant(fields) : QVariant(fields.join(QStringLiteral(" | ")));
+    }
+
+    void setEvents(const QVector<TimingPoint>& timingEvents, const QVector<LaneEvent>& laneEvents,
+        const QVector<SpeedEvent>& speedEvents) {
+        beginResetModel();
+        m_timingEvents = timingEvents;
+        m_laneEvents = laneEvents;
+        m_speedEvents = speedEvents;
+        m_entries.clear();
+        m_entries.reserve(timingEvents.size() + laneEvents.size() + speedEvents.size());
+        const auto append = [this](const auto& events, const EventsWidget::EntryType type) {
+            m_rowsByType[static_cast<int>(type)].resize(events.size());
+            for (int index = 0; index < events.size(); ++index) {
+                m_entries.append({type, index, events.at(index).timeMilliseconds});
+            }
+        };
+        append(timingEvents, EventsWidget::EntryType::Timing);
+        append(laneEvents, EventsWidget::EntryType::Lane);
+        append(speedEvents, EventsWidget::EntryType::Speed);
+        std::stable_sort(m_entries.begin(), m_entries.end(), [](const Entry& first, const Entry& second) {
+            return first.timeMilliseconds < second.timeMilliseconds;
+        });
+        for (int row = 0; row < m_entries.size(); ++row) {
+            const Entry& entry = m_entries.at(row);
+            m_rowsByType[static_cast<int>(entry.type)][entry.index] = row;
+        }
+        endResetModel();
+    }
+
+    const Entry& entry(const int row) const { return m_entries.at(row); }
+
+    int rowFor(const EventsWidget::EntryType type, const int index) const {
+        const auto& rows = m_rowsByType[static_cast<int>(type)];
+        return index >= 0 && index < rows.size() ? rows.at(index) : -1;
+    }
+
+private:
+    QVector<Entry> m_entries;
+    std::array<QVector<int>, 3> m_rowsByType;
+    QVector<TimingPoint> m_timingEvents;
+    QVector<LaneEvent> m_laneEvents;
+    QVector<SpeedEvent> m_speedEvents;
 };
 
 EventsWidget::EventsWidget(QWidget* parent)
@@ -137,15 +228,18 @@ EventsWidget::EventsWidget(QWidget* parent)
     addDivider(headerLayout, header);
     addField(headerLayout, header, QStringLiteral("Value"), 3);
 
-    m_points = new QScrollArea(this);
-    m_points->setWidgetResizable(true);
+    m_model = new EventsModel(this);
+    m_points = new EventsListView([this](const int row, const Qt::KeyboardModifiers modifiers, const bool seek) {
+        activateRow(row, modifiers, seek);
+    }, this);
+    m_points->setModel(m_model);
+    m_points->setItemDelegate(new EventDelegate(m_points));
+    m_points->setUniformItemSizes(true);
+    m_points->setSelectionMode(QAbstractItemView::NoSelection);
+    m_points->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_points->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_points->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_points->setFrameShape(QFrame::StyledPanel);
-    auto* rowsHost = new QWidget(m_points);
-    m_rowsLayout = new QVBoxLayout(rowsHost);
-    m_rowsLayout->setContentsMargins(0, 0, 0, 0);
-    m_rowsLayout->setSpacing(0);
-    m_rowsLayout->addStretch(1);
-    m_points->setWidget(rowsHost);
 
     auto* buttons = new QHBoxLayout();
     auto* addTimingButton = new QPushButton(QStringLiteral("Add timing event"), this);
@@ -173,17 +267,20 @@ void EventsWidget::setSelectedTimingEvents(const QVector<int>& indexes) {
 
 void EventsWidget::setSelectedEvents(const QVector<int>& timingIndexes, const QVector<int>& laneIndexes,
     const QVector<int>& speedIndexes) {
-    QSet<EventRow*> selected;
-    EventRow* current = nullptr;
-    for (EventRow* row : m_rows) {
-        const bool isSelected = (row->type() == EntryType::Timing && timingIndexes.contains(row->index()))
-            || (row->type() == EntryType::Lane && laneIndexes.contains(row->index()))
-            || (row->type() == EntryType::Speed && speedIndexes.contains(row->index()));
-        if (isSelected) {
-            selected.insert(row);
-            current = row;
+    QSet<int> selected;
+    int current = -1;
+    const auto select = [&](const EntryType type, const QVector<int>& indexes) {
+        for (const int index : indexes) {
+            const int row = m_model->rowFor(type, index);
+            if (row >= 0) {
+                selected.insert(row);
+                current = std::max(current, row);
+            }
         }
-    }
+    };
+    select(EntryType::Timing, timingIndexes);
+    select(EntryType::Lane, laneIndexes);
+    select(EntryType::Speed, speedIndexes);
     setRowsSelected(selected, current);
 }
 
@@ -197,103 +294,48 @@ void EventsWidget::setSelectedSpeedEvent(const int index) {
 
 void EventsWidget::setEvents(const QVector<TimingPoint>& timingEvents, const QVector<LaneEvent>& laneEvents,
     const QVector<SpeedEvent>& speedEvents) {
-    while (QLayoutItem* item = m_rowsLayout->takeAt(0)) {
-        if (QWidget* widget = item->widget()) {
-            widget->hide();
-            widget->deleteLater();
-        }
-        delete item;
-    }
-    m_rows.clear();
     m_selectedRows.clear();
-    m_selectionAnchor = nullptr;
-
-    struct Entry { EntryType type; int index; qint64 timeMilliseconds; };
-    QVector<Entry> entries;
-    entries.reserve(timingEvents.size() + laneEvents.size() + speedEvents.size());
-    for (int index = 0; index < timingEvents.size(); ++index) {
-        entries.append({EntryType::Timing, index, timingEvents.at(index).timeMilliseconds});
-    }
-    for (int index = 0; index < laneEvents.size(); ++index) {
-        entries.append({EntryType::Lane, index, laneEvents.at(index).timeMilliseconds});
-    }
-    for (int index = 0; index < speedEvents.size(); ++index) {
-        entries.append({EntryType::Speed, index, speedEvents.at(index).timeMilliseconds});
-    }
-    std::stable_sort(entries.begin(), entries.end(), [](const Entry& first, const Entry& second) {
-        return first.timeMilliseconds < second.timeMilliseconds;
-    });
-
-    for (const Entry& entry : entries) {
-        QStringList fields;
-        if (entry.type == EntryType::Timing) {
-            const TimingPoint& point = timingEvents.at(entry.index);
-            fields = {QStringLiteral("%1 ms").arg(point.timeMilliseconds),
-                QStringLiteral("%1 BPM").arg(point.beatsPerMinute, 0, 'f', 2),
-                QStringLiteral("%1/%2").arg(point.timeSignatureNumerator).arg(point.timeSignatureDenominator)};
-        } else if (entry.type == EntryType::Lane) {
-            const LaneEvent& event = laneEvents.at(entry.index);
-            fields = {QStringLiteral("%1 ms").arg(event.timeMilliseconds), QStringLiteral("Lane %1").arg(event.lane),
-                event.enabled ? QStringLiteral("ON") : QStringLiteral("OFF")};
-        } else {
-            const SpeedEvent& event = speedEvents.at(entry.index);
-            fields = {QStringLiteral("%1 ms").arg(event.timeMilliseconds), QStringLiteral("SV"),
-                QStringLiteral("%1x").arg(event.speed, 0, 'f', 3)};
-        }
-        auto* row = new EventRow(entry.type, entry.index, fields,
-            [this](EventRow* activated, const Qt::KeyboardModifiers modifiers, const bool seek) {
-                activateRow(activated, modifiers, seek);
-            }, m_points->widget());
-        m_rows.append(row);
-        m_rowsLayout->addWidget(row);
-    }
-    m_rowsLayout->addStretch(1);
+    m_selectionAnchor = -1;
+    m_model->setEvents(timingEvents, laneEvents, speedEvents);
 }
 
 void EventsWidget::setSelected(const EntryType type, const int index) {
-    for (EventRow* row : m_rows) {
-        if (row->type() == type && row->index() == index) {
-            setRowsSelected({row}, row);
-            return;
-        }
-    }
-    setRowsSelected({}, nullptr);
+    const int row = m_model->rowFor(type, index);
+    setRowsSelected(row >= 0 ? QSet<int>{row} : QSet<int>{}, row);
 }
 
-void EventsWidget::setRowsSelected(const QSet<EventRow*>& rows, EventRow* anchor) {
-    m_selectedRows = rows;
+void EventsWidget::setRowsSelected(const QSet<int>& rows, const int anchor) {
     m_selectionAnchor = anchor;
-    for (EventRow* row : m_rows) {
-        row->setSelected(m_selectedRows.contains(row));
-    }
-}
-
-void EventsWidget::activateRow(EventRow* row, const Qt::KeyboardModifiers modifiers, const bool seek) {
-    if (row == nullptr) {
+    if (m_selectedRows == rows) {
         return;
     }
-    if (!m_rows.contains(row)) {
-        const auto current = std::find_if(m_rows.cbegin(), m_rows.cend(), [row](const EventRow* candidate) {
-            return candidate->type() == row->type() && candidate->index() == row->index();
-        });
-        if (current == m_rows.cend()) {
-            return;
+    m_selectedRows = rows;
+    QList<int> ordered = rows.values();
+    std::sort(ordered.begin(), ordered.end());
+    QItemSelection selection;
+    for (int index = 0; index < ordered.size();) {
+        const int first = ordered.at(index);
+        int last = first;
+        while (++index < ordered.size() && ordered.at(index) == last + 1) {
+            last = ordered.at(index);
         }
-        row = *current;
+        selection.select(m_model->index(first), m_model->index(last));
     }
+    m_points->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect);
+}
 
-    QSet<EventRow*> selected = m_selectedRows;
-    EventRow* anchor = row;
-    if (!seek && isShiftHeld(modifiers) && m_selectionAnchor != nullptr) {
-        const int first = m_rows.indexOf(m_selectionAnchor);
-        const int last = m_rows.indexOf(row);
-        if (first >= 0 && last >= 0) {
-            selected.clear();
-            for (int index = std::min(first, last); index <= std::max(first, last); ++index) {
-                selected.insert(m_rows.at(index));
-            }
-            anchor = m_selectionAnchor;
+void EventsWidget::activateRow(const int row, const Qt::KeyboardModifiers modifiers, const bool seek) {
+    if (row < 0 || row >= m_model->rowCount()) {
+        return;
+    }
+    QSet<int> selected = m_selectedRows;
+    int anchor = row;
+    if (!seek && isShiftHeld(modifiers) && m_selectionAnchor >= 0) {
+        selected.clear();
+        for (int index = std::min(m_selectionAnchor, row); index <= std::max(m_selectionAnchor, row); ++index) {
+            selected.insert(index);
         }
+        anchor = m_selectionAnchor;
     } else if (!seek && isControlHeld(modifiers)) {
         if (selected.contains(row)) {
             selected.remove(row);
@@ -312,28 +354,18 @@ void EventsWidget::emitCurrentSelection(const bool seek) {
         emit timingEventsSelected({});
         return;
     }
-
-    EventRow* current = nullptr;
-    for (EventRow* row : m_rows) {
-        if (!m_selectedRows.contains(row)) {
-            continue;
-        }
-        current = row;
-    }
     if (m_selectedRows.size() > 1) {
         QVector<int> timingIndexes;
         QVector<int> laneIndexes;
         QVector<int> speedIndexes;
-        for (EventRow* row : m_rows) {
-            if (!m_selectedRows.contains(row)) {
-                continue;
-            }
-            if (row->type() == EntryType::Timing) {
-                timingIndexes.append(row->index());
-            } else if (row->type() == EntryType::Lane) {
-                laneIndexes.append(row->index());
+        for (const int row : m_selectedRows) {
+            const auto& entry = m_model->entry(row);
+            if (entry.type == EntryType::Timing) {
+                timingIndexes.append(entry.index);
+            } else if (entry.type == EntryType::Lane) {
+                laneIndexes.append(entry.index);
             } else {
-                speedIndexes.append(row->index());
+                speedIndexes.append(entry.index);
             }
         }
         std::sort(timingIndexes.begin(), timingIndexes.end());
@@ -342,13 +374,11 @@ void EventsWidget::emitCurrentSelection(const bool seek) {
         emit eventsSelected(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes));
         return;
     }
-    if (current == nullptr) {
-        return;
-    }
+    const auto entry = m_model->entry(*m_selectedRows.cbegin());
     if (seek) {
-        emit eventSeekRequested(current->type(), current->index());
+        emit eventSeekRequested(entry.type, entry.index);
     } else {
-        emit eventSelected(current->type(), current->index());
+        emit eventSelected(entry.type, entry.index);
     }
 }
 
