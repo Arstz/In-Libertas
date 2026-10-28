@@ -161,7 +161,9 @@ private:
     [[nodiscard]] bool canPlaceGround() const;
     [[nodiscard]] bool canPlaceSky() const;
     void invalidateFieldGroups();
+    void invalidateFieldGroup(int index, const ChartNote& hitObject);
     void ensureFieldGroups() const;
+    void rebuildFieldGroupGeometry(int groupIndex) const;
     void updateToolCursor();
     void updateToolCursor(const QPointF& position, Qt::KeyboardModifiers modifiers);
     void beginDragNavigation(const QPointF& position);
@@ -197,6 +199,8 @@ private:
     mutable QVector<FieldGroup> m_fieldGroups;
     mutable QVector<QPainterPath> m_fieldGroupContours;
     mutable QVector<QPainterPath> m_fieldGroupJoints;
+    mutable QVector<int> m_fieldGroupIndexes;
+    mutable QSet<int> m_dirtyFieldGroups;
     mutable bool m_fieldGroupsDirty = true;
     QVector<QPointF> m_waveformPeaks;
     QWidget* m_waveformDivider = nullptr;

@@ -522,10 +522,18 @@ double ConveyorView::gameplayMouseWidth() const {
 
 void ConveyorView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
+    if (hitObject.kind == NoteKind::Sky || insertionIndex != m_chart.notes.size()) {
+        m_fieldBoundariesDirty = true;
+    } else if (!m_fieldBoundariesDirty) {
+        m_fieldGroupIndexes.append(-1);
+    }
+    m_noteIndexesDirty = m_noteIndexesDirty || insertionIndex != m_chart.notes.size();
     m_chart.notes.insert(insertionIndex, hitObject);
-    m_noteIndexesDirty = true;
-    m_fieldBoundariesDirty = true;
-    m_measureMarkersDirty = true;
+    if (!m_noteIndexesDirty) {
+        m_noteScrollRanges.resize(m_chart.notes.size());
+        indexHitObject(insertionIndex);
+    }
+    m_measureMarkersDirty = m_measureMarkersDirty || hitObject.endMilliseconds > m_measureChartEndMilliseconds;
     update();
 }
 
@@ -534,10 +542,22 @@ void ConveyorView::removeHitObject(const int index) {
         return;
     }
 
+    const ChartNote before = m_chart.notes.at(index);
+    if (before.kind == NoteKind::Sky || index != m_chart.notes.size() - 1) {
+        m_fieldBoundariesDirty = true;
+    } else if (!m_fieldBoundariesDirty) {
+        m_fieldGroupIndexes.removeLast();
+    }
+    m_noteIndexesDirty = m_noteIndexesDirty || index != m_chart.notes.size() - 1;
+    if (!m_noteIndexesDirty) {
+        const int side = static_cast<int>(before.side);
+        if (side >= 0 && side < static_cast<int>(m_noteIndexes.size())) {
+            m_noteIndexes[side].removeOne(index);
+        }
+        m_noteScrollRanges.removeLast();
+    }
+    m_measureMarkersDirty = m_measureMarkersDirty || before.endMilliseconds >= m_measureChartEndMilliseconds;
     m_chart.notes.removeAt(index);
-    m_noteIndexesDirty = true;
-    m_fieldBoundariesDirty = true;
-    m_measureMarkersDirty = true;
     update();
 }
 
@@ -546,10 +566,26 @@ void ConveyorView::updateHitObject(const int index, const ChartNote& hitObject) 
         return;
     }
 
+    const ChartNote before = m_chart.notes.at(index);
+    invalidateFieldBoundary(index, hitObject);
     m_chart.notes[index] = hitObject;
-    m_noteIndexesDirty = true;
-    m_fieldBoundariesDirty = true;
-    m_measureMarkersDirty = true;
+    if (!m_noteIndexesDirty) {
+        if (before.side != hitObject.side || before.startMilliseconds != hitObject.startMilliseconds
+            || before.endMilliseconds != hitObject.endMilliseconds) {
+            const int side = static_cast<int>(before.side);
+            if (side >= 0 && side < static_cast<int>(m_noteIndexes.size())) {
+                m_noteIndexes[side].removeOne(index);
+            }
+            indexHitObject(index);
+        } else if (before.kind != hitObject.kind) {
+            m_noteScrollRanges[index] = scrollRange(hitObject.startMilliseconds,
+                hitObject.kind == NoteKind::Tap ? hitObject.startMilliseconds : hitObject.endMilliseconds);
+        }
+    }
+    if (before.endMilliseconds != hitObject.endMilliseconds) {
+        m_measureMarkersDirty = m_measureMarkersDirty || hitObject.endMilliseconds > m_measureChartEndMilliseconds
+            || before.endMilliseconds >= m_measureChartEndMilliseconds;
+    }
     update();
 }
 
@@ -558,20 +594,8 @@ void ConveyorView::updateHitObjects(const QVector<int>& indexes, const QVector<C
         return;
     }
 
-    bool changed = false;
     for (int itemIndex = 0; itemIndex < indexes.size(); ++itemIndex) {
-        const int index = indexes.at(itemIndex);
-        if (index < 0 || index >= m_chart.notes.size()) {
-            continue;
-        }
-        m_chart.notes[index] = hitObjects.at(itemIndex);
-        changed = true;
-    }
-    if (changed) {
-        m_noteIndexesDirty = true;
-        m_fieldBoundariesDirty = true;
-        m_measureMarkersDirty = true;
-        update();
+        updateHitObject(indexes.at(itemIndex), hitObjects.at(itemIndex));
     }
 }
 
@@ -1069,6 +1093,7 @@ void ConveyorView::ensureMeasureMarkers() {
     for (const ChartNote& note : m_chart.notes) {
         chartEnd = std::max(chartEnd, static_cast<double>(note.endMilliseconds));
     }
+    m_measureChartEndMilliseconds = static_cast<qint64>(chartEnd);
     chartEnd += initialMeasureDuration * 10.0;
     const auto speedBefore = [this](const double time) {
         const auto point = std::lower_bound(m_scrollPoints.cbegin(), m_scrollPoints.cend(), time,
@@ -1212,24 +1237,85 @@ void ConveyorView::drawFlick(QPainter& painter, const ChartNote& note) {
 }
 
 void ConveyorView::ensureFieldBoundaries() {
-    if (!m_fieldBoundariesDirty) {
+    if (!m_fieldBoundariesDirty && m_dirtyFieldGroups.isEmpty()) {
         return;
     }
-    m_sharedFieldStarts.clear();
-    m_sharedFieldEnds.clear();
-    for (const infalsus::FieldGroup& group : infalsus::analyzeFieldGroups(m_chart)) {
+    if (m_fieldBoundariesDirty) {
+        m_sharedFieldStarts.clear();
+        m_sharedFieldEnds.clear();
+        m_fieldGroups = infalsus::analyzeFieldGroups(m_chart);
+        m_fieldGroupIndexes.fill(-1, m_chart.notes.size());
+        m_dirtyFieldGroups.clear();
+        for (int groupIndex = 0; groupIndex < m_fieldGroups.size(); ++groupIndex) {
+            m_dirtyFieldGroups.insert(groupIndex);
+            for (const int index : m_fieldGroups.at(groupIndex).indexes) {
+                m_fieldGroupIndexes[index] = groupIndex;
+            }
+        }
+    }
+    for (const int groupIndex : m_dirtyFieldGroups) {
+        if (!m_fieldBoundariesDirty) {
+            m_fieldGroups[groupIndex] = infalsus::analyzeFieldGroup(m_chart, m_fieldGroups.at(groupIndex).indexes);
+            for (const int index : m_fieldGroups.at(groupIndex).indexes) {
+                m_sharedFieldStarts.remove(index);
+                m_sharedFieldEnds.remove(index);
+            }
+        }
+        const infalsus::FieldGroup& group = m_fieldGroups.at(groupIndex);
         for (const infalsus::FieldJoint& joint : group.joints) {
             (joint.firstAtStart ? m_sharedFieldStarts : m_sharedFieldEnds)[joint.firstIndex].append(joint.segment);
             (joint.secondAtStart ? m_sharedFieldStarts : m_sharedFieldEnds)[joint.secondIndex].append(joint.segment);
         }
-    }
-    for (QVector<infalsus::FieldSegment>& segments : m_sharedFieldStarts) {
-        segments = infalsus::mergeFieldSegments(std::move(segments));
-    }
-    for (QVector<infalsus::FieldSegment>& segments : m_sharedFieldEnds) {
-        segments = infalsus::mergeFieldSegments(std::move(segments));
+        for (const int index : group.indexes) {
+            auto start = m_sharedFieldStarts.find(index);
+            if (start != m_sharedFieldStarts.end()) {
+                start.value() = infalsus::mergeFieldSegments(std::move(start.value()));
+            }
+            auto end = m_sharedFieldEnds.find(index);
+            if (end != m_sharedFieldEnds.end()) {
+                end.value() = infalsus::mergeFieldSegments(std::move(end.value()));
+            }
+        }
     }
     m_fieldBoundariesDirty = false;
+    m_dirtyFieldGroups.clear();
+}
+
+void ConveyorView::invalidateFieldBoundary(const int index, const ChartNote& hitObject) {
+    const ChartNote& before = m_chart.notes.at(index);
+    if (m_fieldBoundariesDirty || (before.kind != NoteKind::Sky && hitObject.kind != NoteKind::Sky)) {
+        return;
+    }
+    if (before.kind != hitObject.kind || before.groupId != hitObject.groupId) {
+        m_fieldBoundariesDirty = true;
+    } else if (before.startMilliseconds != hitObject.startMilliseconds || before.endMilliseconds != hitObject.endMilliseconds
+        || before.startX != hitObject.startX || before.endX != hitObject.endX
+        || before.startWidth != hitObject.startWidth || before.endWidth != hitObject.endWidth) {
+        m_dirtyFieldGroups.insert(m_fieldGroupIndexes.at(index));
+    }
+}
+
+void ConveyorView::indexHitObject(const int index) {
+    const ChartNote& note = m_chart.notes.at(index);
+    m_noteScrollRanges[index] = scrollRange(note.startMilliseconds,
+        note.kind == NoteKind::Tap ? note.startMilliseconds : note.endMilliseconds);
+    const int side = static_cast<int>(note.side);
+    if (side < 0 || side >= static_cast<int>(m_noteIndexes.size())) {
+        return;
+    }
+    auto& indexes = m_noteIndexes[side];
+    const auto position = std::lower_bound(indexes.cbegin(), indexes.cend(), index, [this](const int first, const int second) {
+        const ChartNote& left = m_chart.notes.at(first);
+        const ChartNote& right = m_chart.notes.at(second);
+        if (left.startMilliseconds != right.startMilliseconds) {
+            return left.startMilliseconds < right.startMilliseconds;
+        }
+        if (left.endMilliseconds != right.endMilliseconds) {
+            return left.endMilliseconds < right.endMilliseconds;
+        }
+        return first < second;
+    });
+    indexes.insert(position - indexes.cbegin(), index);
 }
 
 void ConveyorView::drawFieldBoundary(QPainter& painter, const double left, const double right,

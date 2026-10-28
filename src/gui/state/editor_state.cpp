@@ -1337,7 +1337,7 @@ void EditorState::moveHitObject(const int index, ChartNote hitObject) {
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
     hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
     constrainFieldDuration(hitObject);
-    replaceHitObject(index, hitObject);
+    replaceHitObject(index, hitObject, false);
 }
 
 void EditorState::finishHitObjectMove() {
@@ -1349,7 +1349,8 @@ void EditorState::finishHitObjectMove() {
     }
 
     const ChartNote hitObject = m_chart.notes.at(m_activeMoveIndex);
-    if (!hitObjectsEqual(m_moveStart, hitObject)) {
+    const bool changed = !hitObjectsEqual(m_moveStart, hitObject);
+    if (changed) {
         if (m_activeMoveMergesAdd
             && !m_undoHistory.isEmpty()
             && m_undoHistory.constLast().operation == HistoryOperation::Add
@@ -1371,6 +1372,9 @@ void EditorState::finishHitObjectMove() {
     m_activeMoveIndex = -1;
     m_activeMoveMergesAdd = false;
     m_moveSelectionStart.clear();
+    if (changed) {
+        emit hitObjectsChanged();
+    }
 }
 
 void EditorState::beginHitObjectBatchMove(QVector<int> indexes) {
@@ -1618,15 +1622,9 @@ void EditorState::setSelectedEvents(QVector<int> timingIndexes, QVector<int> lan
 }
 
 const TimingPoint& EditorState::timingPointAt(const qint64 positionMilliseconds) const {
-    const TimingPoint* current = &m_timingPoints.front();
-    for (const TimingPoint& point : m_timingPoints) {
-        if (point.timeMilliseconds > positionMilliseconds) {
-            break;
-        }
-        current = &point;
-    }
-
-    return *current;
+    const auto next = std::upper_bound(m_timingPoints.cbegin(), m_timingPoints.cend(), positionMilliseconds,
+        [](const qint64 time, const TimingPoint& point) { return time < point.timeMilliseconds; });
+    return next == m_timingPoints.cbegin() ? m_timingPoints.front() : *std::prev(next);
 }
 
 qint64 EditorState::closestDivisorTime(const qint64 positionMilliseconds) const {
@@ -1795,14 +1793,16 @@ void EditorState::eraseHitObject(const int index) {
     emit hitObjectsChanged();
 }
 
-void EditorState::replaceHitObject(const int index, const ChartNote& hitObject) {
+void EditorState::replaceHitObject(const int index, const ChartNote& hitObject, const bool notifyChart) {
     if (!isValidHitObjectIndex(index) || hitObjectsEqual(m_chart.notes.at(index), hitObject)) {
         return;
     }
 
     m_chart.notes[index] = hitObject;
     emit hitObjectChanged(index, hitObject);
-    emit hitObjectsChanged();
+    if (notifyChart) {
+        emit hitObjectsChanged();
+    }
 }
 
 void EditorState::replaceHitObjectsBatch(const QVector<int>& indexes, const QVector<ChartNote>& hitObjects) {

@@ -195,7 +195,7 @@ private:
     void restoreGroupIds(const QVector<std::uint64_t>& ids);
     void insertHitObject(int index, const ChartNote& hitObject);
     void eraseHitObject(int index);
-    void replaceHitObject(int index, const ChartNote& hitObject);
+    void replaceHitObject(int index, const ChartNote& hitObject, bool notifyChart = true);
     void replaceHitObjectsBatch(const QVector<int>& indexes, const QVector<ChartNote>& hitObjects);
 
     ChartData m_chart;

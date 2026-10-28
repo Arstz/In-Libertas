@@ -6,6 +6,8 @@
 
 #include <QtGui/QPalette>
 #include <QtCore/QVariant>
+#include <QtCore/QPromise>
+#include <QtCore/QThreadPool>
 #include <QtWidgets/QListWidget>
 #include <QtWidgets/QVBoxLayout>
 
@@ -160,9 +162,45 @@ VerificationWidget::VerificationWidget(QWidget* parent)
     connect(m_issues, &QListWidget::itemDoubleClicked, this, [this](const QListWidgetItem* item) {
         emit timestampRequested(item->data(Qt::UserRole).toLongLong());
     });
+    connect(&m_verificationWatcher, &QFutureWatcher<QVector<VerificationIssue>>::finished, this, [this] {
+        m_verificationActive = false;
+        if (m_activeRevision == m_revision) {
+            setIssues(m_verificationWatcher.result());
+        } else {
+            startVerification();
+        }
+    });
 }
 
 void VerificationWidget::setChart(const ChartData& chart, const QVector<SpeedEvent>& speedEvents,
+    const QVector<TimingPoint>& timingPoints) {
+    m_pendingChart = chart;
+    m_pendingSpeedEvents = speedEvents;
+    m_pendingTimingPoints = timingPoints;
+    ++m_revision;
+    if (!m_verificationActive) {
+        startVerification();
+    }
+}
+
+void VerificationWidget::startVerification() {
+    m_verificationActive = true;
+    m_activeRevision = m_revision;
+    QPromise<QVector<VerificationIssue>> promise;
+    m_verificationWatcher.setFuture(promise.future());
+    QThreadPool::globalInstance()->start([promise = std::move(promise), chart = std::move(m_pendingChart),
+        speeds = std::move(m_pendingSpeedEvents), timing = std::move(m_pendingTimingPoints)]() mutable {
+        promise.start();
+        try {
+            promise.addResult(collectIssues(chart, speeds, timing));
+        } catch (...) {
+            promise.setException(std::current_exception());
+        }
+        promise.finish();
+    });
+}
+
+QVector<VerificationIssue> VerificationWidget::collectIssues(const ChartData& chart, const QVector<SpeedEvent>& speedEvents,
     const QVector<TimingPoint>& timingPoints) {
     static constexpr std::array<VerificationRule, 6> kRules{
         &VerificationWidget::verifyDuplicateNotes,
@@ -187,7 +225,7 @@ void VerificationWidget::setChart(const ChartData& chart, const QVector<SpeedEve
         }
         return first.message < second.message;
     });
-    setIssues(std::move(issues));
+    return issues;
 }
 
 QVector<VerificationIssue> VerificationWidget::verifyDuplicateNotes(const ChartData& chart) {

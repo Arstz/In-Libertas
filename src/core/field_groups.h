@@ -27,6 +27,7 @@ struct FieldGroup {
 };
 
 [[nodiscard]] QVector<FieldGroup> analyzeFieldGroups(const ChartData& chart);
+[[nodiscard]] FieldGroup analyzeFieldGroup(const ChartData& chart, QVector<int> indexes);
 [[nodiscard]] QVector<std::uint64_t> chronologicalFieldGroupIds(const ChartData& chart);
 [[nodiscard]] QVector<std::uint64_t> ascendingFieldGroupIds(const ChartData& chart);
 [[nodiscard]] QVector<FieldSegment> mergeFieldSegments(QVector<FieldSegment> segments);

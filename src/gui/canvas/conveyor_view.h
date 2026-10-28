@@ -7,6 +7,7 @@
 
 #include <QtCore/QPointF>
 #include <QtCore/QHash>
+#include <QtCore/QSet>
 #include <QtGui/QImage>
 #include <QtGui/QPainterPath>
 #include <QtOpenGLWidgets/QOpenGLWidget>
@@ -73,6 +74,8 @@ private:
     void drawFloorNote(QPainter& painter, const ChartNote& note);
     void drawFlick(QPainter& painter, const ChartNote& note);
     void ensureFieldBoundaries();
+    void invalidateFieldBoundary(int index, const ChartNote& hitObject);
+    void indexHitObject(int index);
     void drawFieldBoundary(QPainter& painter, double left, double right, qint64 timeMilliseconds,
         const QVector<infalsus::FieldSegment>& sharedSegments, const QColor& color);
     void drawSkyField(QPainter& painter, const ChartNote& note, int index);
@@ -90,6 +93,9 @@ private:
     ChartData m_chart;
     QHash<int, QVector<infalsus::FieldSegment>> m_sharedFieldStarts;
     QHash<int, QVector<infalsus::FieldSegment>> m_sharedFieldEnds;
+    QVector<infalsus::FieldGroup> m_fieldGroups;
+    QVector<int> m_fieldGroupIndexes;
+    QSet<int> m_dirtyFieldGroups;
     QVector<infalsus::TimingPoint> m_timingPoints;
     QVector<infalsus::LaneEvent> m_laneEvents;
     QVector<infalsus::SpeedEvent> m_speedEvents;
@@ -103,6 +109,7 @@ private:
     infalsus::DifficultyMetadata m_cardDifficultyMetadata;
     QImage m_cardJacket;
     qint64 m_playbackPositionMilliseconds = 0;
+    qint64 m_measureChartEndMilliseconds = 0;
     double m_noteSpeed = 2.5;
     double m_frameScrollCoordinate = 0.0;
     bool m_noteIndexesDirty = true;

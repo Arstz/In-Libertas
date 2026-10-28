@@ -4,6 +4,7 @@
 #include "core/chart_project.h"
 
 #include <QtCore/QVector>
+#include <QtCore/QFutureWatcher>
 #include <QtWidgets/QWidget>
 
 #include <cstdint>
@@ -35,6 +36,9 @@ signals:
 private:
     using VerificationRule = QVector<VerificationIssue> (*)(const ChartData& chart);
 
+    static QVector<VerificationIssue> collectIssues(const ChartData& chart, const QVector<SpeedEvent>& speedEvents,
+        const QVector<TimingPoint>& timingPoints);
+    void startVerification();
     static QVector<VerificationIssue> verifyDuplicateNotes(const ChartData& chart);
     static QVector<VerificationIssue> verifyDuplicateHolds(const ChartData& chart);
     static QVector<VerificationIssue> verifyOverlappingMultilane(const ChartData& chart);
@@ -48,6 +52,13 @@ private:
     void setIssues(QVector<VerificationIssue> issues);
 
     QListWidget* m_issues = nullptr;
+    QFutureWatcher<QVector<VerificationIssue>> m_verificationWatcher;
+    ChartData m_pendingChart;
+    QVector<SpeedEvent> m_pendingSpeedEvents;
+    QVector<TimingPoint> m_pendingTimingPoints;
+    std::uint64_t m_revision = 0;
+    std::uint64_t m_activeRevision = 0;
+    bool m_verificationActive = false;
 };
 
 } // namespace infalsus::gui

@@ -709,18 +709,21 @@ void MainWindow::buildInterface() {
     connect(m_state, &EditorState::hitObjectRemoved, m_flatView, &FlatView::removeHitObject);
     connect(m_state, &EditorState::hitObjectChanged, m_viewer, &ConveyorView::updateHitObject);
     connect(m_state, &EditorState::hitObjectChanged, m_flatView, &FlatView::updateHitObject);
-    connect(m_state, &EditorState::hitObjectChanged, this, [this] {
-        QTimer::singleShot(0, m_properties, [this] {
-            m_properties->setSelection(*m_state);
-        });
+    auto* propertiesRefresh = new QTimer(m_properties);
+    propertiesRefresh->setSingleShot(true);
+    propertiesRefresh->setInterval(16);
+    connect(propertiesRefresh, &QTimer::timeout, m_properties, [this] {
+        m_properties->setSelection(*m_state);
     });
+    const auto refreshProperties = [propertiesRefresh] {
+        if (!propertiesRefresh->isActive()) {
+            propertiesRefresh->start();
+        }
+    };
+    connect(m_state, &EditorState::hitObjectChanged, this, refreshProperties);
     connect(m_state, &EditorState::hitObjectsBatchChanged, m_viewer, &ConveyorView::updateHitObjects);
     connect(m_state, &EditorState::hitObjectsBatchChanged, m_flatView, &FlatView::updateHitObjects);
-    connect(m_state, &EditorState::hitObjectsBatchChanged, this, [this] {
-        QTimer::singleShot(0, m_properties, [this] {
-            m_properties->setSelection(*m_state);
-        });
-    });
+    connect(m_state, &EditorState::hitObjectsBatchChanged, this, refreshProperties);
     connect(m_state, &EditorState::hitObjectsChanged, this, [this] {
         m_playback->setHitObjects(m_state->chart());
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());

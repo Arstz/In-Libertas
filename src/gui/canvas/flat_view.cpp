@@ -513,8 +513,12 @@ void FlatView::setDecodedAudio(QByteArray samples, const QAudioFormat& format) {
 
 void FlatView::addHitObject(const int index, const ChartNote& hitObject) {
     const int insertionIndex = std::clamp(index, 0, static_cast<int>(m_chart.notes.size()));
+    if (hitObject.kind == NoteKind::Sky || insertionIndex != m_chart.notes.size()) {
+        invalidateFieldGroups();
+    } else if (!m_fieldGroupsDirty) {
+        m_fieldGroupIndexes.append(-1);
+    }
     m_chart.notes.insert(insertionIndex, hitObject);
-    invalidateFieldGroups();
     updateToolCursor();
     update();
 }
@@ -524,8 +528,12 @@ void FlatView::removeHitObject(const int index) {
         return;
     }
 
+    if (m_chart.notes.at(index).kind == NoteKind::Sky || index != m_chart.notes.size() - 1) {
+        invalidateFieldGroups();
+    } else if (!m_fieldGroupsDirty) {
+        m_fieldGroupIndexes.removeLast();
+    }
     m_chart.notes.removeAt(index);
-    invalidateFieldGroups();
     updateToolCursor();
     update();
 }
@@ -535,8 +543,8 @@ void FlatView::updateHitObject(const int index, const ChartNote& hitObject) {
         return;
     }
 
+    invalidateFieldGroup(index, hitObject);
     m_chart.notes[index] = hitObject;
-    invalidateFieldGroups();
     updateToolCursor();
     update();
 }
@@ -552,11 +560,11 @@ void FlatView::updateHitObjects(const QVector<int>& indexes, const QVector<Chart
         if (index < 0 || index >= m_chart.notes.size()) {
             continue;
         }
+        invalidateFieldGroup(index, hitObjects.at(itemIndex));
         m_chart.notes[index] = hitObjects.at(itemIndex);
         changed = true;
     }
     if (changed) {
-        invalidateFieldGroups();
         updateToolCursor();
         update();
     }
@@ -2485,67 +2493,94 @@ void FlatView::drawSky(QPainter& painter, const QRectF& area, const int opacity)
 
 void FlatView::invalidateFieldGroups() {
     m_fieldGroupsDirty = true;
+    m_dirtyFieldGroups.clear();
+}
+
+void FlatView::invalidateFieldGroup(const int index, const ChartNote& hitObject) {
+    const ChartNote& before = m_chart.notes.at(index);
+    if (m_fieldGroupsDirty || (before.kind != NoteKind::Sky && hitObject.kind != NoteKind::Sky)) {
+        return;
+    }
+    if (before.kind != hitObject.kind || before.groupId != hitObject.groupId) {
+        invalidateFieldGroups();
+    } else {
+        m_dirtyFieldGroups.insert(m_fieldGroupIndexes.at(index));
+    }
 }
 
 void FlatView::ensureFieldGroups() const {
-    if (!m_fieldGroupsDirty) {
-        return;
+    if (m_fieldGroupsDirty) {
+        m_fieldGroups = analyzeFieldGroups(m_chart);
+        m_fieldGroupContours.resize(m_fieldGroups.size());
+        m_fieldGroupJoints.resize(m_fieldGroups.size());
+        m_fieldGroupIndexes.fill(-1, m_chart.notes.size());
+        for (int groupIndex = 0; groupIndex < m_fieldGroups.size(); ++groupIndex) {
+            for (const int index : m_fieldGroups.at(groupIndex).indexes) {
+                m_fieldGroupIndexes[index] = groupIndex;
+            }
+            rebuildFieldGroupGeometry(groupIndex);
+        }
+        m_fieldGroupsDirty = false;
+    } else {
+        for (const int groupIndex : m_dirtyFieldGroups) {
+            m_fieldGroups[groupIndex] = analyzeFieldGroup(m_chart, m_fieldGroups.at(groupIndex).indexes);
+            rebuildFieldGroupGeometry(groupIndex);
+        }
     }
-    m_fieldGroups = analyzeFieldGroups(m_chart);
-    m_fieldGroupContours.clear();
-    m_fieldGroupJoints.clear();
-    for (const FieldGroup& group : m_fieldGroups) {
-        QHash<int, ChartNote> drawingNotes;
-        QMap<qint64, QVector<FieldSegment>> sharedSegments;
-        QPainterPath contour;
-        QPainterPath joints;
-        contour.setFillRule(Qt::WindingFill);
-        for (const int index : group.indexes) {
-            drawingNotes.insert(index, m_chart.notes.at(index));
-        }
-        for (const FieldJoint& joint : group.joints) {
-            const ChartNote& source = m_chart.notes.at(joint.firstAtStart ? joint.secondIndex : joint.firstIndex);
-            ChartNote& target = drawingNotes[joint.firstAtStart ? joint.firstIndex : joint.secondIndex];
-            target.startMilliseconds = source.endMilliseconds;
-            if (joint.fullyShared) {
-                target.startX = source.endX;
-                target.startWidth = source.endWidth;
-            }
-            sharedSegments[source.endMilliseconds].append(joint.segment);
-        }
-        for (auto iterator = sharedSegments.cbegin(); iterator != sharedSegments.cend(); ++iterator) {
-            const double time = iterator.key() / kMillisecondsPerSecond;
-            for (const FieldSegment& segment : mergeFieldSegments(iterator.value())) {
-                joints.moveTo(std::clamp(segment.left, 0.0, 1.0), time);
-                joints.lineTo(std::clamp(segment.right, 0.0, 1.0), time);
-            }
-        }
-        for (const int index : group.indexes) {
-            const ChartNote& note = drawingNotes[index];
-            QPolygonF leftSide;
-            QPolygonF rightSide;
-            const qint64 duration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
-            for (int sampleIndex = 0; sampleIndex <= kFieldSamples; ++sampleIndex) {
-                const double progress = static_cast<double>(sampleIndex) / kFieldSamples;
-                const double left = fieldLeftEdge(note, true)
-                    + (fieldLeftEdge(note, false) - fieldLeftEdge(note, true)) * easingFor(note.auxiliary, false, progress);
-                const double right = fieldRightEdge(note, true)
-                    + (fieldRightEdge(note, false) - fieldRightEdge(note, true)) * easingFor(note.auxiliary, true, progress);
-                const double time = (note.startMilliseconds + static_cast<qint64>(duration * progress)) / kMillisecondsPerSecond;
-                leftSide.append(QPointF(std::clamp(left, 0.0, 1.0), time));
-                rightSide.append(QPointF(std::clamp(right, 0.0, 1.0), time));
-            }
-            QPolygonF field = leftSide;
-            for (auto iterator = rightSide.crbegin(); iterator != rightSide.crend(); ++iterator) {
-                field.append(*iterator);
-            }
-            contour.addPolygon(field);
-            contour.closeSubpath();
-        }
-        m_fieldGroupContours.append(contour.simplified());
-        m_fieldGroupJoints.append(joints);
+    m_dirtyFieldGroups.clear();
+}
+
+void FlatView::rebuildFieldGroupGeometry(const int groupIndex) const {
+    const FieldGroup& group = m_fieldGroups.at(groupIndex);
+    QHash<int, ChartNote> drawingNotes;
+    QMap<qint64, QVector<FieldSegment>> sharedSegments;
+    QPainterPath contour;
+    QPainterPath joints;
+    contour.setFillRule(Qt::WindingFill);
+    for (const int index : group.indexes) {
+        drawingNotes.insert(index, m_chart.notes.at(index));
     }
-    m_fieldGroupsDirty = false;
+    for (const FieldJoint& joint : group.joints) {
+        const ChartNote& source = m_chart.notes.at(joint.firstAtStart ? joint.secondIndex : joint.firstIndex);
+        ChartNote& target = drawingNotes[joint.firstAtStart ? joint.firstIndex : joint.secondIndex];
+        target.startMilliseconds = source.endMilliseconds;
+        if (joint.fullyShared) {
+            target.startX = source.endX;
+            target.startWidth = source.endWidth;
+        }
+        sharedSegments[source.endMilliseconds].append(joint.segment);
+    }
+    for (auto iterator = sharedSegments.cbegin(); iterator != sharedSegments.cend(); ++iterator) {
+        const double time = iterator.key() / kMillisecondsPerSecond;
+        for (const FieldSegment& segment : mergeFieldSegments(iterator.value())) {
+            joints.moveTo(std::clamp(segment.left, 0.0, 1.0), time);
+            joints.lineTo(std::clamp(segment.right, 0.0, 1.0), time);
+        }
+    }
+    for (const int index : group.indexes) {
+        const ChartNote& note = drawingNotes[index];
+        QPolygonF leftSide;
+        QPolygonF rightSide;
+        const qint64 duration = std::max(note.endMilliseconds - note.startMilliseconds, qint64(1));
+        for (int sampleIndex = 0; sampleIndex <= kFieldSamples; ++sampleIndex) {
+            const double progress = static_cast<double>(sampleIndex) / kFieldSamples;
+            const double left = fieldLeftEdge(note, true)
+                + (fieldLeftEdge(note, false) - fieldLeftEdge(note, true)) * easingFor(note.auxiliary, false, progress);
+            const double right = fieldRightEdge(note, true)
+                + (fieldRightEdge(note, false) - fieldRightEdge(note, true)) * easingFor(note.auxiliary, true, progress);
+            const double time = (note.startMilliseconds + static_cast<qint64>(duration * progress)) / kMillisecondsPerSecond;
+            leftSide.append(QPointF(std::clamp(left, 0.0, 1.0), time));
+            rightSide.append(QPointF(std::clamp(right, 0.0, 1.0), time));
+        }
+        QPolygonF field = leftSide;
+        for (auto iterator = rightSide.crbegin(); iterator != rightSide.crend(); ++iterator) {
+            field.append(*iterator);
+        }
+        contour.addPolygon(field);
+        contour.closeSubpath();
+    }
+    m_fieldGroupContours[groupIndex] = contour.simplified();
+    m_fieldGroupJoints[groupIndex] = std::move(joints);
 }
 
 bool FlatView::shouldDrawFieldControls(const int hitObjectIndex) const {

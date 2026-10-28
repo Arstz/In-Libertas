@@ -57,50 +57,59 @@ QVector<FieldGroup> analyzeFieldGroups(const ChartData& chart) {
         const ChartNote& note = chart.notes.at(index);
         if (note.kind == NoteKind::Sky) {
             FieldGroup& group = groups[note.groupId];
-            group.startMilliseconds = group.indexes.isEmpty() ? note.startMilliseconds
-                : std::min(group.startMilliseconds, note.startMilliseconds);
-            group.groupId = note.groupId;
             group.indexes.append(index);
         }
     }
     result.reserve(groups.size());
     for (FieldGroup& group : groups) {
-        QVector<FieldEndpoint> endpoints;
-        endpoints.reserve(group.indexes.size() * 2);
-        for (const int index : group.indexes) {
-            const ChartNote& note = chart.notes.at(index);
-            endpoints.append(endpointFor(note, index, true));
-            endpoints.append(endpointFor(note, index, false));
-        }
-        std::stable_sort(endpoints.begin(), endpoints.end(), [](const FieldEndpoint& first, const FieldEndpoint& second) {
-            return first.timeMilliseconds < second.timeMilliseconds;
-        });
-        for (int firstIndex = 0; firstIndex < endpoints.size(); ++firstIndex) {
-            const FieldEndpoint& first = endpoints.at(firstIndex);
-            for (int secondIndex = firstIndex + 1; secondIndex < endpoints.size(); ++secondIndex) {
-                const FieldEndpoint& second = endpoints.at(secondIndex);
-                if (second.timeMilliseconds - first.timeMilliseconds > kEndpointTimeToleranceMilliseconds) {
-                    break;
-                }
-                if (first.index == second.index || first.atStart == second.atStart
-                    || !std::isfinite(first.left) || !std::isfinite(first.right)
-                    || !std::isfinite(second.left) || !std::isfinite(second.right)
-                    || !(std::min(first.right, second.right) > std::max(first.left, second.left))) {
-                    continue;
-                }
-                group.joints.append({.segment = {.left = std::max(first.left, second.left),
-                    .right = std::min(first.right, second.right)},
-                    .firstIndex = first.index, .secondIndex = second.index,
-                    .firstAtStart = first.atStart, .secondAtStart = second.atStart,
-                    .fullyShared = std::abs(first.left - second.left) <= kEndpointEdgeTolerance
-                        && std::abs(first.right - second.right) <= kEndpointEdgeTolerance});
-            }
-        }
-        group.connected = isConnected(group, chart);
-        result.append(std::move(group));
+        result.append(analyzeFieldGroup(chart, std::move(group.indexes)));
     }
 
     return result;
+}
+
+FieldGroup analyzeFieldGroup(const ChartData& chart, QVector<int> indexes) {
+    FieldGroup group;
+    group.indexes = std::move(indexes);
+    if (group.indexes.isEmpty()) {
+        return group;
+    }
+    group.groupId = chart.notes.at(group.indexes.front()).groupId;
+    group.startMilliseconds = chart.notes.at(group.indexes.front()).startMilliseconds;
+    QVector<FieldEndpoint> endpoints;
+    endpoints.reserve(group.indexes.size() * 2);
+    for (const int index : group.indexes) {
+        const ChartNote& note = chart.notes.at(index);
+        group.startMilliseconds = std::min(group.startMilliseconds, note.startMilliseconds);
+        endpoints.append(endpointFor(note, index, true));
+        endpoints.append(endpointFor(note, index, false));
+    }
+    std::stable_sort(endpoints.begin(), endpoints.end(), [](const FieldEndpoint& first, const FieldEndpoint& second) {
+        return first.timeMilliseconds < second.timeMilliseconds;
+    });
+    for (int firstIndex = 0; firstIndex < endpoints.size(); ++firstIndex) {
+        const FieldEndpoint& first = endpoints.at(firstIndex);
+        for (int secondIndex = firstIndex + 1; secondIndex < endpoints.size(); ++secondIndex) {
+            const FieldEndpoint& second = endpoints.at(secondIndex);
+            if (second.timeMilliseconds - first.timeMilliseconds > kEndpointTimeToleranceMilliseconds) {
+                break;
+            }
+            if (first.index == second.index || first.atStart == second.atStart
+                || !std::isfinite(first.left) || !std::isfinite(first.right)
+                || !std::isfinite(second.left) || !std::isfinite(second.right)
+                || !(std::min(first.right, second.right) > std::max(first.left, second.left))) {
+                continue;
+            }
+            group.joints.append({.segment = {.left = std::max(first.left, second.left),
+                .right = std::min(first.right, second.right)},
+                .firstIndex = first.index, .secondIndex = second.index,
+                .firstAtStart = first.atStart, .secondAtStart = second.atStart,
+                .fullyShared = std::abs(first.left - second.left) <= kEndpointEdgeTolerance
+                    && std::abs(first.right - second.right) <= kEndpointEdgeTolerance});
+        }
+    }
+    group.connected = isConnected(group, chart);
+    return group;
 }
 
 QVector<std::uint64_t> chronologicalFieldGroupIds(const ChartData& chart) {

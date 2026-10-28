@@ -175,11 +175,18 @@ if(BUILD_TESTING)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gui/event_performance_test.cpp")
         qt_add_executable(event_performance_test
             tests/gui/event_performance_test.cpp
+            tests/gui/flat_edit_performance_test.cpp
+            tests/gui/verification_async_test.cpp
+            src/core/field_groups.cpp
+            src/core/waveform.cpp
+            src/gui/canvas/flat_view.h
+            src/gui/widgets/verification_widget.h
             src/gui/widgets/timing_widget.h
             src/gui/widgets/timeline_widget.h
         )
         target_include_directories(event_performance_test PRIVATE src)
-        target_link_libraries(event_performance_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+        target_link_libraries(event_performance_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets
+            Qt6::Multimedia Qt6::OpenGLWidgets)
         add_dependencies(event_performance_test InLibertas)
         add_test(NAME event_performance COMMAND event_performance_test -platform offscreen)
         set_tests_properties(event_performance PROPERTIES ENVIRONMENT
