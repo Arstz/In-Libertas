@@ -82,6 +82,7 @@ private:
     void drawChart(QPainter& painter);
     void ensureNoteIndexes();
     void drawSongCard(QPainter& painter) const;
+    void drawCompactSongCard(QPainter& painter, const QRectF& card, const QPainterPath& conveyor) const;
     void drawScoreCard(QPainter& painter) const;
     void drawControlHints(QPainter& painter) const;
     void drawPlaytestInput(QPainter& painter) const;

@@ -29,9 +29,11 @@
 #include <QtCore/QPromise>
 #include <QtCore/QThreadPool>
 #include <QtCore/QEvent>
+#include <QtCore/QEasingCurve>
 #include <QtCore/QFileInfo>
 #include <QtCore/QFile>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QPropertyAnimation>
 #include <QtCore/QSettings>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QStringList>
@@ -58,6 +60,7 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QProgressDialog>
+#include <QtWidgets/QScrollArea>
 #include <QtGui/QShowEvent>
 #include <QtGui/QCloseEvent>
 #include <QtGui/QCursor>
@@ -83,7 +86,11 @@ namespace infalsus::gui {
 namespace {
 
 constexpr int kRecentProjectLimit = 10;
+constexpr int kWindowStateVersion = 1;
 constexpr int kToolsToolbarMinimumWidth = 92;
+constexpr int kToolsRevealWidth = 12;
+constexpr int kToolsHideDelayMilliseconds = 300;
+constexpr int kToolsSlideDurationMilliseconds = 180;
 constexpr int kToolButtonTextPadding = 8;
 
 [[nodiscard]] bool isProjectDocumentFile(const QFileInfo& fileInfo) {
@@ -276,6 +283,16 @@ void analyzeDecodedTiming(QPromise<TimingEstimate>& promise, const QByteArray& s
     promise.addResult(analyzer.estimate());
 }
 
+[[nodiscard]] QScrollArea* createScrollableContent(QWidget* content) {
+    auto* scroll = new QScrollArea(content->parentWidget());
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setMinimumSize(120, 100);
+    content->layout()->setSizeConstraint(QLayout::SetMinAndMaxSize);
+    scroll->setWidget(content);
+    return scroll;
+}
+
 [[nodiscard]] QWidget* createPanel(
     const QString& title,
     QWidget* content,
@@ -327,6 +344,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_viewer->setPlaytestLaneKeys(m_playtestSettings.laneKeys);
     m_viewer->setPlaytestAutoplayKey(m_playtestSettings.autoplayKey);
     restoreLayout();
+    applyToolsToolbarSettings();
     qApp->installEventFilter(this);
     m_playtestTimer = new QTimer(this);
     m_playtestTimer->setTimerType(Qt::PreciseTimer);
@@ -393,12 +411,29 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (QApplication::activeModalWidget() != nullptr && QApplication::activeModalWidget() != this) {
         return QMainWindow::eventFilter(watched, event);
     }
+    if (!m_playtest) {
+        if (m_visualSettings.autohideToolbar) {
+            if ((watched == m_toolsReveal || watched == m_toolsToolbar) && event->type() == QEvent::Enter) {
+                showToolsToolbar();
+            } else if (watched == m_toolsToolbar && event->type() == QEvent::Leave) {
+                m_toolsHideTimer->start();
+            }
+        }
+        if (watched == centralWidget() && event->type() == QEvent::Resize) {
+            QTimer::singleShot(0, this, &MainWindow::updateToolsToolbarGeometry);
+        }
+    }
     if ((watched == m_flatView || watched == m_toolsToolbar) && event->type() == QEvent::Resize) {
         QTimer::singleShot(0, this, &MainWindow::updateVolumeSliderPlacement);
     }
 
     if (event->type() == QEvent::ApplicationDeactivate || event->type() == QEvent::WindowDeactivate) {
         m_altHeld = false;
+        if (m_visualSettings.autohideToolbar
+            && (event->type() == QEvent::ApplicationDeactivate || watched == this)) {
+            m_toolsHideTimer->stop();
+            setToolsToolbarExpanded(false, false);
+        }
     }
 
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
@@ -476,7 +511,7 @@ void MainWindow::showEvent(QShowEvent* event) {
         arrangeSplitters();
         m_splittersArranged = true;
     }
-    QTimer::singleShot(0, this, &MainWindow::updateVolumeSliderPlacement);
+    QTimer::singleShot(0, this, &MainWindow::updateToolsToolbarGeometry);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -520,7 +555,7 @@ void MainWindow::markProjectDirty() {
 
 void MainWindow::buildInterface() {
     auto* centralWidget = new QWidget(this);
-    auto* layout = new QVBoxLayout(centralWidget);
+    auto* layout = new QHBoxLayout(centralWidget);
     m_contentHost = new QWidget(centralWidget);
     m_flatModeSelector = new QComboBox(centralWidget);
     m_noteSpeedSelector = new QDoubleSpinBox(centralWidget);
@@ -545,6 +580,7 @@ void MainWindow::buildInterface() {
     m_noteSpeedSelector->setValue(settings.value(QStringLiteral("viewer/note_speed"), 2.5).toDouble());
     m_viewer->setNoteSpeed(m_noteSpeedSelector->value());
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
     layout->addWidget(m_contentHost);
     setCentralWidget(centralWidget);
     auto* fileMenu = menuBar()->addMenu(QStringLiteral("File"));
@@ -757,7 +793,7 @@ void MainWindow::restoreLayout() {
     m_flatView->setWaveformWidth(settings.value(QStringLiteral("layout/waveform_width"),
         FlatView::kDefaultWaveformWidth).toDouble());
     restoreGeometry(settings.value(QStringLiteral("layout/geometry")).toByteArray());
-    restoreState(settings.value(QStringLiteral("layout/window_state")).toByteArray());
+    restoreState(settings.value(QStringLiteral("layout/window_state")).toByteArray(), kWindowStateVersion);
     const auto restoreSplitter = [&settings](QSplitter* splitter, const QString& key) {
         const QByteArray state = settings.value(key).toByteArray();
         return !state.isEmpty() && splitter->restoreState(state);
@@ -783,7 +819,7 @@ void MainWindow::restoreLayout() {
 void MainWindow::saveLayout() const {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("layout/geometry"), saveGeometry());
-    settings.setValue(QStringLiteral("layout/window_state"), saveState());
+    settings.setValue(QStringLiteral("layout/window_state"), saveState(kWindowStateVersion));
     settings.setValue(QStringLiteral("layout/root_splitter"), m_rootSplitter->saveState());
     settings.setValue(QStringLiteral("layout/main_splitter"), m_mainSplitter->saveState());
     settings.setValue(QStringLiteral("layout/viewer_splitter"), m_viewerSplitter->saveState());
@@ -821,8 +857,31 @@ void MainWindow::selectAllVisibleHitObjects() {
 }
 
 void MainWindow::buildToolBar() {
-    m_toolsToolbar = new QToolBar(QStringLiteral("Tools"), this);
+    m_toolsReveal = new QToolButton(centralWidget());
+    m_toolsReveal->setText(QStringLiteral("\u203a"));
+    m_toolsReveal->setToolTip(QStringLiteral("Show tools"));
+    m_toolsReveal->setAccessibleName(QStringLiteral("Show tools"));
+    m_toolsReveal->setFocusPolicy(Qt::NoFocus);
+    m_toolsReveal->setFixedWidth(kToolsRevealWidth);
+    m_toolsReveal->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    static_cast<QHBoxLayout*>(centralWidget()->layout())->insertWidget(0, m_toolsReveal);
+    m_toolsHideTimer = new QTimer(this);
+    m_toolsHideTimer->setSingleShot(true);
+    m_toolsHideTimer->setInterval(kToolsHideDelayMilliseconds);
+    connect(m_toolsHideTimer, &QTimer::timeout, this, &MainWindow::hideToolsToolbar);
+    connect(m_toolsReveal, &QToolButton::clicked, this, &MainWindow::showToolsToolbar);
+    m_toolsToolbar = new QToolBar(QStringLiteral("Tools"), centralWidget());
     m_toolsToolbar->setObjectName(QStringLiteral("editorToolsToolbar"));
+    m_toolsToolbar->setOrientation(Qt::Vertical);
+    m_toolsToolbar->setFloatable(false);
+    m_toolsToolbar->setAutoFillBackground(true);
+    m_toolsSlideAnimation = new QPropertyAnimation(m_toolsToolbar, "pos", this);
+    m_toolsSlideAnimation->setEasingCurve(QEasingCurve::InOutCubic);
+    connect(m_toolsSlideAnimation, &QPropertyAnimation::finished, this, [this] {
+        if (!m_toolsExpanded) {
+            m_toolsToolbar->hide();
+        }
+    });
     auto* actions = new QActionGroup(m_toolsToolbar);
     auto* placeAction = m_toolsToolbar->addAction(QStringLiteral("Place"));
     auto* selectAction = m_toolsToolbar->addAction(QStringLiteral("Select"));
@@ -840,7 +899,7 @@ void MainWindow::buildToolBar() {
     actions->addAction(placeAction);
     actions->addAction(selectAction);
     actions->addAction(moveAction);
-    m_toolsToolbar->setMinimumWidth(kToolsToolbarMinimumWidth);
+    m_toolsToolbar->setFixedWidth(kToolsToolbarMinimumWidth);
     m_volumeSlider = new QSlider(Qt::Vertical, m_toolsToolbar);
     m_volumeSlider->setObjectName(QStringLiteral("volumeSlider"));
     m_volumeSlider->setRange(0, 100);
@@ -891,7 +950,7 @@ void MainWindow::buildToolBar() {
     m_effectsVolumeSlider->setValue(effectsVolumePercent);
     m_effectsVolumeSlider->setToolTip(QStringLiteral("Hitsound volume: %1%").arg(effectsVolumePercent));
     m_playback->setEffectsVolume(logarithmicVolumeForPercent(effectsVolumePercent));
-    addToolBar(Qt::LeftToolBarArea, m_toolsToolbar);
+    m_toolsToolbar->hide();
 
     connect(placeAction, &QAction::triggered, this, [this] { m_state->setTool(EditorTool::Place); });
     connect(selectAction, &QAction::triggered, this, [this] { m_state->setTool(EditorTool::Select); });
@@ -913,6 +972,98 @@ void MainWindow::buildToolBar() {
         QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
         settings.setValue(QStringLiteral("playback/effects_volume"), volume);
     });
+}
+
+void MainWindow::applyToolsToolbarSettings() {
+    m_toolsHideTimer->stop();
+    m_toolsSlideAnimation->stop();
+    auto* layout = static_cast<QHBoxLayout*>(centralWidget()->layout());
+    m_toolsReveal->setVisible(m_visualSettings.autohideToolbar);
+    if (m_visualSettings.autohideToolbar) {
+        layout->removeWidget(m_toolsToolbar);
+        m_toolsExpanded = false;
+        m_toolsToolbar->hide();
+    } else {
+        if (layout->indexOf(m_toolsToolbar) < 0) {
+            layout->insertWidget(0, m_toolsToolbar);
+        }
+        m_toolsExpanded = true;
+        m_toolsToolbar->show();
+    }
+    updateToolsToolbarGeometry();
+}
+
+void MainWindow::setToolsToolbarExpanded(const bool expanded, const bool animated) {
+    if (animated && m_toolsExpanded == expanded && m_toolsSlideAnimation->state() == QAbstractAnimation::Running) {
+        return;
+    }
+    m_toolsExpanded = expanded;
+    m_toolsSlideAnimation->stop();
+    const QPoint target(expanded ? 0 : -kToolsToolbarMinimumWidth, 0);
+    if (expanded) {
+        if (m_toolsToolbar->isHidden()) {
+            m_toolsToolbar->move(-kToolsToolbarMinimumWidth, 0);
+        }
+        m_toolsToolbar->show();
+        m_toolsToolbar->raise();
+        updateVolumeSliderPlacement();
+    }
+    if (!animated || !m_visualSettings.animatedToolbarUnfolding || !isVisible()
+        || !m_toolsToolbar->isVisible() || m_toolsToolbar->pos() == target) {
+        m_toolsToolbar->move(target);
+        m_toolsToolbar->setVisible(expanded);
+        return;
+    }
+    const int distance = std::abs(target.x() - m_toolsToolbar->x());
+    m_toolsSlideAnimation->setDuration(std::max(1,
+        kToolsSlideDurationMilliseconds * distance / kToolsToolbarMinimumWidth));
+    m_toolsSlideAnimation->setStartValue(m_toolsToolbar->pos());
+    m_toolsSlideAnimation->setEndValue(target);
+    m_toolsSlideAnimation->start();
+}
+
+void MainWindow::showToolsToolbar() {
+    if (!m_visualSettings.autohideToolbar || m_playtest || !isActiveWindow()
+        || QApplication::activeModalWidget() != nullptr) {
+        return;
+    }
+    m_toolsHideTimer->stop();
+    updateToolsToolbarGeometry();
+    setToolsToolbarExpanded(true);
+}
+
+void MainWindow::hideToolsToolbar() {
+    if (!m_visualSettings.autohideToolbar) {
+        return;
+    }
+    if (m_playtest || !isVisible()) {
+        setToolsToolbarExpanded(false, false);
+        return;
+    }
+    const QPoint cursor = QCursor::pos();
+    if (isActiveWindow()
+        && (m_toolsToolbar->rect().contains(m_toolsToolbar->mapFromGlobal(cursor))
+            || m_toolsReveal->rect().contains(m_toolsReveal->mapFromGlobal(cursor)))) {
+        return;
+    }
+    if (QApplication::mouseButtons() != Qt::NoButton || QWidget::mouseGrabber() != nullptr
+        || QApplication::activePopupWidget() != nullptr) {
+        m_toolsHideTimer->start();
+        return;
+    }
+    setToolsToolbarExpanded(false);
+}
+
+void MainWindow::updateToolsToolbarGeometry() {
+    if (m_visualSettings.autohideToolbar) {
+        m_toolsToolbar->resize(kToolsToolbarMinimumWidth, centralWidget()->height());
+        if (m_toolsSlideAnimation->state() != QAbstractAnimation::Running) {
+            m_toolsToolbar->move(m_toolsExpanded ? 0 : -kToolsToolbarMinimumWidth, 0);
+        }
+    } else {
+        centralWidget()->layout()->activate();
+    }
+    updateVolumeSliderPlacement();
 }
 
 void MainWindow::updateToolButtonSizes() {
@@ -1010,6 +1161,7 @@ void MainWindow::openSettings() {
         m_hitsounds->load(HitsoundBank::loadFiles());
         m_visualSettings = dialog.selectedVisualSettings();
         m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
+        applyToolsToolbarSettings();
         m_handlingSettings = dialog.selectedHandlingSettings();
         m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
         m_playtestSettings = dialog.selectedPlaytestSettings();
@@ -1130,8 +1282,8 @@ void MainWindow::buildWorkspace() {
     flatControlsLayout->addWidget(m_flatModeSelector);
     auto* flatPanel = createPanel(QStringLiteral("Flat View"), m_flatView, m_mainSplitter, flatControls);
     auto* viewerPanel = createPanel(QStringLiteral("3D View"), m_viewer, m_viewerSplitter, m_noteSpeedSelector);
-    auto* propertiesPanel = createPanel(QStringLiteral("Properties"), m_properties, m_bottomSplitter);
-    auto* metadataPanel = createPanel(QStringLiteral("Metadata"), m_metadata, m_bottomSplitter);
+    auto* propertiesPanel = createPanel(QStringLiteral("Properties"), createScrollableContent(m_properties), m_bottomSplitter);
+    auto* metadataPanel = createPanel(QStringLiteral("Metadata"), createScrollableContent(m_metadata), m_bottomSplitter);
     auto* verificationPanel = createPanel(QStringLiteral("Verification"), m_verification, m_bottomSplitter);
     auto* rightHost = new QWidget(m_rootSplitter);
     auto* rightLayout = new QVBoxLayout(rightHost);
@@ -1526,8 +1678,8 @@ void MainWindow::enterPlaytest() {
     m_editorFocus = QApplication::focusWidget();
     m_editorCursor = QCursor::pos();
     m_editorMenuVisible = menuBar()->isVisible();
-    m_editorToolsVisible = m_toolsToolbar->isVisible();
-    m_playtestWindowState = saveState();
+    m_editorToolsVisible = !m_visualSettings.autohideToolbar || m_toolsExpanded;
+    m_playtestWindowState = saveState(kWindowStateVersion);
     const std::array<QSplitter*, 5> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter,
         m_eventsSplitter};
     for (int index = 0; index < splitters.size(); ++index) {
@@ -1537,6 +1689,8 @@ void MainWindow::enterPlaytest() {
     m_viewerLayoutIndex = m_viewerEditorParent->layout()->indexOf(m_viewer);
     centralWidget()->hide();
     menuBar()->hide();
+    m_toolsHideTimer->stop();
+    m_toolsSlideAnimation->stop();
     m_toolsToolbar->hide();
     m_viewer->setParent(this);
     m_viewer->setGeometry(rect());
@@ -1593,9 +1747,17 @@ void MainWindow::leavePlaytest() {
     m_viewer->unsetCursor();
     centralWidget()->show();
     m_viewer->show();
-    restoreState(m_playtestWindowState);
+    restoreState(m_playtestWindowState, kWindowStateVersion);
     menuBar()->setVisible(m_editorMenuVisible);
-    m_toolsToolbar->setVisible(m_editorToolsVisible);
+    if (m_visualSettings.autohideToolbar) {
+        updateToolsToolbarGeometry();
+        setToolsToolbarExpanded(m_editorToolsVisible, false);
+        if (m_editorToolsVisible) {
+            m_toolsHideTimer->start();
+        }
+    } else {
+        m_toolsToolbar->show();
+    }
     const std::array<QSplitter*, 5> splitters{m_rootSplitter, m_mainSplitter, m_viewerSplitter, m_bottomSplitter,
         m_eventsSplitter};
     for (int index = 0; index < splitters.size(); ++index) {

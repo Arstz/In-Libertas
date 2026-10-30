@@ -180,6 +180,8 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
 VisualSettings SettingsDialog::selectedVisualSettings() const {
     VisualSettings result = m_visuals;
     result.customPlayheadColor = m_playheadColorMode->currentData().toBool();
+    result.animatedToolbarUnfolding = m_animatedToolbarUnfolding->isChecked();
+    result.autohideToolbar = m_autohideToolbar->isChecked();
 
     return result;
 }
@@ -187,6 +189,10 @@ VisualSettings SettingsDialog::selectedVisualSettings() const {
 VisualSettings SettingsDialog::loadVisualSettings() {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     VisualSettings result;
+    result.animatedToolbarUnfolding = settings.value(QStringLiteral("visuals/animated_toolbar_unfolding"),
+        result.animatedToolbarUnfolding).toBool();
+    result.autohideToolbar = settings.value(QStringLiteral("visuals/autohide_toolbar"),
+        result.autohideToolbar).toBool();
     const QColor color(settings.value(QStringLiteral("visuals/playhead_color")).toString());
     if (color.isValid()) {
         result.playheadColor = color;
@@ -349,6 +355,12 @@ void SettingsDialog::buildVisualsPage(QStackedWidget* pages) {
     auto* controlsLayout = new QHBoxLayout(controls);
     m_playheadColorMode = new QComboBox(controls);
     m_playheadColorButton = new QPushButton(controls);
+    m_animatedToolbarUnfolding = new QCheckBox(QStringLiteral("Animated toolbar unfolding"), page);
+    m_autohideToolbar = new QCheckBox(QStringLiteral("Autohide toolbar"), page);
+    m_animatedToolbarUnfolding->setChecked(m_visuals.animatedToolbarUnfolding);
+    m_autohideToolbar->setChecked(m_visuals.autohideToolbar);
+    m_animatedToolbarUnfolding->setToolTip(QStringLiteral("Slide the toolbar open and closed when autohide is enabled."));
+    m_autohideToolbar->setToolTip(QStringLiteral("Fold the toolbar away and reveal it when the cursor reaches the left edge."));
 
     pages->addWidget(scrollArea);
     scrollArea->setWidgetResizable(true);
@@ -362,6 +374,8 @@ void SettingsDialog::buildVisualsPage(QStackedWidget* pages) {
     controlsLayout->addWidget(m_playheadColorButton);
     rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     rows->addRow(QStringLiteral("Playhead color"), controls);
+    rows->addRow(m_animatedToolbarUnfolding);
+    rows->addRow(m_autohideToolbar);
     pageLayout->addLayout(rows);
     pageLayout->addStretch();
     connect(m_playheadColorMode, &QComboBox::currentIndexChanged, this, &SettingsDialog::updateVisualControls);
@@ -392,6 +406,8 @@ void SettingsDialog::saveVisualSettings(const VisualSettings& visuals) {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("visuals/custom_playhead_color"), visuals.customPlayheadColor);
     settings.setValue(QStringLiteral("visuals/playhead_color"), visuals.playheadColor.name(QColor::HexRgb));
+    settings.setValue(QStringLiteral("visuals/animated_toolbar_unfolding"), visuals.animatedToolbarUnfolding);
+    settings.setValue(QStringLiteral("visuals/autohide_toolbar"), visuals.autohideToolbar);
 }
 
 void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSettings& handling) {

@@ -77,6 +77,7 @@ qt_add_executable(InLibertas WIN32
     src/gui/state/editor_state.h
     src/gui/widgets/metadata_widget.cpp
     src/gui/widgets/metadata_widget.h
+    src/gui/widgets/adaptive_push_button.h
     src/gui/widgets/properties_panel.cpp
     src/gui/widgets/properties_panel.h
     src/gui/widgets/timeline_widget.cpp

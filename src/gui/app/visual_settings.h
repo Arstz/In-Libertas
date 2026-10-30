@@ -7,6 +7,8 @@ namespace infalsus::gui {
 struct VisualSettings {
     QColor playheadColor = palette::guideGreen;
     bool customPlayheadColor = false;
+    bool animatedToolbarUnfolding = false;
+    bool autohideToolbar = false;
 
     [[nodiscard]] QColor effectivePlayheadColor() const {
         return customPlayheadColor && playheadColor.isValid() ? playheadColor : palette::guideGreen;

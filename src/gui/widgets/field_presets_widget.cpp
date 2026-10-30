@@ -1,4 +1,5 @@
 #include "gui/widgets/field_presets_widget.h"
+#include "gui/widgets/adaptive_push_button.h"
 
 #include "core/timing_grid.h"
 #include "gui/app/game_palette.h"
@@ -130,7 +131,8 @@ FieldPresetsWidget::FieldPresetsWidget(EditorState* state, QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
-    m_addSelection = new QPushButton(QStringLiteral("Add current selection"), this);
+    m_addSelection = new AdaptivePushButton({QStringLiteral("Add current selection"),
+        QStringLiteral("Add selection"), QStringLiteral("+ Selected")}, this);
     auto* sizeRow = new QHBoxLayout();
     sizeRow->addWidget(m_addSelection);
     m_sizeMode = new QComboBox(this);

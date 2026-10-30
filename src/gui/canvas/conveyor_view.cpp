@@ -95,6 +95,20 @@ struct FloorSpan {
     return std::clamp(std::min(viewport.width() / 1400.0, viewport.height() / 900.0), 0.65, 1.75);
 }
 
+[[nodiscard]] QPainterPath conveyorFootprint(const QRectF& viewport) {
+    static const QPainterPath footprint = [] {
+        QPainterPath floor;
+        floor.addPolygon(ConveyorGeometry::floorOutline());
+        floor.closeSubpath();
+        const QPainterPath sky = ConveyorGeometry::skyPath({{0.0, 0.0}, {1.0, 0.0},
+            {1.0, 1.0}, {0.0, 1.0}});
+        QPainterPath canvas;
+        canvas.addRect(QRectF(QPointF(0.0, 0.0), ConveyorGeometry::nativeSize()));
+        return floor.united(sky).intersected(canvas);
+    }();
+    return painterTransform(viewport).map(footprint);
+}
+
 [[nodiscard]] QRectF overlayCardRect(const QRectF& viewport, const bool left, const bool paired) {
     const double scale = overlayCardScale(viewport.size());
     const double margin = 12.0 * scale;
@@ -831,6 +845,11 @@ void ConveyorView::drawSongCard(QPainter& painter) const {
     const double scale = overlayCardScale(size());
     const double jacketInset = 7.0 * scale;
     const QRectF card = overlayCardRect(rect(), false, m_playtest);
+    const QPainterPath conveyor = conveyorFootprint(rect());
+    if (conveyor.intersects(card.adjusted(-1.0, -1.0, 1.0, 1.0))) {
+        drawCompactSongCard(painter, card, conveyor);
+        return;
+    }
     if (card.width() < 120.0 || card.height() < 70.0) {
         return;
     }
@@ -901,6 +920,52 @@ void ConveyorView::drawSongCard(QPainter& painter) const {
     const QRectF difficultyRect(contentLeft, lowerBandTop + 2.0 * scale, detailsRect.width(), 23.0 * scale);
     painter.drawText(difficultyRect, Qt::AlignLeft | Qt::AlignVCenter,
         QStringLiteral("%1    %2").arg(difficultyCardLabel(m_cardDifficulty)).arg(m_cardDifficultyMetadata.rating));
+    painter.restore();
+}
+
+void ConveyorView::drawCompactSongCard(QPainter& painter, const QRectF& card, const QPainterPath& conveyor) const {
+    const double scale = overlayCardScale(size());
+    QFont textFont = painter.font();
+    textFont.setPixelSize(std::max(12, qRound(16.0 * scale)));
+    textFont.setWeight(QFont::Normal);
+    const QFontMetricsF metrics(textFont);
+    const double lineHeight = metrics.lineSpacing();
+    const double padding = 8.0 * scale;
+    const double accentWidth = 4.0 * scale;
+    QRectF compactRect(card.left(), card.top(), card.width(), lineHeight * 3.0 + padding * 2.0);
+    QPainterPath band;
+    band.addRect(QRectF(0.0, compactRect.top(), width(), compactRect.height()));
+    const QPainterPath occupied = conveyor.intersected(band);
+    if (!occupied.isEmpty()) {
+        compactRect.setLeft(std::max(compactRect.left(), occupied.boundingRect().right() + 12.0 * scale));
+    }
+    const QRectF textRect = compactRect.adjusted(padding + accentWidth, padding, -padding, -padding);
+    if (textRect.isEmpty()) {
+        return;
+    }
+    const QColor accent = difficultyColor(m_cardDifficulty);
+    const std::array<QString, 3> lines{m_cardMetadata.songName.simplified(), m_cardMetadata.artistName.simplified(),
+        QStringLiteral("%1    %2").arg(difficultyCardLabel(m_cardDifficulty)).arg(m_cardDifficultyMetadata.rating)};
+    const std::array<QColor, 3> colors{QColor(240, 250, 252), QColor(202, 217, 221), QColor(226, 245, 247)};
+    painter.save();
+    painter.setPen(QPen(QColor(95, 138, 151, 190), 1.0));
+    painter.setBrush(QColor(7, 25, 34, 246));
+    painter.drawRect(compactRect);
+    const double lowerBandTop = textRect.top() + lineHeight * 2.0;
+    painter.fillRect(QRectF(compactRect.left() + 1.0, lowerBandTop, compactRect.width() - 2.0,
+        compactRect.bottom() - lowerBandTop - 1.0), QColor(accent.red(), accent.green(), accent.blue(), 64));
+    painter.setPen(QPen(QColor(92, 131, 143, 130), 1.0));
+    painter.drawLine(QPointF(compactRect.left() + 1.0, lowerBandTop), QPointF(compactRect.right() - 1.0, lowerBandTop));
+    painter.fillRect(QRectF(compactRect.left(), compactRect.top(), accentWidth, compactRect.height()),
+        QColor(accent.red(), accent.green(), accent.blue(), 170));
+    painter.setFont(textFont);
+    painter.setClipRect(textRect, Qt::IntersectClip);
+    for (std::size_t line = 0; line < lines.size(); ++line) {
+        painter.setPen(colors[line]);
+        painter.drawText(QRectF(textRect.left(), textRect.top() + line * lineHeight, textRect.width(), lineHeight),
+            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+            metrics.elidedText(lines[line], Qt::ElideRight, textRect.width()));
+    }
     painter.restore();
 }
 

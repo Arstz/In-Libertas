@@ -1,4 +1,5 @@
 #include "gui/widgets/timing_widget.h"
+#include "gui/widgets/adaptive_push_button.h"
 
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QItemSelectionModel>
@@ -242,9 +243,12 @@ EventsWidget::EventsWidget(QWidget* parent)
     m_points->setFrameShape(QFrame::StyledPanel);
 
     auto* buttons = new QHBoxLayout();
-    auto* addTimingButton = new QPushButton(QStringLiteral("Add timing event"), this);
-    auto* addLaneButton = new QPushButton(QStringLiteral("Add lane event"), this);
-    auto* addSpeedButton = new QPushButton(QStringLiteral("Add SV event"), this);
+    auto* addTimingButton = new AdaptivePushButton({QStringLiteral("Add timing event"),
+        QStringLiteral("Add timing"), QStringLiteral("+ Timing")}, this);
+    auto* addLaneButton = new AdaptivePushButton({QStringLiteral("Add lane event"),
+        QStringLiteral("Add lane"), QStringLiteral("+ Lane")}, this);
+    auto* addSpeedButton = new AdaptivePushButton({QStringLiteral("Add SV event"),
+        QStringLiteral("Add SV"), QStringLiteral("+ SV")}, this);
     buttons->addWidget(addTimingButton);
     buttons->addWidget(addLaneButton);
     buttons->addWidget(addSpeedButton);

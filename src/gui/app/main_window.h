@@ -22,6 +22,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QMenu;
+class QPropertyAnimation;
 class QShowEvent;
 class QCloseEvent;
 class QSplitter;
@@ -60,6 +61,11 @@ protected:
 private:
     void buildInterface();
     void buildToolBar();
+    void applyToolsToolbarSettings();
+    void setToolsToolbarExpanded(bool expanded, bool animated = true);
+    void showToolsToolbar();
+    void hideToolsToolbar();
+    void updateToolsToolbarGeometry();
     void updateToolButtonSizes();
     void registerNavigationKeybinds();
     void setSkyGridSize(int divisor);
@@ -140,6 +146,10 @@ private:
     QSplitter* m_bottomSplitter = nullptr;
     std::array<QWidget*, 5> m_workspacePanels{};
     QToolBar* m_toolsToolbar = nullptr;
+    QToolButton* m_toolsReveal = nullptr;
+    QTimer* m_toolsHideTimer = nullptr;
+    QPropertyAnimation* m_toolsSlideAnimation = nullptr;
+    bool m_toolsExpanded = false;
     QMenu* m_windowMenu = nullptr;
     QMenu* m_recentProjectMenu = nullptr;
     QSlider* m_volumeSlider = nullptr;

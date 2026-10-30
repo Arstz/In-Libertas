@@ -65,6 +65,8 @@ private:
     VisualSettings m_visuals;
     QComboBox* m_playheadColorMode = nullptr;
     QPushButton* m_playheadColorButton = nullptr;
+    QCheckBox* m_animatedToolbarUnfolding = nullptr;
+    QCheckBox* m_autohideToolbar = nullptr;
     QCheckBox* m_invertMousewheelScroll = nullptr;
     std::array<QKeySequenceEdit*, 6> m_playtestLaneEdits{};
     QKeySequenceEdit* m_playtestAutoplayEdit = nullptr;
