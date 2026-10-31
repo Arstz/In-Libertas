@@ -84,6 +84,22 @@ void normalizeEvent(SpeedEvent& event) {
     event.timeMilliseconds = std::max<qint64>(0, event.timeMilliseconds);
 }
 
+void normalizeEvent(BookmarkEvent& event) {
+    event.timeMilliseconds = std::max<qint64>(0, event.timeMilliseconds);
+}
+
+[[nodiscard]] bool eventsEqual(const BookmarkEvent& first, const BookmarkEvent& second) {
+    return first.timeMilliseconds == second.timeMilliseconds;
+}
+
+[[nodiscard]] bool sameEventPosition(const BookmarkEvent& first, const BookmarkEvent& second) {
+    return first.timeMilliseconds == second.timeMilliseconds;
+}
+
+[[nodiscard]] QString eventTypeName(const BookmarkEvent&) {
+    return QStringLiteral("BOOKMARK");
+}
+
 [[nodiscard]] bool eventsEqual(const TimingPoint& first, const TimingPoint& second) {
     return first.timeMilliseconds == second.timeMilliseconds && first.beatsPerMinute == second.beatsPerMinute
         && first.timeSignatureNumerator == second.timeSignatureNumerator
@@ -309,8 +325,17 @@ const QVector<int>& EditorState::selectedSpeedEvents() const {
     return m_selectedSpeedEvents;
 }
 
+const QVector<BookmarkEvent>& EditorState::bookmarks() const {
+    return m_bookmarks;
+}
+
+const QVector<int>& EditorState::selectedBookmarks() const {
+    return m_selectedBookmarks;
+}
+
 int EditorState::selectedEventCount() const {
-    return m_selectedTimingPoints.size() + m_selectedLaneEvents.size() + m_selectedSpeedEvents.size();
+    return m_selectedTimingPoints.size() + m_selectedLaneEvents.size() + m_selectedSpeedEvents.size()
+        + m_selectedBookmarks.size();
 }
 
 void EditorState::setChart(ChartData chart) {
@@ -332,6 +357,7 @@ void EditorState::setChart(ChartData chart) {
     m_selectedSpeedEvent = -1;
     m_selectedLaneEvents.clear();
     m_selectedSpeedEvents.clear();
+    m_selectedBookmarks.clear();
     m_nextHitObjectId = 1;
     for (const ChartNote& hitObject : m_chart.notes) {
         m_nextHitObjectId = std::max(m_nextHitObjectId, hitObject.id + 1);
@@ -383,6 +409,35 @@ void EditorState::setSpeedEvents(QVector<SpeedEvent> speedEvents) {
     });
     m_speedEvents = std::move(speedEvents);
     emit speedEventsChanged();
+}
+
+void EditorState::setBookmarks(QVector<BookmarkEvent> bookmarks) {
+    for (BookmarkEvent& bookmark : bookmarks) {
+        normalizeEvent(bookmark);
+    }
+    std::sort(bookmarks.begin(), bookmarks.end(), [](const BookmarkEvent& first, const BookmarkEvent& second) {
+        return first.timeMilliseconds < second.timeMilliseconds;
+    });
+    bookmarks.erase(std::unique(bookmarks.begin(), bookmarks.end(), [](const BookmarkEvent& first, const BookmarkEvent& second) {
+        return eventsEqual(first, second);
+    }), bookmarks.end());
+    m_bookmarks = std::move(bookmarks);
+    emit bookmarksChanged();
+}
+
+void EditorState::addBookmarkAtPlaybackPosition() {
+    const BookmarkEvent bookmark{.timeMilliseconds = m_playbackPositionMilliseconds};
+    if (hasEventAt(m_bookmarks, bookmark)) {
+        emit eventPlacementRejected({eventTypeName(bookmark), bookmark.timeMilliseconds});
+        return;
+    }
+    EventSnapshot before = eventSnapshot();
+    const int index = static_cast<int>(std::lower_bound(m_bookmarks.cbegin(), m_bookmarks.cend(), bookmark.timeMilliseconds,
+        [](const BookmarkEvent& event, const qint64 time) { return event.timeMilliseconds < time; }) - m_bookmarks.cbegin());
+    m_bookmarks.insert(index, bookmark);
+    emit bookmarksChanged();
+    setSelectedBookmark(index);
+    appendEventHistory(std::move(before));
 }
 
 void EditorState::addTimingPointAtPlaybackPosition() {
@@ -608,9 +663,11 @@ void EditorState::removeSelection() {
     const bool timingChanged = !m_selectedTimingPoints.isEmpty();
     const bool laneChanged = !m_selectedLaneEvents.isEmpty();
     const bool speedChanged = !m_selectedSpeedEvents.isEmpty();
+    const bool changedBookmarks = !m_selectedBookmarks.isEmpty();
     removeIndexes(&m_timingPoints, m_selectedTimingPoints);
     removeIndexes(&m_laneEvents, m_selectedLaneEvents);
     removeIndexes(&m_speedEvents, m_selectedSpeedEvents);
+    removeIndexes(&m_bookmarks, m_selectedBookmarks);
     if (timingChanged) {
         emit timingPointsChanged();
         emit divisorChanged(m_divisor);
@@ -620,6 +677,9 @@ void EditorState::removeSelection() {
     }
     if (speedChanged) {
         emit speedEventsChanged();
+    }
+    if (changedBookmarks) {
+        emit bookmarksChanged();
     }
     setSelectedEvents({}, {}, {});
     appendEventHistory(std::move(before));
@@ -815,6 +875,7 @@ void EditorState::copySelectedHitObjects() {
     m_clipboardTimingPoints.clear();
     m_clipboardLaneEvents.clear();
     m_clipboardSpeedEvents.clear();
+    m_clipboardBookmarks.clear();
     if (!m_selectedHitObjects.isEmpty()) {
         m_clipboardHitObjects.reserve(m_selectedHitObjects.size());
         for (const int index : m_selectedHitObjects) {
@@ -833,7 +894,11 @@ void EditorState::copySelectedHitObjects() {
         for (const int index : m_selectedSpeedEvents) {
             m_clipboardSpeedEvents.append(m_speedEvents.at(index));
         }
-        if (!m_clipboardTimingPoints.isEmpty() || !m_clipboardLaneEvents.isEmpty() || !m_clipboardSpeedEvents.isEmpty()) {
+        for (const int index : m_selectedBookmarks) {
+            m_clipboardBookmarks.append(m_bookmarks.at(index));
+        }
+        if (!m_clipboardTimingPoints.isEmpty() || !m_clipboardLaneEvents.isEmpty() || !m_clipboardSpeedEvents.isEmpty()
+            || !m_clipboardBookmarks.isEmpty()) {
             m_clipboardType = ClipboardType::Events;
         }
     }
@@ -864,10 +929,12 @@ void EditorState::pasteCopiedHitObjects() {
         findStart(m_clipboardTimingPoints);
         findStart(m_clipboardLaneEvents);
         findStart(m_clipboardSpeedEvents);
+        findStart(m_clipboardBookmarks);
         const qint64 offset = m_playbackPositionMilliseconds - sourceStart;
         QVector<int> timingIndexes;
         QVector<int> laneIndexes;
         QVector<int> speedIndexes;
+        QVector<int> bookmarkIndexes;
         QVector<EventCollision> collisions;
         const auto insertEvents = [offset, &collisions](auto* destination, const auto& source, QVector<int>* indexes) {
             using Event = typename std::decay_t<decltype(*destination)>::value_type;
@@ -890,7 +957,8 @@ void EditorState::pasteCopiedHitObjects() {
         insertEvents(&m_timingPoints, m_clipboardTimingPoints, &timingIndexes);
         insertEvents(&m_laneEvents, m_clipboardLaneEvents, &laneIndexes);
         insertEvents(&m_speedEvents, m_clipboardSpeedEvents, &speedIndexes);
-        if (timingIndexes.isEmpty() && laneIndexes.isEmpty() && speedIndexes.isEmpty()) {
+        insertEvents(&m_bookmarks, m_clipboardBookmarks, &bookmarkIndexes);
+        if (timingIndexes.isEmpty() && laneIndexes.isEmpty() && speedIndexes.isEmpty() && bookmarkIndexes.isEmpty()) {
             if (!collisions.isEmpty()) {
                 emit eventPasteCollisionsFound(collisions);
             }
@@ -906,7 +974,10 @@ void EditorState::pasteCopiedHitObjects() {
         if (!speedIndexes.isEmpty()) {
             emit speedEventsChanged();
         }
-        setSelectedEvents(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes));
+        if (!bookmarkIndexes.isEmpty()) {
+            emit bookmarksChanged();
+        }
+        setSelectedEvents(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes), std::move(bookmarkIndexes));
         appendEventHistory(std::move(before));
         if (!collisions.isEmpty()) {
             emit eventPasteCollisionsFound(collisions);
@@ -1277,9 +1348,9 @@ void EditorState::editSpeedEvent(const int index, SpeedEvent speedEvent) {
 }
 
 void EditorState::editSelectedEvents(QVector<TimingPoint> timingPoints, QVector<LaneEvent> laneEvents,
-    QVector<SpeedEvent> speedEvents) {
+    QVector<SpeedEvent> speedEvents, QVector<BookmarkEvent> bookmarks) {
     if (timingPoints.size() != m_selectedTimingPoints.size() || laneEvents.size() != m_selectedLaneEvents.size()
-        || speedEvents.size() != m_selectedSpeedEvents.size()
+        || speedEvents.size() != m_selectedSpeedEvents.size() || bookmarks.size() != m_selectedBookmarks.size()
         || std::any_of(timingPoints.cbegin(), timingPoints.cend(), [](const TimingPoint& point) {
             return !std::isfinite(point.beatsPerMinute);
         }) || std::any_of(speedEvents.cbegin(), speedEvents.cend(), [](const SpeedEvent& event) {
@@ -1287,11 +1358,27 @@ void EditorState::editSelectedEvents(QVector<TimingPoint> timingPoints, QVector<
         })) {
         return;
     }
+    QVector<BookmarkEvent> updatedBookmarks = m_bookmarks;
+    for (int index = 0; index < bookmarks.size(); ++index) {
+        normalizeEvent(bookmarks[index]);
+        updatedBookmarks[m_selectedBookmarks.at(index)] = bookmarks.at(index);
+    }
+    std::sort(updatedBookmarks.begin(), updatedBookmarks.end(), [](const BookmarkEvent& first, const BookmarkEvent& second) {
+        return first.timeMilliseconds < second.timeMilliseconds;
+    });
+    for (int index = 1; index < updatedBookmarks.size(); ++index) {
+        if (sameEventPosition(updatedBookmarks.at(index - 1), updatedBookmarks.at(index))) {
+            emit eventPlacementRejected({QStringLiteral("BOOKMARK"), updatedBookmarks.at(index).timeMilliseconds});
+            emit selectionChanged();
+            return;
+        }
+    }
     EventSnapshot before = eventSnapshot();
     const bool timingChanged = replaceSelectedEvents(m_timingPoints, m_selectedTimingPoints, std::move(timingPoints));
     const bool lanesChanged = replaceSelectedEvents(m_laneEvents, m_selectedLaneEvents, std::move(laneEvents));
     const bool speedsChanged = replaceSelectedEvents(m_speedEvents, m_selectedSpeedEvents, std::move(speedEvents));
-    if (!timingChanged && !lanesChanged && !speedsChanged) {
+    const bool changedBookmarks = replaceSelectedEvents(m_bookmarks, m_selectedBookmarks, std::move(bookmarks));
+    if (!timingChanged && !lanesChanged && !speedsChanged && !changedBookmarks) {
         return;
     }
     m_selectedTimingPoint = m_selectedTimingPoints.isEmpty() ? -1 : m_selectedTimingPoints.constLast();
@@ -1306,6 +1393,9 @@ void EditorState::editSelectedEvents(QVector<TimingPoint> timingPoints, QVector<
     }
     if (speedsChanged) {
         emit speedEventsChanged();
+    }
+    if (changedBookmarks) {
+        emit bookmarksChanged();
     }
     emit selectionChanged();
     appendEventHistory(std::move(before));
@@ -1566,7 +1656,7 @@ void EditorState::setSelectedHitObjects(QVector<int> indexes) {
     std::sort(indexes.begin(), indexes.end());
     indexes.erase(std::unique(indexes.begin(), indexes.end()), indexes.end());
     if (m_selectedHitObjects == indexes && m_selectedTimingPoints.isEmpty() && m_selectedLaneEvents.isEmpty()
-        && m_selectedSpeedEvents.isEmpty()) {
+        && m_selectedSpeedEvents.isEmpty() && m_selectedBookmarks.isEmpty()) {
         return;
     }
 
@@ -1577,6 +1667,7 @@ void EditorState::setSelectedHitObjects(QVector<int> indexes) {
     m_selectedSpeedEvent = -1;
     m_selectedLaneEvents.clear();
     m_selectedSpeedEvents.clear();
+    m_selectedBookmarks.clear();
     emit selectionChanged();
 }
 
@@ -1596,7 +1687,12 @@ void EditorState::setSelectedSpeedEvent(const int index) {
     setSelectedEvents({}, {}, index >= 0 ? QVector<int>{index} : QVector<int>{});
 }
 
-void EditorState::setSelectedEvents(QVector<int> timingIndexes, QVector<int> laneIndexes, QVector<int> speedIndexes) {
+void EditorState::setSelectedBookmark(const int index) {
+    setSelectedEvents({}, {}, {}, index >= 0 ? QVector<int>{index} : QVector<int>{});
+}
+
+void EditorState::setSelectedEvents(QVector<int> timingIndexes, QVector<int> laneIndexes, QVector<int> speedIndexes,
+    QVector<int> bookmarkIndexes) {
     const auto sanitize = [](QVector<int>* indexes, const int count) {
         indexes->erase(std::remove_if(indexes->begin(), indexes->end(), [count](const int index) {
             return index < 0 || index >= count;
@@ -1607,13 +1703,15 @@ void EditorState::setSelectedEvents(QVector<int> timingIndexes, QVector<int> lan
     sanitize(&timingIndexes, m_timingPoints.size());
     sanitize(&laneIndexes, m_laneEvents.size());
     sanitize(&speedIndexes, m_speedEvents.size());
+    sanitize(&bookmarkIndexes, m_bookmarks.size());
     if (m_selectedTimingPoints == timingIndexes && m_selectedLaneEvents == laneIndexes
-        && m_selectedSpeedEvents == speedIndexes && m_selectedHitObjects.isEmpty()) {
+        && m_selectedSpeedEvents == speedIndexes && m_selectedBookmarks == bookmarkIndexes && m_selectedHitObjects.isEmpty()) {
         return;
     }
     m_selectedTimingPoints = std::move(timingIndexes);
     m_selectedLaneEvents = std::move(laneIndexes);
     m_selectedSpeedEvents = std::move(speedIndexes);
+    m_selectedBookmarks = std::move(bookmarkIndexes);
     m_selectedTimingPoint = m_selectedTimingPoints.isEmpty() ? -1 : m_selectedTimingPoints.constLast();
     m_selectedLaneEvent = m_selectedLaneEvents.isEmpty() ? -1 : m_selectedLaneEvents.constLast();
     m_selectedSpeedEvent = m_selectedSpeedEvents.isEmpty() ? -1 : m_selectedSpeedEvents.constLast();
@@ -1665,10 +1763,12 @@ EditorState::EventSnapshot EditorState::eventSnapshot() const {
         .timingPoints = m_timingPoints,
         .laneEvents = m_laneEvents,
         .speedEvents = m_speedEvents,
+        .bookmarks = m_bookmarks,
         .selectedHitObjects = m_selectedHitObjects,
         .selectedTimingPoints = m_selectedTimingPoints,
         .selectedLaneEvents = m_selectedLaneEvents,
         .selectedSpeedEvents = m_selectedSpeedEvents,
+        .selectedBookmarks = m_selectedBookmarks,
         .selectedTimingPoint = m_selectedTimingPoint,
         .selectedLaneEvent = m_selectedLaneEvent,
         .selectedSpeedEvent = m_selectedSpeedEvent,
@@ -1679,17 +1779,20 @@ void EditorState::restoreEventSnapshot(const EventSnapshot& snapshot) {
     m_timingPoints = snapshot.timingPoints;
     m_laneEvents = snapshot.laneEvents;
     m_speedEvents = snapshot.speedEvents;
+    m_bookmarks = snapshot.bookmarks;
     m_selectedHitObjects = snapshot.selectedHitObjects;
     m_selectedTimingPoint = snapshot.selectedTimingPoint;
     m_selectedTimingPoints = snapshot.selectedTimingPoints;
     m_selectedLaneEvents = snapshot.selectedLaneEvents;
     m_selectedSpeedEvents = snapshot.selectedSpeedEvents;
+    m_selectedBookmarks = snapshot.selectedBookmarks;
     m_selectedLaneEvent = snapshot.selectedLaneEvent;
     m_selectedSpeedEvent = snapshot.selectedSpeedEvent;
     emit timingPointsChanged();
     emit laneEventsChanged();
     emit speedEventsChanged();
     emit divisorChanged(m_divisor);
+    emit bookmarksChanged();
     emit selectionChanged();
 }
 

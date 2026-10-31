@@ -41,6 +41,7 @@ public:
     void setTimingPoints(QVector<TimingPoint> timingPoints);
     void setSpeedEvents(QVector<SpeedEvent> speedEvents);
     void setLaneEvents(QVector<LaneEvent> laneEvents);
+    void setBookmarks(QVector<BookmarkEvent> bookmarks);
     void setSelectedHitObjects(QVector<int> indexes);
     void clearWaveform();
     void setWaveformWidth(double width);
@@ -194,6 +195,7 @@ private:
     EditorTool m_tool = EditorTool::Place;
     QVector<TimingPoint> m_timingPoints;
     QVector<SpeedEvent> m_speedEvents;
+    QVector<BookmarkEvent> m_bookmarks;
     QVector<LaneEvent> m_laneEvents;
     QVector<int> m_selectedHitObjects;
     QSet<int> m_selectedHitObjectIndexes;

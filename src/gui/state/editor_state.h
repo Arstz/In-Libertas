@@ -46,6 +46,7 @@ public:
     [[nodiscard]] const QVector<TimingPoint>& timingPoints() const;
     [[nodiscard]] const QVector<LaneEvent>& laneEvents() const;
     [[nodiscard]] const QVector<SpeedEvent>& speedEvents() const;
+    [[nodiscard]] const QVector<BookmarkEvent>& bookmarks() const;
     [[nodiscard]] qint64 playbackPosition() const;
     [[nodiscard]] int divisor() const;
     [[nodiscard]] qint64 divisorDurationMilliseconds() const;
@@ -59,6 +60,7 @@ public:
     [[nodiscard]] const QVector<int>& selectedLaneEvents() const;
     [[nodiscard]] int selectedSpeedEvent() const;
     [[nodiscard]] const QVector<int>& selectedSpeedEvents() const;
+    [[nodiscard]] const QVector<int>& selectedBookmarks() const;
     [[nodiscard]] int selectedEventCount() const;
 
     void setChart(ChartData chart);
@@ -66,9 +68,11 @@ public:
     void setTimingPoints(QVector<TimingPoint> timingPoints);
     void setLaneEvents(QVector<LaneEvent> laneEvents);
     void setSpeedEvents(QVector<SpeedEvent> speedEvents);
+    void setBookmarks(QVector<BookmarkEvent> bookmarks);
     void addTimingPointAtPlaybackPosition();
     void addLaneEventAtPlaybackPosition();
     void addSpeedEventAtPlaybackPosition();
+    void addBookmarkAtPlaybackPosition();
     [[nodiscard]] QString speedInterpolationSelectionError() const;
     [[nodiscard]] QString interpolateSelectedSpeedEvents(const SpeedInterpolationOptions& options);
     void removeTimingPoint(int index);
@@ -102,7 +106,7 @@ public:
     void editLaneEvent(int index, LaneEvent laneEvent);
     void editSpeedEvent(int index, SpeedEvent speedEvent);
     void editSelectedEvents(QVector<TimingPoint> timingPoints, QVector<LaneEvent> laneEvents,
-        QVector<SpeedEvent> speedEvents);
+        QVector<SpeedEvent> speedEvents, QVector<BookmarkEvent> bookmarks = {});
     void beginHitObjectMove(int index);
     void moveHitObject(int index, ChartNote hitObject);
     void finishHitObjectMove();
@@ -116,7 +120,9 @@ public:
     void setSelectedTimingPoints(QVector<int> indexes);
     void setSelectedLaneEvent(int index);
     void setSelectedSpeedEvent(int index);
-    void setSelectedEvents(QVector<int> timingIndexes, QVector<int> laneIndexes, QVector<int> speedIndexes);
+    void setSelectedBookmark(int index);
+    void setSelectedEvents(QVector<int> timingIndexes, QVector<int> laneIndexes, QVector<int> speedIndexes,
+        QVector<int> bookmarkIndexes = {});
 
 signals:
     void chartChanged();
@@ -124,6 +130,7 @@ signals:
     void timingPointsChanged();
     void laneEventsChanged();
     void speedEventsChanged();
+    void bookmarksChanged();
     void lastTimingPointRemovalRejected();
     void eventPlacementRejected(const infalsus::gui::EventCollision& collision);
     void eventPasteCollisionsFound(const QVector<infalsus::gui::EventCollision>& collisions);
@@ -157,10 +164,12 @@ private:
         QVector<TimingPoint> timingPoints;
         QVector<LaneEvent> laneEvents;
         QVector<SpeedEvent> speedEvents;
+        QVector<BookmarkEvent> bookmarks;
         QVector<int> selectedHitObjects;
         QVector<int> selectedTimingPoints;
         QVector<int> selectedLaneEvents;
         QVector<int> selectedSpeedEvents;
+        QVector<int> selectedBookmarks;
         int selectedTimingPoint = -1;
         int selectedLaneEvent = -1;
         int selectedSpeedEvent = -1;
@@ -203,6 +212,7 @@ private:
     QVector<TimingPoint> m_timingPoints;
     QVector<LaneEvent> m_laneEvents;
     QVector<SpeedEvent> m_speedEvents;
+    QVector<BookmarkEvent> m_bookmarks;
     qint64 m_playbackPositionMilliseconds = 0;
     int m_divisor = 4;
     Difficulty m_difficulty = Difficulty::Minimal;
@@ -217,6 +227,7 @@ private:
     QVector<TimingPoint> m_clipboardTimingPoints;
     QVector<LaneEvent> m_clipboardLaneEvents;
     QVector<SpeedEvent> m_clipboardSpeedEvents;
+    QVector<BookmarkEvent> m_clipboardBookmarks;
     QVector<HistoryEntry> m_batchMoveStarts;
     QVector<int> m_batchMoveSelectionStart;
     ChartNote m_moveStart;
@@ -231,6 +242,7 @@ private:
     QVector<int> m_selectedLaneEvents;
     int m_selectedSpeedEvent = -1;
     QVector<int> m_selectedSpeedEvents;
+    QVector<int> m_selectedBookmarks;
     qint64 m_lastScrubTargetMilliseconds = -1;
     std::chrono::steady_clock::time_point m_lastScrubTime;
     int m_lastScrubDirection = 0;

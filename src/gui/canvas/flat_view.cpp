@@ -450,6 +450,11 @@ void FlatView::setLaneEvents(QVector<LaneEvent> laneEvents) {
     update();
 }
 
+void FlatView::setBookmarks(QVector<BookmarkEvent> bookmarks) {
+    m_bookmarks = std::move(bookmarks);
+    update();
+}
+
 void FlatView::setSelectedHitObjects(QVector<int> indexes) {
     indexes.erase(std::remove_if(indexes.begin(), indexes.end(), [this](const int index) {
         return index < 0 || index >= m_chart.notes.size();
@@ -2281,6 +2286,12 @@ void FlatView::drawWaveformEvents(QPainter& painter, const QRectF& area) const {
         const SpeedEvent& event = *speed;
         labels[event.timeMilliseconds].append({QString::number(event.speed, 'g', kWaveformEventValuePrecision),
             palette::guideGreen});
+    }
+    auto bookmark = std::lower_bound(m_bookmarks.cbegin(), m_bookmarks.cend(), visibleStart,
+        [](const BookmarkEvent& event, const qint64 time) { return event.timeMilliseconds < time; });
+    for (; bookmark != m_bookmarks.cend() && bookmark->timeMilliseconds <= visibleEnd; ++bookmark) {
+        const auto number = bookmark - m_bookmarks.cbegin() + 1;
+        labels[bookmark->timeMilliseconds].append({QStringLiteral("#%1").arg(number), palette::outerNotePurple});
     }
     painter.save();
     painter.setClipRect(area, Qt::IntersectClip);

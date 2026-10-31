@@ -60,6 +60,10 @@ struct SpeedEvent {
     double speed = 1.0;
 };
 
+struct BookmarkEvent {
+    qint64 timeMilliseconds = 0;
+};
+
 struct DifficultyChart {
     Difficulty difficulty = Difficulty::Minimal;
     DifficultyMetadata metadata;
@@ -67,6 +71,7 @@ struct DifficultyChart {
     QVector<TimingPoint> timingPoints;
     QVector<LaneEvent> laneEvents;
     QVector<SpeedEvent> speedEvents;
+    QVector<BookmarkEvent> bookmarks;
 };
 
 struct ChartProject {

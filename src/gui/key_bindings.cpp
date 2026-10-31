@@ -59,6 +59,7 @@ constexpr CommandDefinition kCommands[]{
     {KeyCommand::ZoomOutAlternate, "zoom_out_alternate", "View / Zoom out (alternate)", "_", true},
     {KeyCommand::AddTimingPoint, "add_timing_point", "Events / Place BPM event", "Ctrl+Shift+O"},
     {KeyCommand::AddSpeedEvent, "add_speed_event", "Events / Place SV event", "Ctrl+Shift+P"},
+    {KeyCommand::AddBookmark, "add_bookmark", "Events / Place bookmark", "Ctrl+Shift+B"},
     {KeyCommand::InterpolateSpeedEvents, "interpolate_speed_events", "Events / Interpolate SV events", "Ctrl+I"},
     {KeyCommand::TogglePlayback, "toggle_playback", "Playback / Play or pause", "Space"},
     {KeyCommand::EnterPlaytest, "enter_playtest", "Playback / Playtest", "F5"},

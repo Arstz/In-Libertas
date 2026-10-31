@@ -1116,6 +1116,7 @@ void MainWindow::registerNavigationKeybinds() {
     addAction(KeyCommand::ZoomOutAlternate, [this] { adjustFlatZoom(-1.0); });
     addAction(KeyCommand::AddTimingPoint, [this] { m_state->addTimingPointAtPlaybackPosition(); });
     addAction(KeyCommand::AddSpeedEvent, [this] { m_state->addSpeedEventAtPlaybackPosition(); });
+    addAction(KeyCommand::AddBookmark, [this] { m_state->addBookmarkAtPlaybackPosition(); });
     addAction(KeyCommand::TogglePlayback, [this] { togglePlayback(); });
     addAction(KeyCommand::EnterPlaytest, [this] { enterPlaytest(); });
     addAction(KeyCommand::IncreasePlaybackRate, [this] { m_playback->increasePlaybackRate(); });
@@ -1243,7 +1244,12 @@ void MainWindow::buildWorkspace() {
     timingLayout->setContentsMargins(0, 0, 0, 0);
     timingLayout->setSpacing(2);
     timingLayout->addWidget(m_timing, 1);
-    auto* timingPanel = createPanel(QStringLiteral("Events"), timingHost, m_eventsSplitter);
+    auto* eventFilter = new QComboBox(this);
+    eventFilter->addItems({QStringLiteral("ALL"), QStringLiteral("SV"), QStringLiteral("BPM"),
+        QStringLiteral("LANE"), QStringLiteral("BOOKMARK")});
+    eventFilter->setToolTip(QStringLiteral("Filter events by type"));
+    connect(eventFilter, &QComboBox::currentIndexChanged, m_timing, &EventsWidget::setFilter);
+    auto* timingPanel = createPanel(QStringLiteral("Events"), timingHost, m_eventsSplitter, eventFilter);
     m_fieldPresetsPanel = createPanel(QStringLiteral("Field presets"), m_fieldPresets, m_eventsSplitter);
     m_eventsSplitter->addWidget(timingPanel);
     m_eventsSplitter->addWidget(m_fieldPresetsPanel);
@@ -1395,12 +1401,15 @@ void MainWindow::buildWorkspace() {
     connect(m_timing, &EventsWidget::addTimingRequested, m_state, &EditorState::addTimingPointAtPlaybackPosition);
     connect(m_timing, &EventsWidget::addLaneRequested, m_state, &EditorState::addLaneEventAtPlaybackPosition);
     connect(m_timing, &EventsWidget::addSpeedRequested, m_state, &EditorState::addSpeedEventAtPlaybackPosition);
+    connect(m_timing, &EventsWidget::addBookmarkRequested, m_state, &EditorState::addBookmarkAtPlaybackPosition);
     connect(m_timing, &EventsWidget::eventSelected, this, [this](const EventsWidget::EntryType type, const int index) {
         m_selectingEventInWidget = true;
         if (type == EventsWidget::EntryType::Timing) {
             m_state->setSelectedTimingPoint(index);
         } else if (type == EventsWidget::EntryType::Lane) {
             m_state->setSelectedLaneEvent(index);
+        } else if (type == EventsWidget::EntryType::Bookmark) {
+            m_state->setSelectedBookmark(index);
         } else {
             m_state->setSelectedSpeedEvent(index);
         }
@@ -1412,9 +1421,10 @@ void MainWindow::buildWorkspace() {
         m_selectingEventInWidget = false;
     });
     connect(m_timing, &EventsWidget::eventsSelected, this, [this](QVector<int> timingIndexes, QVector<int> laneIndexes,
-        QVector<int> speedIndexes) {
+        QVector<int> speedIndexes, QVector<int> bookmarkIndexes) {
         m_selectingEventInWidget = true;
-        m_state->setSelectedEvents(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes));
+        m_state->setSelectedEvents(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes),
+            std::move(bookmarkIndexes));
         m_selectingEventInWidget = false;
     });
     connect(m_timing, &EventsWidget::eventSeekRequested, this, [this](const EventsWidget::EntryType type, const int index) {
@@ -1425,7 +1435,8 @@ void MainWindow::buildWorkspace() {
                     ? m_state->laneEvents().at(index).timeMilliseconds
                     : type == EventsWidget::EntryType::Speed && index >= 0 && index < m_state->speedEvents().size()
                         ? m_state->speedEvents().at(index).timeMilliseconds
-                        : -1;
+                        : type == EventsWidget::EntryType::Bookmark && index >= 0 && index < m_state->bookmarks().size()
+                            ? m_state->bookmarks().at(index).timeMilliseconds : -1;
         if (time >= 0) {
             m_state->setPlaybackPosition(time);
         }
@@ -1450,9 +1461,9 @@ void MainWindow::buildWorkspace() {
         updateStatus();
     });
     connect(m_state, &EditorState::timingPointsChanged, this, [this] {
-        m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents());
+        m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents(), m_state->bookmarks());
         m_timing->setSelectedEvents(m_state->selectedTimingPoints(), m_state->selectedLaneEvents(),
-            m_state->selectedSpeedEvents());
+            m_state->selectedSpeedEvents(), m_state->selectedBookmarks());
         m_timeline->setTimingPoints(m_state->timingPoints());
         m_flatView->setTimingPoints(m_state->timingPoints());
         m_viewer->setTimingPoints(m_state->timingPoints());
@@ -1466,9 +1477,9 @@ void MainWindow::buildWorkspace() {
         });
     });
     connect(m_state, &EditorState::laneEventsChanged, this, [this] {
-        m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents());
+        m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents(), m_state->bookmarks());
         m_timing->setSelectedEvents(m_state->selectedTimingPoints(), m_state->selectedLaneEvents(),
-            m_state->selectedSpeedEvents());
+            m_state->selectedSpeedEvents(), m_state->selectedBookmarks());
         m_viewer->setLaneEvents(m_state->laneEvents());
         m_flatView->setLaneEvents(m_state->laneEvents());
         if (m_hasProject && !m_loadingProject) {
@@ -1480,13 +1491,27 @@ void MainWindow::buildWorkspace() {
         });
     });
     connect(m_state, &EditorState::speedEventsChanged, this, [this] {
-        m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents());
+        m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents(), m_state->bookmarks());
         m_timing->setSelectedEvents(m_state->selectedTimingPoints(), m_state->selectedLaneEvents(),
-            m_state->selectedSpeedEvents());
+            m_state->selectedSpeedEvents(), m_state->selectedBookmarks());
         m_timeline->setSpeedEvents(m_state->speedEvents());
         m_flatView->setSpeedEvents(m_state->speedEvents());
         m_viewer->setSpeedEvents(m_state->speedEvents());
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
+        if (m_hasProject && !m_loadingProject) {
+            storeLoadedDifficulty();
+            markProjectDirty();
+        }
+        QTimer::singleShot(0, m_properties, [this] {
+            m_properties->setSelection(*m_state);
+        });
+    });
+    connect(m_state, &EditorState::bookmarksChanged, this, [this] {
+        m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents(), m_state->bookmarks());
+        m_timing->setSelectedEvents(m_state->selectedTimingPoints(), m_state->selectedLaneEvents(),
+            m_state->selectedSpeedEvents(), m_state->selectedBookmarks());
+        m_timeline->setBookmarks(m_state->bookmarks());
+        m_flatView->setBookmarks(m_state->bookmarks());
         if (m_hasProject && !m_loadingProject) {
             storeLoadedDifficulty();
             markProjectDirty();
@@ -1524,7 +1549,7 @@ void MainWindow::buildWorkspace() {
         m_flatView->setSelectedHitObjects(m_state->selectedHitObjects());
         if (!m_selectingEventInWidget) {
             m_timing->setSelectedEvents(m_state->selectedTimingPoints(), m_state->selectedLaneEvents(),
-                m_state->selectedSpeedEvents());
+                m_state->selectedSpeedEvents(), m_state->selectedBookmarks());
         }
         QTimer::singleShot(0, m_properties, [this] {
             m_properties->setSelection(*m_state);
@@ -1536,10 +1561,12 @@ void MainWindow::buildWorkspace() {
     m_metadata->setDifficultyMetadata({});
     m_metadata->setJacketAvailable(false);
     m_metadata->setJacketEditingEnabled(false);
-    m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents());
+    m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents(), m_state->bookmarks());
     m_timeline->setTimingPoints(m_state->timingPoints());
     m_timeline->setSpeedEvents(m_state->speedEvents());
     m_flatView->setTimingPoints(m_state->timingPoints());
+    m_timeline->setBookmarks(m_state->bookmarks());
+    m_flatView->setBookmarks(m_state->bookmarks());
     m_flatView->setSpeedEvents(m_state->speedEvents());
     m_flatView->setLaneEvents(m_state->laneEvents());
     m_viewer->setTimingPoints(m_state->timingPoints());
@@ -1597,6 +1624,7 @@ void MainWindow::loadChartFile(const QString& chartPath) {
     m_state->setTimingPoints(importedDifficulty.timingPoints);
     m_state->setLaneEvents(importedDifficulty.laneEvents);
     m_state->setSpeedEvents(importedDifficulty.speedEvents);
+    m_state->setBookmarks(importedDifficulty.bookmarks);
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = true;
@@ -2002,6 +2030,7 @@ void MainWindow::createProject() {
     m_state->setTimingPoints(m_project.difficulties.at(0).timingPoints);
     m_state->setLaneEvents(m_project.difficulties.at(0).laneEvents);
     m_state->setSpeedEvents(m_project.difficulties.at(0).speedEvents);
+    m_state->setBookmarks(m_project.difficulties.at(0).bookmarks);
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
     m_projectDirty = true;
@@ -2095,6 +2124,7 @@ void MainWindow::loadProject(const QString& path) {
     m_state->setLaneEvents(chart.laneEvents);
     m_state->setSpeedEvents(chart.speedEvents);
     m_state->setPlaybackPosition(0);
+    m_state->setBookmarks(chart.bookmarks);
     m_loadingProject = false;
     m_projectDirty = false;
     m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
@@ -2314,6 +2344,7 @@ void MainWindow::storeLoadedDifficulty() {
     difficulty.timingPoints = m_state->timingPoints();
     difficulty.laneEvents = m_state->laneEvents();
     difficulty.speedEvents = m_state->speedEvents();
+    difficulty.bookmarks = m_state->bookmarks();
     m_project.metadata = m_state->metadata();
 }
 
@@ -2328,6 +2359,7 @@ void MainWindow::loadDifficulty(const Difficulty difficulty) {
     m_state->setTimingPoints(chart.timingPoints);
     m_state->setLaneEvents(chart.laneEvents);
     m_state->setSpeedEvents(chart.speedEvents);
+    m_state->setBookmarks(chart.bookmarks);
     m_state->setPlaybackPosition(0);
     m_loadingProject = false;
 }

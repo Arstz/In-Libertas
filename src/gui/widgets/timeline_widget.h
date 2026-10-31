@@ -22,6 +22,7 @@ public:
     void setPlaybackPosition(qint64 positionMilliseconds);
     void setTimingPoints(QVector<TimingPoint> timingPoints);
     void setSpeedEvents(QVector<SpeedEvent> speedEvents);
+    void setBookmarks(QVector<BookmarkEvent> bookmarks);
 
 signals:
     void playbackPositionRequested(qint64 positionMilliseconds);
@@ -40,6 +41,7 @@ private:
     qint64 m_playbackPositionMilliseconds = 0;
     QVector<TimingPoint> m_timingPoints;
     QVector<SpeedEvent> m_speedEvents;
+    QVector<BookmarkEvent> m_bookmarks;
     QPixmap m_eventMarkers;
     bool m_eventMarkersDirty = true;
     bool m_dragging = false;

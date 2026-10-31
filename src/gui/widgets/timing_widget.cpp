@@ -1,5 +1,6 @@
 #include "gui/widgets/timing_widget.h"
 #include "gui/widgets/adaptive_push_button.h"
+#include "gui/app/game_palette.h"
 
 #include <QtCore/QAbstractListModel>
 #include <QtCore/QItemSelectionModel>
@@ -113,6 +114,9 @@ public:
         painter->save();
         painter->setClipRect(option.rect);
         painter->fillRect(option.rect, option.palette.brush(selected ? QPalette::Highlight : QPalette::Base));
+        if (!selected) {
+            painter->fillRect(option.rect, index.data(Qt::BackgroundRole).value<QColor>());
+        }
         painter->setFont(option.font);
         const QRect contents = option.rect.adjusted(6, 1, -6, -1);
         const int fieldWidth = std::max(0, contents.width() - 20);
@@ -149,10 +153,16 @@ public:
 
     QVariant data(const QModelIndex& index, const int role) const override {
         if (!index.isValid() || index.row() < 0 || index.row() >= rowCount()
-            || (role != Qt::DisplayRole && role != Qt::UserRole)) {
+            || (role != Qt::DisplayRole && role != Qt::UserRole && role != Qt::BackgroundRole)) {
             return {};
         }
         const Entry& entry = m_entries.at(index.row());
+        if (role == Qt::BackgroundRole) {
+            const QColor color = entry.type == EventsWidget::EntryType::Timing ? palette::outerNoteRed
+                : entry.type == EventsWidget::EntryType::Speed ? palette::guideGreen
+                : entry.type == EventsWidget::EntryType::Lane ? palette::guideYellow : palette::outerNotePurple;
+            return palette::withAlpha(color, 25);
+        }
         QStringList fields;
         if (entry.type == EventsWidget::EntryType::Timing) {
             const TimingPoint& point = m_timingEvents.at(entry.index);
@@ -163,6 +173,10 @@ public:
             const LaneEvent& event = m_laneEvents.at(entry.index);
             fields = {QStringLiteral("%1 ms").arg(event.timeMilliseconds), QStringLiteral("Lane %1").arg(event.lane),
                 event.enabled ? QStringLiteral("ON") : QStringLiteral("OFF")};
+        } else if (entry.type == EventsWidget::EntryType::Bookmark) {
+            const BookmarkEvent& bookmark = m_bookmarks.at(entry.index);
+            fields = {QStringLiteral("%1 ms").arg(bookmark.timeMilliseconds), QStringLiteral("BOOKMARK"),
+                QStringLiteral("#%1").arg(entry.index + 1)};
         } else {
             const SpeedEvent& event = m_speedEvents.at(entry.index);
             fields = {QStringLiteral("%1 ms").arg(event.timeMilliseconds), QStringLiteral("SV"),
@@ -172,15 +186,19 @@ public:
     }
 
     void setEvents(const QVector<TimingPoint>& timingEvents, const QVector<LaneEvent>& laneEvents,
-        const QVector<SpeedEvent>& speedEvents) {
+        const QVector<SpeedEvent>& speedEvents, const QVector<BookmarkEvent>& bookmarks = {}) {
         beginResetModel();
         m_timingEvents = timingEvents;
         m_laneEvents = laneEvents;
         m_speedEvents = speedEvents;
+        m_bookmarks = bookmarks;
         m_entries.clear();
-        m_entries.reserve(timingEvents.size() + laneEvents.size() + speedEvents.size());
+        m_entries.reserve(timingEvents.size() + laneEvents.size() + speedEvents.size() + bookmarks.size());
         const auto append = [this](const auto& events, const EventsWidget::EntryType type) {
-            m_rowsByType[static_cast<int>(type)].resize(events.size());
+            m_rowsByType[static_cast<int>(type)].fill(-1, events.size());
+            if (m_filter >= 0 && m_filter != static_cast<int>(type)) {
+                return;
+            }
             for (int index = 0; index < events.size(); ++index) {
                 m_entries.append({type, index, events.at(index).timeMilliseconds});
             }
@@ -188,6 +206,7 @@ public:
         append(timingEvents, EventsWidget::EntryType::Timing);
         append(laneEvents, EventsWidget::EntryType::Lane);
         append(speedEvents, EventsWidget::EntryType::Speed);
+        append(bookmarks, EventsWidget::EntryType::Bookmark);
         std::stable_sort(m_entries.begin(), m_entries.end(), [](const Entry& first, const Entry& second) {
             return first.timeMilliseconds < second.timeMilliseconds;
         });
@@ -200,6 +219,11 @@ public:
 
     const Entry& entry(const int row) const { return m_entries.at(row); }
 
+    void setFilter(const int filter) {
+        m_filter = filter;
+        setEvents(m_timingEvents, m_laneEvents, m_speedEvents, m_bookmarks);
+    }
+
     int rowFor(const EventsWidget::EntryType type, const int index) const {
         const auto& rows = m_rowsByType[static_cast<int>(type)];
         return index >= 0 && index < rows.size() ? rows.at(index) : -1;
@@ -207,10 +231,12 @@ public:
 
 private:
     QVector<Entry> m_entries;
-    std::array<QVector<int>, 3> m_rowsByType;
+    std::array<QVector<int>, 4> m_rowsByType;
     QVector<TimingPoint> m_timingEvents;
     QVector<LaneEvent> m_laneEvents;
     QVector<SpeedEvent> m_speedEvents;
+    QVector<BookmarkEvent> m_bookmarks;
+    int m_filter = -1;
 };
 
 EventsWidget::EventsWidget(QWidget* parent)
@@ -249,9 +275,12 @@ EventsWidget::EventsWidget(QWidget* parent)
         QStringLiteral("Add lane"), QStringLiteral("+ Lane")}, this);
     auto* addSpeedButton = new AdaptivePushButton({QStringLiteral("Add SV event"),
         QStringLiteral("Add SV"), QStringLiteral("+ SV")}, this);
+    auto* addBookmarkButton = new AdaptivePushButton({QStringLiteral("Add bookmark"),
+        QStringLiteral("Bookmark"), QStringLiteral("+ Mark")}, this);
     buttons->addWidget(addTimingButton);
     buttons->addWidget(addLaneButton);
     buttons->addWidget(addSpeedButton);
+    buttons->addWidget(addBookmarkButton);
     layout->addWidget(header);
     layout->addWidget(m_points, 1);
     layout->addLayout(buttons);
@@ -259,6 +288,7 @@ EventsWidget::EventsWidget(QWidget* parent)
     connect(addTimingButton, &QPushButton::clicked, this, &EventsWidget::addTimingRequested);
     connect(addLaneButton, &QPushButton::clicked, this, &EventsWidget::addLaneRequested);
     connect(addSpeedButton, &QPushButton::clicked, this, &EventsWidget::addSpeedRequested);
+    connect(addBookmarkButton, &QPushButton::clicked, this, &EventsWidget::addBookmarkRequested);
 }
 
 void EventsWidget::setSelectedTimingEvent(const int index) {
@@ -270,7 +300,7 @@ void EventsWidget::setSelectedTimingEvents(const QVector<int>& indexes) {
 }
 
 void EventsWidget::setSelectedEvents(const QVector<int>& timingIndexes, const QVector<int>& laneIndexes,
-    const QVector<int>& speedIndexes) {
+    const QVector<int>& speedIndexes, const QVector<int>& bookmarkIndexes) {
     QSet<int> selected;
     int current = -1;
     const auto select = [&](const EntryType type, const QVector<int>& indexes) {
@@ -285,6 +315,7 @@ void EventsWidget::setSelectedEvents(const QVector<int>& timingIndexes, const QV
     select(EntryType::Timing, timingIndexes);
     select(EntryType::Lane, laneIndexes);
     select(EntryType::Speed, speedIndexes);
+    select(EntryType::Bookmark, bookmarkIndexes);
     setRowsSelected(selected, current);
 }
 
@@ -297,10 +328,22 @@ void EventsWidget::setSelectedSpeedEvent(const int index) {
 }
 
 void EventsWidget::setEvents(const QVector<TimingPoint>& timingEvents, const QVector<LaneEvent>& laneEvents,
-    const QVector<SpeedEvent>& speedEvents) {
+    const QVector<SpeedEvent>& speedEvents, const QVector<BookmarkEvent>& bookmarks) {
     m_selectedRows.clear();
     m_selectionAnchor = -1;
-    m_model->setEvents(timingEvents, laneEvents, speedEvents);
+    m_model->setEvents(timingEvents, laneEvents, speedEvents, bookmarks);
+}
+
+void EventsWidget::setFilter(const int index) {
+    static constexpr std::array<int, 5> types{-1, static_cast<int>(EntryType::Speed), static_cast<int>(EntryType::Timing),
+        static_cast<int>(EntryType::Lane), static_cast<int>(EntryType::Bookmark)};
+    if (index < 0 || index >= types.size()) {
+        return;
+    }
+    m_selectedRows.clear();
+    m_selectionAnchor = -1;
+    m_model->setFilter(types.at(index));
+    emit eventsSelected({}, {}, {}, {});
 }
 
 void EventsWidget::setSelected(const EntryType type, const int index) {
@@ -362,12 +405,15 @@ void EventsWidget::emitCurrentSelection(const bool seek) {
         QVector<int> timingIndexes;
         QVector<int> laneIndexes;
         QVector<int> speedIndexes;
+        QVector<int> bookmarkIndexes;
         for (const int row : m_selectedRows) {
             const auto& entry = m_model->entry(row);
             if (entry.type == EntryType::Timing) {
                 timingIndexes.append(entry.index);
             } else if (entry.type == EntryType::Lane) {
                 laneIndexes.append(entry.index);
+            } else if (entry.type == EntryType::Bookmark) {
+                bookmarkIndexes.append(entry.index);
             } else {
                 speedIndexes.append(entry.index);
             }
@@ -375,7 +421,8 @@ void EventsWidget::emitCurrentSelection(const bool seek) {
         std::sort(timingIndexes.begin(), timingIndexes.end());
         std::sort(laneIndexes.begin(), laneIndexes.end());
         std::sort(speedIndexes.begin(), speedIndexes.end());
-        emit eventsSelected(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes));
+        std::sort(bookmarkIndexes.begin(), bookmarkIndexes.end());
+        emit eventsSelected(std::move(timingIndexes), std::move(laneIndexes), std::move(speedIndexes), std::move(bookmarkIndexes));
         return;
     }
     const auto entry = m_model->entry(*m_selectedRows.cbegin());

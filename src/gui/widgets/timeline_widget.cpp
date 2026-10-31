@@ -38,6 +38,12 @@ void TimelineWidget::setSpeedEvents(QVector<SpeedEvent> speedEvents) {
     update();
 }
 
+void TimelineWidget::setBookmarks(QVector<BookmarkEvent> bookmarks) {
+    m_bookmarks = std::move(bookmarks);
+    m_eventMarkersDirty = true;
+    update();
+}
+
 void TimelineWidget::mouseMoveEvent(QMouseEvent* event) {
     if (m_dragging) {
         emit playbackPositionRequested(positionForX(event->position().x()));
@@ -106,6 +112,12 @@ void TimelineWidget::ensureEventMarkers() {
         painter.drawRect(QRectF(x - 2.0, track.center().y(), 4.0, track.height() * 0.5));
     }
 
+    painter.setPen(QPen(palette::outerNotePurple, 2.0));
+    for (const BookmarkEvent& bookmark : m_bookmarks) {
+        const double progress = static_cast<double>(bookmark.timeMilliseconds) / m_durationMilliseconds;
+        const double x = track.left() + std::clamp(progress, 0.0, 1.0) * track.width();
+        painter.drawLine(QPointF(x, 4.0), QPointF(x, height() - 4.0));
+    }
     m_eventMarkersDirty = false;
 }
 

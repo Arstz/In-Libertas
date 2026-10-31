@@ -106,6 +106,7 @@ constexpr char kProjectMagic[] = "10NO";
     QJsonArray timingPoints;
     QJsonArray laneEvents;
     QJsonArray speedEvents;
+    QJsonArray bookmarks;
     for (const ChartNote& note : difficulty.hitObjects.notes) {
         notes.append(noteToJson(note));
     }
@@ -117,6 +118,9 @@ constexpr char kProjectMagic[] = "10NO";
     }
     for (const SpeedEvent& event : difficulty.speedEvents) {
         speedEvents.append(speedEventToJson(event));
+    }
+    for (const BookmarkEvent& bookmark : difficulty.bookmarks) {
+        bookmarks.append(QJsonObject{{QStringLiteral("time_ms"), bookmark.timeMilliseconds}});
     }
 
     return {
@@ -130,6 +134,7 @@ constexpr char kProjectMagic[] = "10NO";
         {QStringLiteral("timing_events"), timingPoints},
         {QStringLiteral("lane_events"), laneEvents},
         {QStringLiteral("speed_events"), speedEvents},
+        {QStringLiteral("bookmarks"), bookmarks},
     };
 }
 
@@ -154,6 +159,10 @@ constexpr char kProjectMagic[] = "10NO";
     }
     for (const QJsonValue& value : object.value(QStringLiteral("speed_events")).toArray()) {
         chart.speedEvents.append(speedEventFromJson(value.toObject()));
+    }
+    for (const QJsonValue& value : object.value(QStringLiteral("bookmarks")).toArray()) {
+        chart.bookmarks.append({.timeMilliseconds = std::max<qint64>(0,
+            value.toObject().value(QStringLiteral("time_ms")).toInteger())});
     }
     if (chart.timingPoints.isEmpty()) {
         chart.timingPoints.append(TimingPoint{});

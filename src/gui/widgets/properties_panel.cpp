@@ -233,9 +233,12 @@ void PropertiesPanel::setSelection(const EditorState& state) {
     for (const int index : state.selectedSpeedEvents()) {
         m_speedEvents.append(state.speedEvents().at(index));
     }
+    for (const int index : state.selectedBookmarks()) {
+        m_bookmarks.append(state.bookmarks().at(index));
+    }
     if (!m_hitObjects.isEmpty()) {
         showHitObjects();
-    } else if (!m_timingPoints.isEmpty() || !m_laneEvents.isEmpty() || !m_speedEvents.isEmpty()) {
+    } else if (!m_timingPoints.isEmpty() || !m_laneEvents.isEmpty() || !m_speedEvents.isEmpty() || !m_bookmarks.isEmpty()) {
         showEvents();
     } else {
         addReadOnlyRow(QStringLiteral("Selection"), QStringLiteral("No selection"));
@@ -252,6 +255,7 @@ void PropertiesPanel::clearRows() {
     m_timingPoints.clear();
     m_laneEvents.clear();
     m_speedEvents.clear();
+    m_bookmarks.clear();
 }
 
 void PropertiesPanel::setEventOffset(const qint64 offsetMilliseconds) {
@@ -357,6 +361,7 @@ void PropertiesPanel::showEvents() {
     collectTimes(m_timingPoints, QStringLiteral("Timing point"));
     collectTimes(m_laneEvents, QStringLiteral("Lane event"));
     collectTimes(m_speedEvents, QStringLiteral("SV event"));
+    collectTimes(m_bookmarks, QStringLiteral("Bookmark"));
     addReadOnlyRow(QStringLiteral("Type"), types.size() == 1 ? types.front() : QStringLiteral("Mixed"));
     auto* currentTimeButton = new QPushButton(QStringLiteral("Set current time"), this);
     connect(currentTimeButton, &QPushButton::clicked, this, &PropertiesPanel::eventOffsetCurrentTimeRequested);
@@ -459,7 +464,12 @@ void PropertiesPanel::applyEventProperty(const EventProperty property, const QVa
         default: break;
         }
     }
-    emit eventsEditRequested(m_timingPoints, m_laneEvents, m_speedEvents);
+    if (property == EventProperty::Offset) {
+        for (BookmarkEvent& bookmark : m_bookmarks) {
+            bookmark.timeMilliseconds = value.toInt();
+        }
+    }
+    emit eventsEditRequested(m_timingPoints, m_laneEvents, m_speedEvents, m_bookmarks);
 }
 
 } // namespace infalsus::gui

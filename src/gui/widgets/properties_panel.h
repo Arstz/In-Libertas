@@ -22,7 +22,7 @@ signals:
     void eventOffsetCurrentTimeRequested();
     void hitObjectsEditRequested(QVector<int> indexes, QVector<ChartNote> hitObjects);
     void eventsEditRequested(QVector<TimingPoint> timingPoints, QVector<LaneEvent> laneEvents,
-        QVector<SpeedEvent> speedEvents);
+        QVector<SpeedEvent> speedEvents, QVector<BookmarkEvent> bookmarks);
 
 private:
     enum class HitObjectProperty {
@@ -45,6 +45,7 @@ private:
     QVector<TimingPoint> m_timingPoints;
     QVector<LaneEvent> m_laneEvents;
     QVector<SpeedEvent> m_speedEvents;
+    QVector<BookmarkEvent> m_bookmarks;
     bool m_populating = false;
 };
 
