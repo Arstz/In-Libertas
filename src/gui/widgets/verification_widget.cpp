@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
+#include <optional>
 
 namespace infalsus::gui {
 
@@ -116,6 +118,40 @@ constexpr int kRightOuterLane = 5;
     };
 }
 
+[[nodiscard]] double fieldEdgeAt(const ChartNote& field, const bool rightSide, const qint64 time) {
+    const double progress = std::clamp(static_cast<double>(time - field.startMilliseconds)
+        / static_cast<double>(field.endMilliseconds - field.startMilliseconds), 0.0, 1.0);
+    const std::uint32_t mode = field.auxiliary & (rightSide ? 0xE0U : 0x1CU);
+    const double eased = mode == (rightSide ? 0x40U : 0x08U)
+        ? std::sin(progress * std::numbers::pi * 0.5)
+        : mode == (rightSide ? 0x80U : 0x10U)
+        ? 1.0 - std::cos(progress * std::numbers::pi * 0.5) : progress;
+    const double direction = rightSide ? 0.5 : -0.5;
+    const double start = field.startX + direction * field.startWidth;
+    const double end = field.endX + direction * field.endWidth;
+    return start + (end - start) * eased;
+}
+
+[[nodiscard]] std::optional<qint64> firstSeparatedFieldTime(const ChartNote& left, const ChartNote& right,
+    const qint64 start, const qint64 end) {
+    constexpr double kTolerance = 1e-9;
+    const double leftStart = fieldEdgeAt(left, true, start);
+    const double leftEnd = fieldEdgeAt(left, true, end);
+    const double rightStart = fieldEdgeAt(right, false, start);
+    const double rightEnd = fieldEdgeAt(right, false, end);
+    if (rightStart - leftStart >= -kTolerance) {
+        return start;
+    }
+    if (start == end || std::max(rightStart, rightEnd) - std::min(leftStart, leftEnd) < -kTolerance) {
+        return std::nullopt;
+    }
+    const qint64 middle = start + (end - start) / 2;
+    if (const auto time = firstSeparatedFieldTime(left, right, start, middle)) {
+        return time;
+    }
+    return firstSeparatedFieldTime(left, right, middle + 1, end);
+}
+
 [[nodiscard]] QString formatTimestamp(const qint64 timestampMilliseconds) {
     constexpr qint64 kMillisecondsPerSecond = 1000;
     const qint64 clampedTimestamp = std::max<qint64>(0, timestampMilliseconds);
@@ -202,13 +238,15 @@ void VerificationWidget::startVerification() {
 
 QVector<VerificationIssue> VerificationWidget::collectIssues(const ChartData& chart, const QVector<SpeedEvent>& speedEvents,
     const QVector<TimingPoint>& timingPoints) {
-    static constexpr std::array<VerificationRule, 6> kRules{
+    static constexpr std::array<VerificationRule, 8> kRules{
         &VerificationWidget::verifyDuplicateNotes,
         &VerificationWidget::verifyDuplicateHolds,
         &VerificationWidget::verifyOverlappingMultilane,
         &VerificationWidget::verifyOverlappingHolds,
         &VerificationWidget::verifyCentralFloorSpans,
         &VerificationWidget::verifyFieldGroups,
+        &VerificationWidget::verifyFieldDurations,
+        &VerificationWidget::verifyDivergingFields,
     };
     QVector<VerificationIssue> issues;
     for (const VerificationRule rule : kRules) {
@@ -401,6 +439,53 @@ QVector<VerificationIssue> VerificationWidget::verifyFieldGroups(const ChartData
         issues.append(std::move(issue));
     }
 
+    return issues;
+}
+
+QVector<VerificationIssue> VerificationWidget::verifyFieldDurations(const ChartData& chart) {
+    QVector<VerificationIssue> issues;
+    for (const ChartNote& field : chart.notes) {
+        if (field.kind == NoteKind::Sky && field.endMilliseconds - field.startMilliseconds < 2) {
+            issues.append({.timestampMilliseconds = field.startMilliseconds,
+                .hitObjectIds = {field.id}, .message = QStringLiteral("Field shorter than 2 ms")});
+        }
+    }
+    return issues;
+}
+
+QVector<VerificationIssue> VerificationWidget::verifyDivergingFields(const ChartData& chart) {
+    QVector<int> fields;
+    for (int index = 0; index < chart.notes.size(); ++index) {
+        const ChartNote& field = chart.notes.at(index);
+        if (field.kind == NoteKind::Sky && field.endMilliseconds > field.startMilliseconds) {
+            fields.append(index);
+        }
+    }
+    std::sort(fields.begin(), fields.end(), [&chart](const int first, const int second) {
+        const ChartNote& a = chart.notes.at(first);
+        const ChartNote& b = chart.notes.at(second);
+        return a.startMilliseconds < b.startMilliseconds;
+    });
+    QVector<VerificationIssue> issues;
+    for (int firstIndex = 0; firstIndex < fields.size(); ++firstIndex) {
+        const ChartNote& first = chart.notes.at(fields.at(firstIndex));
+        for (int secondIndex = firstIndex + 1; secondIndex < fields.size(); ++secondIndex) {
+            const ChartNote& second = chart.notes.at(fields.at(secondIndex));
+            if (second.startMilliseconds >= first.endMilliseconds) {
+                break;
+            }
+            const qint64 start = std::max(first.startMilliseconds, second.startMilliseconds);
+            const qint64 end = std::min(first.endMilliseconds, second.endMilliseconds) - 1;
+            const auto firstTime = firstSeparatedFieldTime(first, second, start, end);
+            const auto secondTime = firstSeparatedFieldTime(second, first, start, end);
+            if (firstTime || secondTime) {
+                const qint64 time = firstTime && secondTime ? std::min(*firstTime, *secondTime)
+                    : firstTime ? *firstTime : *secondTime;
+                issues.append(issueFor(first, second, time,
+                    QStringLiteral("Diverging fields, may cause combo break")));
+            }
+        }
+    }
     return issues;
 }
 

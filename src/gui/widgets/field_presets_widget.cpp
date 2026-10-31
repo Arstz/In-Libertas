@@ -176,9 +176,6 @@ FieldPresetsWidget::FieldPresetsWidget(EditorState* state, QWidget* parent)
     connect(m_milliseconds, &QLineEdit::textChanged, this, updateSize);
     connect(m_divisor, &QComboBox::currentIndexChanged, this, updateSize);
     connect(m_addSelection, &QPushButton::clicked, this, &FieldPresetsWidget::addSelection);
-    connect(state, &EditorState::selectionChanged, this, &FieldPresetsWidget::updateSelection);
-    connect(state, &EditorState::hitObjectsChanged, this, &FieldPresetsWidget::updateSelection);
-    updateSelection();
 }
 
 void FieldPresetsWidget::refreshTiles() {
@@ -204,16 +201,6 @@ void FieldPresetsWidget::refreshTiles() {
     }
 }
 
-void FieldPresetsWidget::updateSelection() {
-    const auto& notes = m_state->chart().notes;
-    const auto& selected = m_state->selectedHitObjects();
-    m_addSelection->setEnabled(!selected.isEmpty()
-        && std::all_of(selected.cbegin(), selected.cend(), [&notes](const int index) {
-            return index >= 0 && index < notes.size() && notes.at(index).kind == NoteKind::Sky
-                && notes.at(index).endMilliseconds > notes.at(index).startMilliseconds;
-        }));
-}
-
 qint64 FieldPresetsWidget::durationMilliseconds() const {
     if (m_sizeMode->currentIndex() == 0) {
         bool valid = false;
@@ -235,12 +222,22 @@ void FieldPresetsWidget::addSelection() {
     QVector<ChartNote> fields;
     for (const int index : m_state->selectedHitObjects()) {
         if (index < 0 || index >= m_state->chart().notes.size()) {
-            return;
+            continue;
         }
         const ChartNote& field = m_state->chart().notes.at(index);
-        fields.append(field);
+        if (field.kind == NoteKind::Sky) {
+            fields.append(field);
+        }
     }
     if (fields.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Field presets"), QStringLiteral("No fields selected"));
+        return;
+    }
+    if (std::any_of(fields.cbegin(), fields.cend(), [](const ChartNote& field) {
+            return field.endMilliseconds <= field.startMilliseconds;
+        })) {
+        QMessageBox::information(this, QStringLiteral("Field presets"),
+            QStringLiteral("Selected fields must have a positive duration."));
         return;
     }
     bool accepted = false;

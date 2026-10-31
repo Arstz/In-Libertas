@@ -21,7 +21,6 @@ public:
 
 private:
     void refreshTiles();
-    void updateSelection();
     void addSelection();
     void placePreset(int index);
     void loadPresets();

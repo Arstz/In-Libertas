@@ -129,6 +129,7 @@ private:
     [[nodiscard]] qint64 timeAtY(double y) const;
     [[nodiscard]] qint64 snappedTimeAtY(double y) const;
     [[nodiscard]] double snappedSkyCoordinate(double coordinate, double minimum, double maximum) const;
+    [[nodiscard]] double snappedSkyMoveOffset(const QVector<double>& edges, double requestedOffset) const;
     [[nodiscard]] int laneAt(const QPointF& position) const;
     [[nodiscard]] int hitObjectAt(const QPointF& position) const;
     [[nodiscard]] int holdEndHitObjectAt(const QPointF& position) const;

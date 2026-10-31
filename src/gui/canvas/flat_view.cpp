@@ -24,6 +24,7 @@
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <utility>
 
@@ -42,7 +43,7 @@ constexpr double kWaveformEventLabelPadding = 3.0;
 constexpr double kWaveformEventLabelLineGap = 3.0;
 constexpr double kWaveformEventLabelSpacing = 6.0;
 constexpr int kWaveformEventValuePrecision = 12;
-constexpr double kMargin = 12.0;
+constexpr double kMargin = 0.0;
 constexpr double kPlayheadWidth = 6.0;
 constexpr qint64 kTapDurationMilliseconds = 30;
 constexpr qint64 kMinimumHoldDurationMilliseconds = 80;
@@ -663,6 +664,35 @@ double FlatView::snappedSkyCoordinate(const double coordinate, double minimum, d
         ? snappedCoordinate : clampedCoordinate;
 }
 
+double FlatView::snappedSkyMoveOffset(const QVector<double>& edges, const double requestedOffset) const {
+    if (edges.isEmpty()) {
+        return requestedOffset;
+    }
+    const auto [left, right] = std::minmax_element(edges.cbegin(), edges.cend());
+    const double minimumOffset = -*left;
+    const double maximumOffset = 1.0 - *right;
+    if (minimumOffset > maximumOffset) {
+        return 0.0;
+    }
+    const double offset = std::clamp(requestedOffset, minimumOffset, maximumOffset);
+    if (!m_skyGridEnabled || !canInteractSky()) {
+        return offset;
+    }
+    double closestCorrection = std::numeric_limits<double>::infinity();
+    for (const double edge : edges) {
+        const double coordinate = edge + offset;
+        const double snapped = snappedSkyCoordinate(coordinate, edge + minimumOffset, edge + maximumOffset);
+        const double correction = snapped - coordinate;
+        const double gridCoordinate = coordinate * kFloorLaneCount * m_skyGridDivisor;
+        const bool onGrid = coordinate > 0.0 && coordinate < 1.0
+            && std::abs(gridCoordinate - std::round(gridCoordinate)) < 1e-9;
+        if ((snapped != coordinate || onGrid) && std::abs(correction) < std::abs(closestCorrection)) {
+            closestCorrection = correction;
+        }
+    }
+    return std::isfinite(closestCorrection) ? offset + closestCorrection : offset;
+}
+
 qint64 FlatView::snappedTimeAtY(const double y) const {
     const qint64 time = std::max<qint64>(0, timeAtY(y));
     if (m_timingPoints.isEmpty()) {
@@ -958,7 +988,18 @@ QVector<ChartNote> FlatView::hitObjectsForSelectionMove(const QPointF& position,
     const QRectF area = groundArea();
     const qint64 rawTimeOffset = timeAtY(position.y()) - timeAtY(m_pressPosition.y());
     const int laneOffset = laneAt(position) - laneAt(m_pressPosition);
-    const double coordinateOffset = (position.x() - m_pressPosition.x()) / area.width();
+    QVector<double> skyEdges;
+    for (const ChartNote& original : m_dragSelectionOriginals) {
+        if (original.kind == NoteKind::Sky) {
+            skyEdges += {fieldLeftEdge(original, true), fieldRightEdge(original, true),
+                fieldLeftEdge(original, false), fieldRightEdge(original, false)};
+        } else if (original.kind == NoteKind::Flick) {
+            const SkySpan span = flickSpan(original);
+            skyEdges += {span.left, span.right};
+        }
+    }
+    const double coordinateOffset = snappedSkyMoveOffset(skyEdges,
+        (position.x() - m_pressPosition.x()) / area.width());
     const qint64 firstStart = m_dragSelectionEarliestStart;
     qint64 timeOffset = std::max(rawTimeOffset, -firstStart);
     if (snapToGrid) {
@@ -1275,8 +1316,8 @@ ChartNote FlatView::holdHitObjectForEndMove(const QPointF& position, const bool 
 
 ChartNote FlatView::flickHitObjectForDrag(const QPointF& position) const {
     const QRectF area = groundArea();
-    const double pressCoordinate = std::clamp((m_pressPosition.x() - area.left()) / area.width(), 0.0, 1.0);
-    const double releaseCoordinate = std::clamp((position.x() - area.left()) / area.width(), 0.0, 1.0);
+    const double pressCoordinate = snappedSkyCoordinate((m_pressPosition.x() - area.left()) / area.width(), 0.0, 1.0);
+    const double releaseCoordinate = snappedSkyCoordinate((position.x() - area.left()) / area.width(), 0.0, 1.0);
     const bool pointsRight = releaseCoordinate >= pressCoordinate;
     ChartNote hitObject;
 
@@ -1299,10 +1340,8 @@ ChartNote FlatView::flickHitObjectForMove(const QPointF& position, const bool sn
     const qint64 timeOffset = timeAtY(position.y()) - timeAtY(m_pressPosition.y());
     const double requestedCoordinateOffset = (position.x() - m_pressPosition.x()) / area.width();
     const SkySpan originalSpan = flickSpan(hitObject);
-    const double coordinateOffset = std::clamp(
-        requestedCoordinateOffset,
-        -originalSpan.left,
-        1.0 - originalSpan.right);
+    const double coordinateOffset = snappedSkyMoveOffset(
+        {originalSpan.left, originalSpan.right}, requestedCoordinateOffset);
 
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds + timeOffset);
     hitObject.endMilliseconds = hitObject.startMilliseconds;
@@ -1371,6 +1410,20 @@ ChartNote FlatView::fieldHitObjectForDrag(const QPointF& position, const bool sn
         hitObject.groupId = source.groupId;
     }
 
+    for (const bool atStart : {true, false}) {
+        if (m_fieldSegmentAnchor.hitObjectIndex >= 0
+            && m_fieldSegmentAnchor.hitObjectIndex < m_chart.notes.size()) {
+            const ChartNote& source = m_chart.notes.at(m_fieldSegmentAnchor.hitObjectIndex);
+            const qint64 anchorTime = m_fieldSegmentAnchor.atStart ? source.startMilliseconds : source.endMilliseconds;
+            if (atStart == (hitObject.startMilliseconds == anchorTime)) {
+                continue;
+            }
+        }
+        const double left = fieldLeftEdge(hitObject, atStart);
+        const double right = fieldRightEdge(hitObject, atStart);
+        const double offset = snappedSkyMoveOffset({left, right}, 0.0);
+        setFieldEndpoint(hitObject, atStart, left + offset, right + offset);
+    }
     return hitObject;
 }
 
@@ -1417,12 +1470,9 @@ ChartNote FlatView::fieldHitObjectForMove(const QPointF& position, const bool sn
     const QRectF area = groundArea();
     const qint64 timeOffset = timeAtY(position.y()) - timeAtY(m_pressPosition.y());
     const double requestedCoordinateOffset = (position.x() - m_pressPosition.x()) / area.width();
-    const double leftmostEdge = std::min(fieldLeftEdge(hitObject, true), fieldLeftEdge(hitObject, false));
-    const double rightmostEdge = std::max(fieldRightEdge(hitObject, true), fieldRightEdge(hitObject, false));
-    const double coordinateOffset = std::clamp(
-        requestedCoordinateOffset,
-        -leftmostEdge,
-        1.0 - rightmostEdge);
+    const double coordinateOffset = snappedSkyMoveOffset(
+        {fieldLeftEdge(hitObject, true), fieldRightEdge(hitObject, true),
+            fieldLeftEdge(hitObject, false), fieldRightEdge(hitObject, false)}, requestedCoordinateOffset);
 
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds + timeOffset);
     hitObject.endMilliseconds = std::max(hitObject.startMilliseconds + 1, hitObject.endMilliseconds + timeOffset);
