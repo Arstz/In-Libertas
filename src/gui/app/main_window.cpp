@@ -1105,6 +1105,9 @@ void MainWindow::updateToolButtonSizes() {
 }
 
 void MainWindow::registerNavigationKeybinds() {
+    auto* metronomeAction = new QAction(this);
+    m_keyBindings->registerHoldAction(KeyCommand::HoldMetronome, metronomeAction);
+    connect(metronomeAction, &QAction::toggled, m_playback, &PlaybackController::setMetronomeEnabled);
     const auto addAction = [this](const KeyCommand command, const auto& handler) {
         auto* action = new QAction(this);
         m_keyBindings->registerAction(command, action, false);
@@ -1465,6 +1468,7 @@ void MainWindow::buildWorkspace() {
         m_timing->setSelectedEvents(m_state->selectedTimingPoints(), m_state->selectedLaneEvents(),
             m_state->selectedSpeedEvents(), m_state->selectedBookmarks());
         m_timeline->setTimingPoints(m_state->timingPoints());
+        m_playback->setTimingPoints(m_state->timingPoints());
         m_flatView->setTimingPoints(m_state->timingPoints());
         m_viewer->setTimingPoints(m_state->timingPoints());
         m_verification->setChart(m_state->chart(), m_state->speedEvents(), m_state->timingPoints());
@@ -1563,6 +1567,7 @@ void MainWindow::buildWorkspace() {
     m_metadata->setJacketEditingEnabled(false);
     m_timing->setEvents(m_state->timingPoints(), m_state->laneEvents(), m_state->speedEvents(), m_state->bookmarks());
     m_timeline->setTimingPoints(m_state->timingPoints());
+    m_playback->setTimingPoints(m_state->timingPoints());
     m_timeline->setSpeedEvents(m_state->speedEvents());
     m_flatView->setTimingPoints(m_state->timingPoints());
     m_timeline->setBookmarks(m_state->bookmarks());

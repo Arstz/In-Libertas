@@ -62,6 +62,7 @@ constexpr CommandDefinition kCommands[]{
     {KeyCommand::AddBookmark, "add_bookmark", "Events / Place bookmark", "Ctrl+Shift+B"},
     {KeyCommand::InterpolateSpeedEvents, "interpolate_speed_events", "Events / Interpolate SV events", "Ctrl+I"},
     {KeyCommand::TogglePlayback, "toggle_playback", "Playback / Play or pause", "Space"},
+    {KeyCommand::HoldMetronome, "hold_metronome", "Playback / Hold metronome", "T"},
     {KeyCommand::EnterPlaytest, "enter_playtest", "Playback / Playtest", "F5"},
     {KeyCommand::IncreasePlaybackRate, "increase_playback_rate", "Playback / Increase speed", "[", true},
     {KeyCommand::DecreasePlaybackRate, "decrease_playback_rate", "Playback / Decrease speed", "]", true},
@@ -198,6 +199,12 @@ void KeyBindingRouter::registerAction(const KeyCommand command, QAction* action,
     m_actions.append(std::move(binding));
 }
 
+void KeyBindingRouter::registerHoldAction(const KeyCommand command, QAction* action) {
+    registerAction(command, action, false);
+    action->setCheckable(true);
+    m_actions.back().hold = true;
+}
+
 QVector<KeyBinding> KeyBindingRouter::bindings() const {
     QVector<KeyBinding> result;
     for (const ActionBinding& action : m_actions) {
@@ -214,6 +221,7 @@ void KeyBindingRouter::setBindings(const QVector<KeyBinding>& bindings) {
     if (!conflictingKeyBindings(bindings).isEmpty()) {
         return;
     }
+    releaseHeldAction();
     for (ActionBinding& action : m_actions) {
         const auto found = std::find_if(bindings.cbegin(), bindings.cend(),
             [&action](const KeyBinding& item) { return item.command == action.binding.command; });
@@ -230,6 +238,17 @@ bool KeyBindingRouter::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::ApplicationDeactivate || event->type() == QEvent::WindowDeactivate
         || event->type() == QEvent::FocusOut) {
         clearPendingSequence();
+        releaseHeldAction();
+    }
+    if (event->type() == QEvent::KeyRelease && m_heldAction) {
+        auto& keyEvent = *static_cast<QKeyEvent*>(event);
+        if (keyBindingCombination(keyEvent).key() == m_heldKey) {
+            if (!keyEvent.isAutoRepeat()) {
+                releaseHeldAction();
+            }
+            event->accept();
+            return true;
+        }
     }
     if (event->type() != QEvent::KeyPress && event->type() != QEvent::ShortcutOverride) {
         return false;
@@ -237,6 +256,7 @@ bool KeyBindingRouter::eventFilter(QObject* watched, QEvent* event) {
     auto& keyEvent = *static_cast<QKeyEvent*>(event);
     if (!canRouteKeys()) {
         clearPendingSequence();
+        releaseHeldAction();
         return false;
     }
     if (isModifierKey(keyEvent)) {
@@ -290,7 +310,16 @@ bool KeyBindingRouter::routeKeyPress(QKeyEvent& event) {
             const bool trigger = !event.isAutoRepeat() || action.binding.autoRepeat;
             clearPendingSequence();
             if (trigger) {
-                triggeredAction->trigger();
+                if (action.hold) {
+                    if (m_heldAction != triggeredAction) {
+                        releaseHeldAction();
+                    }
+                    m_heldAction = triggeredAction;
+                    m_heldKey = combination.key();
+                    triggeredAction->setChecked(true);
+                } else {
+                    triggeredAction->trigger();
+                }
             }
             event.accept();
             return true;
@@ -329,6 +358,15 @@ void KeyBindingRouter::updateActionText(ActionBinding& binding) {
     }
     binding.action->setToolTip(sequence.isEmpty() ? binding.text
         : QStringLiteral("%1 (%2)").arg(binding.text, sequence));
+}
+
+void KeyBindingRouter::releaseHeldAction() {
+    const QPointer<QAction> action = m_heldAction;
+    m_heldAction.clear();
+    m_heldKey = Qt::Key_unknown;
+    if (action) {
+        action->setChecked(false);
+    }
 }
 
 void KeyBindingRouter::clearPendingSequence() {

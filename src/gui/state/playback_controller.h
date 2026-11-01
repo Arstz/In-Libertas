@@ -2,6 +2,7 @@
 
 #include "gui/state/playback_rates.h"
 #include "gui/state/hitsound_bank.h"
+#include "core/chart_project.h"
 
 #include <QtCore/QBuffer>
 #include <QtCore/QObject>
@@ -37,6 +38,8 @@ public:
 
     void setHitsoundMix(std::shared_ptr<AudioMixData> mix);
     void setHitObjects(const ChartData& chart);
+    void setTimingPoints(QVector<infalsus::TimingPoint> timingPoints);
+    void setMetronomeEnabled(bool enabled);
     void setManualPlaytest(bool enabled);
     void setHeldHitsounds(bool hold, bool sky);
     void previewHitsound(const QByteArray& samples);
@@ -89,6 +92,7 @@ private:
     std::unique_ptr<QAudioSink> m_previewSink;
     std::shared_ptr<AudioMixData> m_mix = std::make_shared<AudioMixData>();
     QVector<HitsoundEvent> m_hitsoundEvents;
+    QVector<infalsus::TimingPoint> m_timingPoints;
     QTimer m_clockUpdateTimer;
     QByteArray m_audioData;
     std::shared_ptr<AudioPlaybackData> m_decodedAudio;

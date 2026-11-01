@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gui/state/hitsound_bank.h"
+#include "core/chart_project.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QIODevice>
@@ -24,6 +25,7 @@ public:
     void sourceUpdated();
     void setMix(std::shared_ptr<AudioMixData> mix, const QVector<HitsoundEvent>& events);
     void setHitsoundEvents(const QVector<HitsoundEvent>& events);
+    void setTimingPoints(QVector<infalsus::TimingPoint> timingPoints);
     void preview(QByteArray samples);
     void setLiveLoop(HitsoundKind kind, bool active);
 

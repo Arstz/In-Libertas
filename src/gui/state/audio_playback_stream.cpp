@@ -5,11 +5,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace {
 
 constexpr int kProcessingIntervalMicroseconds = 10000;
 constexpr qreal kNormalPlaybackRate = 1.0;
+
+[[nodiscard]] bool isMetronomeSound(const HitsoundKind kind) {
+    return kind == HitsoundKind::MetronomeHigh || kind == HitsoundKind::MetronomeLow;
+}
 
 struct AudioInput {
     struct Channel {
@@ -158,17 +163,60 @@ struct AudioPlaybackStream::ProcessingState {
         return true;
     }
 
+    void appendMetronomeSounds(const QVector<infalsus::TimingPoint>& timing, const qint64 blockEnd) {
+        const double framesPerMillisecond = format.sampleRate() / (1000.0 * playbackRate);
+        const double chartTime = startMilliseconds + generatedOutputFrames / framesPerMillisecond;
+        const auto next = std::upper_bound(timing.cbegin(), timing.cend(), chartTime,
+            [](const double time, const infalsus::TimingPoint& point) { return time < point.timeMilliseconds; });
+        const int firstPoint = std::max(0, static_cast<int>(next - timing.cbegin()) - 2);
+        for (int index = firstPoint; index < timing.size(); ++index) {
+            const auto& point = timing.at(index);
+            if ((point.timeMilliseconds - startMilliseconds) * framesPerMillisecond >= blockEnd + 0.5) {
+                break;
+            }
+            const int beatsPerMeasure = std::max(1, point.timeSignatureNumerator);
+            const double beatDuration = 60000.0 / std::max(1.0, point.beatsPerMinute)
+                * 4.0 / std::max(1, point.timeSignatureDenominator);
+            if (!std::isfinite(beatDuration) || beatDuration <= 0.0) {
+                continue;
+            }
+            const double sectionEnd = index + 1 < timing.size() ? timing.at(index + 1).timeMilliseconds
+                : std::numeric_limits<double>::infinity();
+            qint64 beat = std::max<qint64>(0,
+                static_cast<qint64>(std::floor((chartTime - point.timeMilliseconds) / beatDuration)) - 1);
+            for (;; ++beat) {
+                const double time = point.timeMilliseconds + beat * beatDuration;
+                if (time >= sectionEnd) {
+                    break;
+                }
+                const qint64 frame = static_cast<qint64>(std::llround((time - startMilliseconds) * framesPerMillisecond));
+                if (frame >= blockEnd) {
+                    break;
+                }
+                if (frame >= generatedOutputFrames) {
+                    activeSounds.append({{}, frame, frame,
+                        beat % beatsPerMeasure == 0 ? HitsoundKind::MetronomeHigh : HitsoundKind::MetronomeLow});
+                }
+            }
+        }
+    }
+
     void mixSounds(const int outputFrames) {
         if (!mix) {
             return;
         }
         std::array<QByteArray, kHitsoundDescriptions.size()> soundSamples;
+        QVector<infalsus::TimingPoint> timing;
+        const bool metronome = mix->metronomeEnabled.load();
         {
             const std::lock_guard lock(mix->mutex);
             soundSamples = mix->sounds;
         }
         {
             const std::lock_guard lock(soundsMutex);
+            if (metronome) {
+                timing = timingPoints;
+            }
             if (soundsChanged) {
                 sounds.swap(pendingSounds);
                 pendingSounds.clear();
@@ -192,19 +240,32 @@ struct AudioPlaybackStream::ProcessingState {
         const qreal songVolume = mix->songVolume.load();
         const qreal effectsVolume = mix->effectsVolume.load();
 
+        activeSounds.removeIf([metronome](const Sound& sound) {
+            return !sound.loop && isMetronomeSound(sound.kind) != metronome;
+        });
+
         for (int index = 0; index < outputFrames * channels; ++index) {
             output[index] *= songVolume;
         }
         while (nextSound < sounds.size() && sounds[nextSound].firstFrame < blockEnd) {
             const Sound& sound = sounds[nextSound++];
-            if (sound.loop ? sound.lastFrame > generatedOutputFrames : sound.firstFrame >= generatedOutputFrames) {
+            if (sound.loop ? sound.lastFrame > generatedOutputFrames
+                : sound.firstFrame >= generatedOutputFrames && !metronome) {
                 activeSounds.append(sound);
             }
         }
         for (QByteArray& samples : incomingPreviews) {
-            activeSounds.append({std::move(samples), generatedOutputFrames, 0});
+            if (!metronome) {
+                activeSounds.append({std::move(samples), generatedOutputFrames, 0});
+            }
+        }
+        if (metronome) {
+            appendMetronomeSounds(timing, blockEnd);
         }
         for (Sound& sound : activeSounds) {
+            if (isMetronomeSound(sound.kind) != metronome) {
+                continue;
+            }
             const QByteArray& samples = sound.samples.isEmpty() ? soundSamples[static_cast<int>(sound.kind)] : sound.samples;
             const qint64 sampleFrames = samples.size() / format.bytesPerFrame();
             if (sampleFrames == 0) {
@@ -228,6 +289,10 @@ struct AudioPlaybackStream::ProcessingState {
                 mixedLoopGenerations[kind] = requestedGenerations[kind];
             }
             if (!requestedLoops[kind]) {
+                continue;
+            }
+            if (metronome) {
+                liveLoopFrames[kind] += outputFrames;
                 continue;
             }
             const QByteArray& samples = soundSamples[kind];
@@ -259,6 +324,7 @@ struct AudioPlaybackStream::ProcessingState {
     QVector<Sound> pendingSounds;
     QVector<Sound> activeSounds;
     QVector<QByteArray> previews;
+    QVector<infalsus::TimingPoint> timingPoints;
     std::array<bool, kHitsoundDescriptions.size()> liveLoops{};
     std::array<quint64, kHitsoundDescriptions.size()> liveLoopGenerations{};
     std::array<quint64, kHitsoundDescriptions.size()> mixedLoopGenerations{};
@@ -330,6 +396,14 @@ void AudioPlaybackStream::setHitsoundEvents(const QVector<HitsoundEvent>& events
     const std::lock_guard lock(state.soundsMutex);
     state.pendingSounds = std::move(sounds);
     state.soundsChanged = true;
+}
+
+void AudioPlaybackStream::setTimingPoints(QVector<infalsus::TimingPoint> timingPoints) {
+    std::stable_sort(timingPoints.begin(), timingPoints.end(), [](const auto& first, const auto& second) {
+        return first.timeMilliseconds < second.timeMilliseconds;
+    });
+    const std::lock_guard lock(m_processing->soundsMutex);
+    m_processing->timingPoints = std::move(timingPoints);
 }
 
 void AudioPlaybackStream::preview(QByteArray samples) {

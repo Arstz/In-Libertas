@@ -18,7 +18,7 @@ enum class KeyCommand {
     FlipSelectionVertically, ToggleFieldGrouping, ResnapAll, RefreshVerification,
     PlaceTool, SelectTool, MoveTool, ZoomIn, ZoomInAlternate, ZoomOut, ZoomOutAlternate,
     AddTimingPoint, AddSpeedEvent, AddBookmark, InterpolateSpeedEvents,
-    TogglePlayback, EnterPlaytest, IncreasePlaybackRate, DecreasePlaybackRate,
+    TogglePlayback, HoldMetronome, EnterPlaytest, IncreasePlaybackRate, DecreasePlaybackRate,
     SeekBackward, SeekForward, IncreaseDivisor, DecreaseDivisor, CycleFlatMode, ToggleSkyGrid,
     SkyGridSize1, SkyGridSize2, SkyGridSize3, SkyGridSize4,
     ResetLayout, Settings,
@@ -41,6 +41,7 @@ public:
     explicit KeyBindingRouter(QWidget* window);
 
     void registerAction(KeyCommand command, QAction* action, bool showInMenu = true);
+    void registerHoldAction(KeyCommand command, QAction* action);
     [[nodiscard]] QVector<KeyBinding> bindings() const;
     void setBindings(const QVector<KeyBinding>& bindings);
 
@@ -53,6 +54,7 @@ private:
         QPointer<QAction> action;
         QString text;
         bool showInMenu = true;
+        bool hold = false;
     };
 
     [[nodiscard]] bool canRouteKeys() const;
@@ -60,11 +62,14 @@ private:
     [[nodiscard]] bool matchesPendingSequence(const QKeySequence& sequence) const;
     void updateActionText(ActionBinding& binding);
     void clearPendingSequence();
+    void releaseHeldAction();
 
     QPointer<QWidget> m_window;
     QVector<ActionBinding> m_actions;
     QVector<QKeyCombination> m_pendingSequence;
     QTimer* m_sequenceTimer = nullptr;
+    QPointer<QAction> m_heldAction;
+    Qt::Key m_heldKey = Qt::Key_unknown;
 };
 
 } // namespace infalsus::gui

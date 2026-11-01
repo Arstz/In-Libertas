@@ -98,6 +98,7 @@ const QAudioFormat& PlaybackController::audioFormat() const {
 void PlaybackController::setHitsoundMix(std::shared_ptr<AudioMixData> mix) {
     mix->songVolume = volume();
     mix->effectsVolume = effectsVolume();
+    mix->metronomeEnabled = m_mix->metronomeEnabled.load();
     m_mix = std::move(mix);
 }
 
@@ -108,8 +109,22 @@ void PlaybackController::setHitObjects(const ChartData& chart) {
     }
 }
 
+void PlaybackController::setTimingPoints(QVector<infalsus::TimingPoint> timingPoints) {
+    m_timingPoints = std::move(timingPoints);
+    if (m_audioStream) {
+        m_audioStream->setTimingPoints(m_timingPoints);
+    }
+}
+
+void PlaybackController::setMetronomeEnabled(const bool enabled) {
+    m_mix->metronomeEnabled = enabled;
+    if (enabled) {
+        stopHitsoundPreview();
+    }
+}
+
 void PlaybackController::previewHitsound(const QByteArray& samples) {
-    if (samples.isEmpty()) {
+    if (samples.isEmpty() || m_mix->metronomeEnabled.load()) {
         return;
     }
     if (m_playbackActive && m_audioStream) {
@@ -407,6 +422,7 @@ void PlaybackController::startAudioPlayback() {
         m_audioStream = std::make_unique<AudioPlaybackStream>(source, m_audioFormat,
             m_positionMilliseconds, m_chartDurationMilliseconds, m_playbackRate);
         m_audioStream->setMix(m_mix, m_manualPlaytest ? QVector<HitsoundEvent>{} : m_hitsoundEvents);
+        m_audioStream->setTimingPoints(m_timingPoints);
         m_audioStream->setLiveLoop(HitsoundKind::HoldHeld, m_holdSound);
         m_audioStream->setLiveLoop(HitsoundKind::FieldHeld, m_skySound);
     }

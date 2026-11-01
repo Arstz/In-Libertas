@@ -10,7 +10,8 @@
 #include <memory>
 #include <mutex>
 
-enum class HitsoundKind { NoteHit, NoteSideHit, HoldHit, HoldHeld, FlickHit, FieldHit, FieldHeld, Count };
+enum class HitsoundKind { NoteHit, NoteSideHit, HoldHit, HoldHeld, FlickHit, FieldHit, FieldHeld,
+    MetronomeHigh, MetronomeLow, Count };
 
 struct HitsoundDescription {
     const char* key;
@@ -26,6 +27,8 @@ inline constexpr std::array<HitsoundDescription, static_cast<int>(HitsoundKind::
     {"flick_hit", "Flick hit", "FlickHit.wav"},
     {"field_hit", "Field hit", "FieldHit.wav"},
     {"field_held", "Field held", "FieldHeld.wav"},
+    {"metronome_high", "Metronome high", "MetronomeHigh.wav"},
+    {"metronome_low", "Metronome low", "MetronomeLow.wav"},
 }};
 
 struct HitsoundFile {
@@ -41,6 +44,7 @@ struct AudioMixData {
     std::mutex mutex;
     std::atomic<qreal> songVolume{1.0};
     std::atomic<qreal> effectsVolume{1.0};
+    std::atomic<bool> metronomeEnabled{false};
 };
 
 struct HitsoundEvent {
