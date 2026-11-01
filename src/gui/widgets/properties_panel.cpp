@@ -1,7 +1,10 @@
 #include "gui/widgets/properties_panel.h"
+#include "gui/app/game_palette.h"
 
 #include <QtCore/QVariant>
 #include <QtGui/QValidator>
+#include <QtGui/QFocusEvent>
+#include <QtGui/QKeyEvent>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QFormLayout>
@@ -71,9 +74,82 @@ template <typename Value>
 
 void setMixedStyle(QWidget* editor, const bool mixed) {
     editor->setProperty("mixed", mixed);
-    editor->setStyleSheet(mixed ? QStringLiteral("color: #888;") : QString());
+    editor->setStyleSheet(mixed
+        ? QStringLiteral("QAbstractSpinBox, QLineEdit, QComboBox { color: %1; }")
+            .arg(palette::mixedValue.name()) : QString());
     editor->setToolTip(mixed ? QStringLiteral("Mixed values. Editing overrides this property for the selection.") : QString());
 }
+
+template <typename SpinBox>
+class RangeSpinBox final : public SpinBox {
+public:
+    using Number = std::conditional_t<std::is_same_v<SpinBox, QDoubleSpinBox>, double, int>;
+
+    explicit RangeSpinBox(QWidget* parent) : SpinBox(parent) {
+        QObject::connect(this->lineEdit(), &QLineEdit::textEdited, this, [this] { startEditing(); });
+    }
+
+    void setMixedRange(const Number minimum, const Number maximum) {
+        m_range = SpinBox::textFromValue(minimum) + QStringLiteral(" \u2013 ") + SpinBox::textFromValue(maximum);
+        m_mixed = true;
+        this->setValue(this->value());
+        this->updateGeometry();
+    }
+
+protected:
+    QString textFromValue(const Number value) const override {
+        return m_mixed ? m_range : SpinBox::textFromValue(value);
+    }
+
+    Number valueFromText(const QString& text) const override {
+        return m_mixed && text == rangeText() ? this->value() : SpinBox::valueFromText(text);
+    }
+
+    QValidator::State validate(QString& text, int& position) const override {
+        return m_mixed && text == rangeText() ? QValidator::Acceptable : SpinBox::validate(text, position);
+    }
+
+    void focusInEvent(QFocusEvent* event) override {
+        SpinBox::focusInEvent(event);
+        if (m_mixed) {
+            this->selectAll();
+        }
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+        const bool replacing = event->key() == Qt::Key_Backspace || event->key() == Qt::Key_Delete
+            || (!event->text().isEmpty() && event->text().front().isPrint()
+                && !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier)));
+        if (m_mixed && replacing) {
+            startEditing();
+            this->selectAll();
+        }
+        SpinBox::keyPressEvent(event);
+    }
+
+    void stepBy(const int steps) override {
+        if (m_mixed) {
+            startEditing();
+            this->setValue(this->value());
+        }
+        SpinBox::stepBy(steps);
+    }
+
+private:
+    QString rangeText() const {
+        return this->prefix() + m_range + this->suffix();
+    }
+
+    void startEditing() {
+        if (m_mixed) {
+            m_mixed = false;
+            setMixedStyle(this, false);
+        }
+    }
+
+    QString m_range;
+    bool m_mixed = false;
+};
 
 template <typename Object, typename Getter>
 [[nodiscard]] auto propertyValues(const QVector<Object>& objects, Getter getter) {
@@ -90,7 +166,7 @@ template <typename SpinBox, typename Value, typename Apply>
 void addNumberField(QFormLayout* layout, const QString& label, const QVector<Value>& values,
     const Value minimum, const Value maximum, const Value step, const QString& suffix, Apply apply,
     QWidget* button = nullptr) {
-    auto* editor = new SpinBox(layout->parentWidget());
+    auto* editor = new RangeSpinBox<SpinBox>(layout->parentWidget());
     const double average = std::accumulate(values.cbegin(), values.cend(), 0.0) / values.size();
 
     editor->setObjectName(label);
@@ -98,13 +174,19 @@ void addNumberField(QFormLayout* layout, const QString& label, const QVector<Val
     editor->setSingleStep(step);
     editor->setSuffix(suffix);
     editor->setKeyboardTracking(false);
+    editor->setAlignment(Qt::AlignRight);
     if constexpr (std::is_same_v<SpinBox, QDoubleSpinBox>) {
         editor->setDecimals(kCoordinateDecimals);
         editor->setValue(average);
     } else {
         editor->setValue(static_cast<int>(std::lround(average)));
     }
-    setMixedStyle(editor, hasMixedValues(values));
+    const bool mixed = hasMixedValues(values);
+    setMixedStyle(editor, mixed);
+    if (mixed) {
+        const auto [first, last] = std::minmax_element(values.cbegin(), values.cend());
+        editor->setMixedRange(*first, *last);
+    }
     if (button) {
         auto* row = new QWidget(layout->parentWidget());
         auto* rowLayout = new QHBoxLayout(row);
@@ -213,6 +295,7 @@ void setFloorSpan(ChartNote& hitObject, const int firstLane, const int lastLane)
 
 PropertiesPanel::PropertiesPanel(QWidget* parent)
     : QWidget(parent) {
+    setObjectName(QStringLiteral("propertiesForm"));
     m_layout = new QFormLayout(this);
     addReadOnlyRow(QStringLiteral("Selection"), QStringLiteral("No selection"));
 }

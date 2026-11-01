@@ -17,6 +17,8 @@
 #include "gui/widgets/timing_widget.h"
 #include "gui/widgets/field_presets_widget.h"
 #include "gui/widgets/verification_widget.h"
+#include "gui/widgets/monospace_time_label.h"
+#include "gui/widgets/sky_grid_controls.h"
 #include "core/chart_document.h"
 #include "core/project_document.h"
 #include "core/project_assets.h"
@@ -26,6 +28,7 @@
 #include "gui/state/playback_controller.h"
 
 #include <QtCore/QDir>
+#include <QtCore/QCoreApplication>
 #include <QtCore/QPromise>
 #include <QtCore/QThreadPool>
 #include <QtCore/QEvent>
@@ -42,11 +45,11 @@
 #include <QtMultimedia/QAudioFormat>
 #include <QtGui/QActionGroup>
 #include <QtGui/QFontMetrics>
+#include <QtGui/QFontDatabase>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QImage>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
-#include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QFileDialog>
@@ -61,6 +64,7 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QProgressDialog>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QStyle>
 #include <QtGui/QShowEvent>
 #include <QtGui/QCloseEvent>
 #include <QtGui/QCursor>
@@ -92,6 +96,23 @@ constexpr int kToolsRevealWidth = 12;
 constexpr int kToolsHideDelayMilliseconds = 300;
 constexpr int kToolsSlideDurationMilliseconds = 180;
 constexpr int kToolButtonTextPadding = 8;
+
+[[nodiscard]] QFont transportTimeFont() {
+    static const QFont base = [] {
+        const int id = QFontDatabase::addApplicationFont(
+            QCoreApplication::applicationDirPath() + QStringLiteral("/assets/ultraproxi sb.otf"));
+        const QStringList families = QFontDatabase::applicationFontFamilies(id);
+        return families.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::FixedFont)
+            : QFontDatabase::font(families.first(), QFontDatabase::styles(families.first()).value(0), 12);
+    }();
+    QFont font = base;
+    int pixels = TimelineWidget::kWidgetHeight;
+    font.setPixelSize(pixels);
+    while (pixels > 8 && QFontMetrics(font).height() > TimelineWidget::kWidgetHeight - 8) {
+        font.setPixelSize(--pixels);
+    }
+    return font;
+}
 
 [[nodiscard]] bool isProjectDocumentFile(const QFileInfo& fileInfo) {
     return fileInfo.isFile() && fileInfo.suffix().compare(QStringLiteral("10no"), Qt::CaseInsensitive) == 0;
@@ -299,24 +320,38 @@ void analyzeDecodedTiming(QPromise<TimingEstimate>& promise, const QByteArray& s
     QWidget* parent,
     QWidget* titleAccessory = nullptr) {
     auto* panel = new QFrame(parent);
+    panel->setProperty("workspacePanel", true);
     panel->setWindowTitle(title);
     auto* layout = new QVBoxLayout(panel);
     auto* titleHost = new QWidget(panel);
+    titleHost->setObjectName(QStringLiteral("workspacePanelHeader"));
+    titleHost->setAttribute(Qt::WA_StyledBackground);
+    titleHost->setProperty("panelFocused", false);
+    QObject::connect(qApp, &QApplication::focusChanged, panel,
+        [panel, titleHost](QWidget*, QWidget* focused) {
+            const bool active = focused != nullptr && (focused == panel || panel->isAncestorOf(focused));
+            if (titleHost->property("panelFocused").toBool() == active) {
+                return;
+            }
+            titleHost->setProperty("panelFocused", active);
+            titleHost->style()->unpolish(titleHost);
+            titleHost->style()->polish(titleHost);
+            titleHost->update();
+        });
     auto* titleLayout = new QHBoxLayout(titleHost);
     auto* titleLabel = new QLabel(title, titleHost);
+    titleLabel->setObjectName(QStringLiteral("workspacePanelTitle"));
     layout->setContentsMargins(2, 2, 2, 2);
     layout->setSpacing(2);
     titleLayout->setContentsMargins(0, 0, 0, 0);
     titleLayout->setSpacing(3);
-    titleLabel->setFrameStyle(QFrame::Panel | QFrame::Raised);
-    titleLabel->setMargin(3);
     titleLayout->addWidget(titleLabel, 1);
     if (titleAccessory != nullptr) {
         titleLayout->addWidget(titleAccessory);
     }
     layout->addWidget(titleHost);
     layout->addWidget(content, 1);
-    panel->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    panel->setFrameStyle(QFrame::NoFrame);
 
     return panel;
 }
@@ -566,9 +601,9 @@ void MainWindow::buildInterface() {
     m_playbackControls = new PlaybackControls(this);
     m_playbackControls->setPlaying(m_playback->isPlaying());
     m_playbackControls->setPlaybackRate(m_playback->playbackRate());
-    m_timingPositionLabel = new QLabel(QStringLiteral("00:00:000"), this);
+    m_timingPositionLabel = new MonospaceTimeLabel(QStringLiteral("00:00:000"), this);
 
-    m_flatModeSelector->addItems({QStringLiteral("Ground"), QStringLiteral("Sky"), QStringLiteral("Both")});
+    m_flatModeSelector->addItems({QStringLiteral("GROUND"), QStringLiteral("SKY"), QStringLiteral("ALL")});
     m_flatModeSelector->setCurrentIndex(2);
     m_noteSpeedSelector->setRange(0.1, 10.0);
     m_noteSpeedSelector->setDecimals(2);
@@ -858,6 +893,7 @@ void MainWindow::selectAllVisibleHitObjects() {
 
 void MainWindow::buildToolBar() {
     m_toolsReveal = new QToolButton(centralWidget());
+    m_toolsReveal->setObjectName(QStringLiteral("toolsReveal"));
     m_toolsReveal->setText(QStringLiteral("\u203a"));
     m_toolsReveal->setToolTip(QStringLiteral("Show tools"));
     m_toolsReveal->setAccessibleName(QStringLiteral("Show tools"));
@@ -874,6 +910,7 @@ void MainWindow::buildToolBar() {
     m_toolsToolbar->setObjectName(QStringLiteral("editorToolsToolbar"));
     m_toolsToolbar->setOrientation(Qt::Vertical);
     m_toolsToolbar->setFloatable(false);
+    m_toolsToolbar->setBackgroundRole(QPalette::Window);
     m_toolsToolbar->setAutoFillBackground(true);
     m_toolsSlideAnimation = new QPropertyAnimation(m_toolsToolbar, "pos", this);
     m_toolsSlideAnimation->setEasingCurve(QEasingCurve::InOutCubic);
@@ -905,39 +942,14 @@ void MainWindow::buildToolBar() {
     m_volumeSlider->setRange(0, 100);
     m_volumeSlider->setInvertedAppearance(false);
     m_volumeSlider->setAccessibleName(QStringLiteral("Song volume"));
-    m_volumeSlider->setStyleSheet(QStringLiteral(R"(
-        QSlider#volumeSlider {
-            background: rgb(3, 11, 18);
-            border: 1px solid rgb(0, 0, 0);
-            padding: 2px 1px;
-        }
-        QSlider#volumeSlider::groove:vertical {
-            background: rgb(6, 17, 27);
-            border: 1px solid rgb(0, 8, 13);
-            width: 30px;
-            margin: 0;
-        }
-        QSlider#volumeSlider::add-page:vertical {
-            background: rgb(0, 167, 212);
-        }
-        QSlider#volumeSlider::sub-page:vertical {
-            background: rgb(6, 17, 27);
-        }
-        QSlider#volumeSlider::handle:vertical {
-            background: rgb(191, 244, 244);
-            border: 1px solid rgb(219, 255, 255);
-            height: 5px;
-            margin: 0 -2px;
-        }
-    )"));
     m_effectsVolumeSlider = new QSlider(Qt::Vertical, m_toolsToolbar);
     m_effectsVolumeSlider->setObjectName(QStringLiteral("effectsVolumeSlider"));
     m_effectsVolumeSlider->setRange(m_volumeSlider->minimum(), m_volumeSlider->maximum());
     m_effectsVolumeSlider->setAccessibleName(QStringLiteral("Hitsound volume"));
-    m_effectsVolumeSlider->setStyleSheet(QString(m_volumeSlider->styleSheet()).replace(
-        QStringLiteral("volumeSlider"), QStringLiteral("effectsVolumeSlider")));
     m_songVolumeLabel = new QLabel(QStringLiteral("SNG"), m_toolsToolbar);
     m_effectsVolumeLabel = new QLabel(QStringLiteral("SFX"), m_toolsToolbar);
+    m_songVolumeLabel->setToolTip(QStringLiteral("Song volume"));
+    m_effectsVolumeLabel->setToolTip(QStringLiteral("Hitsound volume"));
     m_songVolumeLabel->setAlignment(Qt::AlignCenter);
     m_effectsVolumeLabel->setAlignment(Qt::AlignCenter);
 
@@ -1070,10 +1082,11 @@ void MainWindow::updateToolButtonSizes() {
     const QMargins margins = m_toolsToolbar->layout()->contentsMargins();
     const auto actions = m_toolsToolbar->actions();
     QFont font = m_toolsToolbar->font();
+    font.setWeight(QFont::DemiBold);
     const int buttonSize = std::max(1, m_toolsToolbar->width() - margins.left() - margins.right());
     const int textSize = std::max(1, buttonSize - kToolButtonTextPadding * 2);
     int minimumSize = 1;
-    int maximumSize = textSize;
+    int maximumSize = std::min(14, textSize);
 
     while (minimumSize < maximumSize) {
         const int candidateSize = (minimumSize + maximumSize + 1) / 2;
@@ -1131,7 +1144,7 @@ void MainWindow::registerNavigationKeybinds() {
     addAction(KeyCommand::CycleFlatMode, [this] {
         m_flatModeSelector->setCurrentIndex((m_flatModeSelector->currentIndex() + 1) % m_flatModeSelector->count());
     });
-    addAction(KeyCommand::ToggleSkyGrid, [this] { m_skyGridToggle->toggle(); });
+    addAction(KeyCommand::ToggleSkyGrid, [this] { m_skyGridControls->toggleGrid(); });
     addAction(KeyCommand::SkyGridSize1, [this] { setSkyGridSize(1); });
     addAction(KeyCommand::SkyGridSize2, [this] { setSkyGridSize(2); });
     addAction(KeyCommand::SkyGridSize3, [this] { setSkyGridSize(3); });
@@ -1139,8 +1152,7 @@ void MainWindow::registerNavigationKeybinds() {
 }
 
 void MainWindow::setSkyGridSize(const int divisor) {
-    m_skyGridSizes->button(divisor)->setChecked(true);
-    m_flatView->setSkyGridDivisor(divisor);
+    m_skyGridControls->setDivisor(divisor);
 }
 
 void MainWindow::interpolateSpeedEvents() {
@@ -1230,6 +1242,7 @@ void MainWindow::buildWorkspace() {
     auto* timingLayout = new QVBoxLayout(timingHost);
     m_verification->setMinimumSize(260, 180);
     m_rootSplitter = new QSplitter(Qt::Horizontal, m_contentHost);
+    m_rootSplitter->setObjectName(QStringLiteral("workspaceSplitter"));
     m_eventsColumn = new QWidget(m_rootSplitter);
     auto* eventsColumnLayout = new QVBoxLayout(m_eventsColumn);
     eventsColumnLayout->setContentsMargins(0, 0, 0, 0);
@@ -1240,9 +1253,10 @@ void MainWindow::buildWorkspace() {
     m_viewerSplitter = new QSplitter(Qt::Vertical, m_mainSplitter);
     m_bottomSplitter = new QSplitter(Qt::Horizontal, m_viewerSplitter);
     m_timingPositionLabel->setAlignment(Qt::AlignCenter);
-    QFont timingPositionFont = m_timingPositionLabel->font();
-    timingPositionFont.setPointSize(34);
+    m_timingPositionLabel->setObjectName(QStringLiteral("transportTime"));
+    const QFont timingPositionFont = transportTimeFont();
     m_timingPositionLabel->setFont(timingPositionFont);
+    m_timingPositionLabel->setContentsMargins(8, 4, 8, 4);
     m_timingPositionLabel->setFixedHeight(TimelineWidget::kWidgetHeight);
     timingLayout->setContentsMargins(0, 0, 0, 0);
     timingLayout->setSpacing(2);
@@ -1259,60 +1273,66 @@ void MainWindow::buildWorkspace() {
     m_eventsSplitter->setStretchFactor(0, 1);
     m_eventsSplitter->setStretchFactor(1, 1);
     eventsColumnLayout->addWidget(m_eventsSplitter, 1);
-    eventsColumnLayout->addWidget(m_timingPositionLabel);
     m_fieldPresetsPanel->hide();
     auto* flatControls = new QWidget(this);
     auto* flatControlsLayout = new QHBoxLayout(flatControls);
     flatControlsLayout->setContentsMargins(0, 0, 0, 0);
     flatControlsLayout->setSpacing(3);
-    m_skyGridToggle = new QToolButton(flatControls);
-    m_skyGridToggle->setText(QStringLiteral("Grid OFF"));
-    m_skyGridToggle->setCheckable(true);
-    m_skyGridToggle->setFocusPolicy(Qt::NoFocus);
-    m_skyGridToggle->setToolTip(QStringLiteral("Toggle the sky snap grid"));
-    flatControlsLayout->addWidget(m_skyGridToggle);
-    connect(m_skyGridToggle, &QToolButton::toggled, this, [this](const bool enabled) {
-        m_skyGridToggle->setText(enabled ? QStringLiteral("Grid ON") : QStringLiteral("Grid OFF"));
+    m_skyGridControls = new SkyGridControls([this](const bool enabled, const int divisor) {
         m_flatView->setSkyGridEnabled(enabled);
-    });
-    m_skyGridSizes = new QButtonGroup(flatControls);
-    m_skyGridSizes->setExclusive(true);
-    for (int divisor = 1; divisor <= 4; ++divisor) {
-        auto* button = new QToolButton(flatControls);
-        button->setText(QStringLiteral("1/%1").arg(divisor));
-        button->setCheckable(true);
-        button->setChecked(divisor == 1);
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setToolTip(QStringLiteral("Sky grid: %1 subdivisions per lane").arg(divisor));
-        m_skyGridSizes->addButton(button, divisor);
-        flatControlsLayout->addWidget(button);
-    }
-    connect(m_skyGridSizes, &QButtonGroup::idClicked, this, &MainWindow::setSkyGridSize);
+        m_flatView->setSkyGridDivisor(divisor);
+    }, flatControls);
+    flatControlsLayout->addWidget(m_skyGridControls);
     flatControlsLayout->addWidget(m_flatModeSelector);
     auto* flatPanel = createPanel(QStringLiteral("Flat View"), m_flatView, m_mainSplitter, flatControls);
     auto* viewerPanel = createPanel(QStringLiteral("3D View"), m_viewer, m_viewerSplitter, m_noteSpeedSelector);
     auto* propertiesPanel = createPanel(QStringLiteral("Properties"), createScrollableContent(m_properties), m_bottomSplitter);
     auto* metadataPanel = createPanel(QStringLiteral("Metadata"), createScrollableContent(m_metadata), m_bottomSplitter);
-    auto* verificationPanel = createPanel(QStringLiteral("Verification"), m_verification, m_bottomSplitter);
+    auto* issueCount = new QLabel(QStringLiteral("0 issues"), this);
+    issueCount->setContentsMargins(8, 0, 8, 0);
+    issueCount->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+    connect(m_verification, &VerificationWidget::issuesChanged, issueCount, [issueCount](const int count) {
+        issueCount->setText(QStringLiteral("%1 %2").arg(count)
+            .arg(count == 1 ? QStringLiteral("issue") : QStringLiteral("issues")));
+    });
+    auto* verificationPanel = createPanel(QStringLiteral("Verification"), m_verification, m_bottomSplitter, issueCount);
     auto* rightHost = new QWidget(m_rootSplitter);
     auto* rightLayout = new QVBoxLayout(rightHost);
-    auto* timelineHost = new QWidget(rightHost);
+    auto* timelineHost = new QWidget(m_contentHost);
+    timelineHost->setObjectName(QStringLiteral("transportBar"));
+    timelineHost->setAttribute(Qt::WA_StyledBackground);
+    m_statusLabel->setObjectName(QStringLiteral("workspaceStatus"));
     auto* timelineLayout = new QHBoxLayout(timelineHost);
+    auto* transportLeftBorder = new QFrame(timelineHost);
+    transportLeftBorder->setFrameShape(QFrame::VLine);
+    auto* timeDivider = new QFrame(timelineHost);
     auto* playbackDivider = new QFrame(timelineHost);
-    auto* contentLayout = new QHBoxLayout(m_contentHost);
+    auto* statusDivider = new QFrame(m_contentHost);
+    statusDivider->setFrameShape(QFrame::HLine);
+    auto* statusHost = new QWidget(m_contentHost);
+    auto* statusLayout = new QHBoxLayout(statusHost);
+    auto* statusLeftBorder = new QFrame(statusHost);
+    statusLeftBorder->setFrameShape(QFrame::VLine);
+    statusLayout->setContentsMargins(0, 0, 0, 0);
+    statusLayout->setSpacing(2);
+    statusLayout->addWidget(statusLeftBorder);
+    statusLayout->addWidget(m_statusLabel, 1);
+    auto* contentLayout = new QVBoxLayout(m_contentHost);
 
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(2);
     rightLayout->addWidget(m_mainSplitter, 1);
     timelineLayout->setContentsMargins(0, 0, 0, 0);
     timelineLayout->setSpacing(2);
+    timelineLayout->addWidget(transportLeftBorder);
+    timelineLayout->addWidget(m_timingPositionLabel);
+    timeDivider->setFrameShape(QFrame::VLine);
+    timelineLayout->addWidget(timeDivider);
     timelineLayout->addWidget(m_timeline, 1);
     playbackDivider->setFrameShape(QFrame::VLine);
     playbackDivider->setFrameShadow(QFrame::Sunken);
     timelineLayout->addWidget(playbackDivider);
     timelineLayout->addWidget(m_playbackControls);
-    rightLayout->addWidget(timelineHost);
-    rightLayout->addWidget(m_statusLabel);
     m_bottomSplitter->addWidget(propertiesPanel);
     m_bottomSplitter->addWidget(metadataPanel);
     m_bottomSplitter->addWidget(verificationPanel);
@@ -1327,7 +1347,11 @@ void MainWindow::buildWorkspace() {
     m_viewerSplitter->setChildrenCollapsible(false);
     m_bottomSplitter->setChildrenCollapsible(false);
     contentLayout->setContentsMargins(0, 0, 0, 0);
-    contentLayout->addWidget(m_rootSplitter);
+    contentLayout->setSpacing(2);
+    contentLayout->addWidget(m_rootSplitter, 1);
+    contentLayout->addWidget(timelineHost);
+    contentLayout->addWidget(statusDivider);
+    contentLayout->addWidget(statusHost);
 
     m_workspacePanels = {timingPanel, propertiesPanel, metadataPanel, verificationPanel, m_fieldPresetsPanel};
     QAction* resetLayoutAction = m_windowMenu->actions().front();

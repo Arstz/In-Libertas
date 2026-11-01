@@ -14,14 +14,15 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QRegularExpressionValidator>
+#include <QtGui/QResizeEvent>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QInputDialog>
 #include <QtWidgets/QLineEdit>
-#include <QtWidgets/QListWidget>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QScrollArea>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QVBoxLayout>
 
@@ -29,10 +30,13 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <utility>
 
 namespace infalsus::gui {
 
 namespace {
+
+constexpr int kPresetTileSize = 132;
 
 double ease(const std::uint32_t auxiliary, const bool right, const double progress) {
     const std::uint32_t selector = right ? (auxiliary >> 3U) : auxiliary;
@@ -79,7 +83,7 @@ class PresetTile final : public QPushButton {
 public:
     PresetTile(const FieldPreset& preset, QWidget* parent)
         : QPushButton(preset.name, parent), m_paths(previewPaths(preset)) {
-        setFixedSize(132, 132);
+        setFixedSize(kPresetTileSize, kPresetTileSize);
         setToolTip(preset.name);
         setAccessibleName(preset.name);
         setCursor(Qt::PointingHandCursor);
@@ -92,10 +96,11 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        const bool active = underMouse() || hasFocus();
-        painter.fillRect(rect().adjusted(2, 2, -2, -2), active ? palette::panelHover : palette::panel);
-        painter.setPen(active ? palette::textMuted : palette::chrome);
-        painter.drawRect(rect().adjusted(2, 2, -3, -3));
+        const bool active = isEnabled() && (underMouse() || hasFocus());
+        painter.setBrush(!isEnabled() ? palette::inputBackground
+            : isDown() ? palette::selection : active ? palette::panelHover : palette::control);
+        painter.setPen(QPen(active ? palette::floorNoteBlue : palette::border, hasFocus() ? 2.0 : 1.0));
+        painter.drawRect(QRectF(rect()).adjusted(2, 2, -3, -3));
         const QRectF preview(23, 12, 86, 86);
         painter.fillRect(preview, palette::canvasBackground);
         if (m_bounds.width() > 0.0 && m_bounds.height() > 0.0) {
@@ -114,7 +119,7 @@ protected:
             }
             painter.restore();
         }
-        painter.setPen(isEnabled() ? palette::text : palette::textMuted);
+        painter.setPen(isEnabled() ? palette::text : palette::textDisabled);
         painter.drawText(QRect(8, 103, 116, 22), Qt::AlignCenter,
             fontMetrics().elidedText(text(), Qt::ElideRight, 116));
     }
@@ -125,6 +130,53 @@ private:
 };
 
 }
+
+class PresetGrid final : public QWidget {
+public:
+    explicit PresetGrid(QWidget* parent) : QWidget(parent) {
+        setMinimumWidth(kPresetTileSize);
+        setAutoFillBackground(true);
+        QPalette colors = QWidget::palette();
+        colors.setColor(QPalette::Window, palette::inputBackground);
+        setPalette(colors);
+    }
+
+    void clear() {
+        const auto tiles = std::exchange(m_tiles, {});
+        for (QWidget* tile : tiles) {
+            delete tile;
+        }
+        arrangeTiles();
+    }
+
+    void addTile(QWidget* tile) {
+        m_tiles.append(tile);
+        tile->show();
+        arrangeTiles();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        arrangeTiles();
+    }
+
+private:
+    void arrangeTiles() {
+        constexpr int gap = 8;
+        constexpr int stride = kPresetTileSize + gap;
+        const int columns = std::max(1, (width() + gap) / stride);
+        const int count = static_cast<int>(m_tiles.size());
+        for (int index = 0; index < count; ++index) {
+            m_tiles.at(index)->setGeometry((index % columns) * stride, (index / columns) * stride,
+                kPresetTileSize, kPresetTileSize);
+        }
+        const int rows = (count + columns - 1) / columns;
+        setMinimumHeight(rows == 0 ? 0 : rows * stride - gap);
+    }
+
+    QVector<QWidget*> m_tiles;
+};
 
 FieldPresetsWidget::FieldPresetsWidget(EditorState* state, QWidget* parent)
     : QWidget(parent), m_state(state) {
@@ -154,16 +206,14 @@ FieldPresetsWidget::FieldPresetsWidget(EditorState* state, QWidget* parent)
     values->addWidget(m_divisor);
     sizeRow->addWidget(m_sizeMode);
     sizeRow->addWidget(values, 1);
-    m_tiles = new QListWidget(this);
-    m_tiles->setViewMode(QListView::IconMode);
-    m_tiles->setResizeMode(QListView::Adjust);
-    m_tiles->setMovement(QListView::Static);
-    m_tiles->setSelectionMode(QAbstractItemView::NoSelection);
-    m_tiles->setGridSize(QSize(140, 140));
-    m_tiles->setSpacing(0);
-    m_tiles->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_tiles->setMinimumSize(152, 150);
-    layout->addWidget(m_tiles, 1);
+    auto* scroll = new QScrollArea(this);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setMinimumSize(152, 150);
+    m_tiles = new PresetGrid(scroll);
+    scroll->setWidget(m_tiles);
+    layout->addWidget(scroll, 1);
     layout->addLayout(sizeRow);
     m_presets.append(circleFieldPreset());
     loadPresets();
@@ -181,10 +231,8 @@ FieldPresetsWidget::FieldPresetsWidget(EditorState* state, QWidget* parent)
 void FieldPresetsWidget::refreshTiles() {
     m_tiles->clear();
     for (int index = 0; index < m_presets.size(); ++index) {
-        auto* item = new QListWidgetItem(m_tiles);
-        item->setSizeHint(QSize(132, 132));
         auto* tile = new PresetTile(m_presets.at(index), m_tiles);
-        m_tiles->setItemWidget(item, tile);
+        m_tiles->addTile(tile);
         connect(tile, &QPushButton::clicked, this, [this, index] { placePreset(index); });
         if (index > 0) {
             tile->setContextMenuPolicy(Qt::CustomContextMenu);

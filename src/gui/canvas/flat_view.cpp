@@ -2,6 +2,7 @@
 
 #include "core/timing_grid.h"
 #include "gui/app/game_palette.h"
+#include "gui/widgets/splitter_grip.h"
 
 #include <QtGui/QPaintEvent>
 #include <QtGui/QFontMetricsF>
@@ -164,9 +165,10 @@ protected:
         painter.fillRect(rect(), palette::panel);
         painter.setPen(palette::gridLine);
         painter.drawLine(width() / 2, 0, width() / 2, height());
-        painter.setPen(palette::textMuted);
+        painter.setPen(palette::text);
+        const int gripY = splitterGripY(this, rect());
         for (const int offset : {-4, 0, 4}) {
-            painter.drawLine(1, height() / 2 + offset, width() - 2, height() / 2 + offset);
+            painter.drawLine(1, gripY + offset, width() - 2, gripY + offset);
         }
     }
 
@@ -330,7 +332,7 @@ void setFlickSpan(ChartNote& hitObject, const double left, const double right) {
 
 FlatView::FlatView(QWidget* parent)
     : QOpenGLWidget(parent) {
-    setMinimumSize(240, 300);
+    setMinimumSize(180, 300);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     m_waveformDivider = new WaveformDivider(this, [this](const double position) {
@@ -2145,7 +2147,7 @@ void FlatView::paintGL() {
 
     painter.setPen(QPen(m_playheadColor.isValid() ? m_playheadColor : palette::guideGreen, kPlayheadWidth));
     painter.drawLine(QPointF(content.left(), playheadY()), QPointF(content.right(), playheadY()));
-    painter.setPen(palette::textMuted);
+    painter.setPen(palette::text);
     painter.drawText(
         QRectF(content.left(), content.top(), content.width(), 18.0),
         Qt::AlignRight | Qt::AlignTop,
@@ -2347,7 +2349,7 @@ void FlatView::drawDividers(QPainter& painter, const QRectF& area) const {
                     continue;
                 }
 
-                QColor color = palette::textMuted;
+                QColor color = palette::text;
                 double width = 0.25;
                 if (subdivision == 0) {
                     color = palette::white;

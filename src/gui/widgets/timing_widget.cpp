@@ -28,7 +28,7 @@ namespace infalsus::gui {
 
 namespace {
 
-constexpr int kRowHeight = 26;
+constexpr int kRowHeight = 30;
 
 [[nodiscard]] bool isControlHeld(const Qt::KeyboardModifiers modifiers) {
     if ((modifiers & Qt::ControlModifier) != 0
@@ -110,12 +110,18 @@ public:
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
         const bool selected = (option.state & QStyle::State_Selected) != 0;
+        const bool hovered = (option.state & QStyle::State_MouseOver) != 0;
         const QStringList fields = index.data(Qt::UserRole).toStringList();
         painter->save();
         painter->setClipRect(option.rect);
-        painter->fillRect(option.rect, option.palette.brush(selected ? QPalette::Highlight : QPalette::Base));
-        if (!selected) {
+        painter->fillRect(option.rect, selected ? palette::selection
+            : hovered ? palette::panelHover : palette::inputBackground);
+        if (!selected && !hovered) {
             painter->fillRect(option.rect, index.data(Qt::BackgroundRole).value<QColor>());
+        }
+        if (selected) {
+            painter->fillRect(QRect(option.rect.left(), option.rect.top(), 3, option.rect.height()),
+                palette::floorNoteBlue);
         }
         painter->setFont(option.font);
         const QRect contents = option.rect.adjusted(6, 1, -6, -1);
@@ -124,17 +130,17 @@ public:
             fieldWidth - fieldWidth * 3 / 10 - fieldWidth * 4 / 10};
         int left = contents.left();
         for (int field = 0; field < 3; ++field) {
-            painter->setPen(option.palette.color(selected ? QPalette::HighlightedText : QPalette::Text));
             const QRect bounds(left, contents.top(), widths[field], contents.height());
-            painter->drawText(bounds, Qt::AlignLeft | Qt::AlignVCenter,
+            painter->setPen(palette::text);
+            painter->drawText(bounds, (field == 2 ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter,
                 option.fontMetrics.elidedText(fields.value(field), Qt::ElideRight, bounds.width()));
             left += widths[field];
             if (field < 2) {
-                painter->setPen(option.palette.color(QPalette::Mid));
-                painter->drawLine(left + 4, contents.top(), left + 4, contents.bottom());
                 left += 10;
             }
         }
+        painter->setPen(palette::withAlpha(palette::border, 100));
+        painter->drawLine(option.rect.bottomLeft(), option.rect.bottomRight());
         painter->restore();
     }
 };
@@ -246,6 +252,8 @@ EventsWidget::EventsWidget(QWidget* parent)
     layout->setSpacing(2);
 
     auto* header = new QWidget(this);
+    header->setObjectName(QStringLiteral("eventsColumnHeader"));
+    header->setAttribute(Qt::WA_StyledBackground);
     auto* headerLayout = new QHBoxLayout(header);
     headerLayout->setContentsMargins(6, 1, 6, 1);
     headerLayout->setSpacing(4);
@@ -259,14 +267,16 @@ EventsWidget::EventsWidget(QWidget* parent)
     m_points = new EventsListView([this](const int row, const Qt::KeyboardModifiers modifiers, const bool seek) {
         activateRow(row, modifiers, seek);
     }, this);
+    m_points->setObjectName(QStringLiteral("eventsList"));
     m_points->setModel(m_model);
     m_points->setItemDelegate(new EventDelegate(m_points));
     m_points->setUniformItemSizes(true);
+    m_points->setMouseTracking(true);
     m_points->setSelectionMode(QAbstractItemView::NoSelection);
     m_points->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_points->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_points->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    m_points->setFrameShape(QFrame::StyledPanel);
+    m_points->setFrameShape(QFrame::NoFrame);
 
     auto* buttons = new QHBoxLayout();
     auto* addTimingButton = new AdaptivePushButton({QStringLiteral("Add timing event"),

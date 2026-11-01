@@ -32,6 +32,7 @@ public:
 
 signals:
     void timestampRequested(qint64 timestampMilliseconds);
+    void issuesChanged(int count);
 
 private:
     using VerificationRule = QVector<VerificationIssue> (*)(const ChartData& chart);

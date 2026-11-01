@@ -5,10 +5,13 @@
 #include "gui/app/game_palette.h"
 
 #include <QtGui/QPalette>
+#include <QtGui/QPainter>
 #include <QtCore/QVariant>
 #include <QtCore/QPromise>
 #include <QtCore/QThreadPool>
 #include <QtWidgets/QListWidget>
+#include <QtWidgets/QStyle>
+#include <QtWidgets/QStyledItemDelegate>
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
@@ -162,18 +165,60 @@ constexpr int kRightOuterLane = 5;
         .arg(clampedTimestamp % kMillisecondsPerSecond, 3, 10, QLatin1Char('0'));
 }
 
-[[nodiscard]] QString formatIssue(const VerificationIssue& issue) {
-    const QString idRange = issue.hitObjectIds.isEmpty()
+[[nodiscard]] QString issueObjectIds(const VerificationIssue& issue) {
+    return issue.hitObjectIds.isEmpty()
         ? QStringLiteral("-")
         : issue.hitObjectIds.size() == 1
         ? QString::number(issue.hitObjectIds.constFirst())
         : QStringLiteral("%1 ... %2")
               .arg(issue.hitObjectIds.constFirst())
               .arg(issue.hitObjectIds.constLast());
-
-    return QStringLiteral("[%1][%2] %3")
-        .arg(formatTimestamp(issue.timestampMilliseconds), idRange, issue.message);
 }
+
+[[nodiscard]] QString formatIssue(const VerificationIssue& issue) {
+    return QStringLiteral("[%1][%2] %3")
+        .arg(formatTimestamp(issue.timestampMilliseconds), issueObjectIds(issue), issue.message);
+}
+
+class IssueDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
+        return {0, 54};
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        const bool selected = (option.state & QStyle::State_Selected) != 0;
+        const bool hovered = (option.state & QStyle::State_MouseOver) != 0;
+        painter->save();
+        painter->setClipRect(option.rect);
+        painter->fillRect(option.rect, selected ? palette::selection
+            : hovered ? palette::panelHover : palette::inputBackground);
+        if (selected) {
+            painter->fillRect(QRect(option.rect.left(), option.rect.top(), 3, option.rect.height()),
+                palette::floorNoteBlue);
+        }
+        const QRect contents = option.rect.adjusted(8, 5, -8, -5);
+        QFont titleFont = option.font;
+        titleFont.setWeight(QFont::DemiBold);
+        painter->setFont(titleFont);
+        painter->setPen(palette::text);
+        painter->drawText(QRect(contents.left(), contents.top(), contents.width(), 21),
+            Qt::AlignLeft | Qt::AlignVCenter,
+            QFontMetrics(titleFont).elidedText(index.data(Qt::UserRole + 1).toString(), Qt::ElideRight,
+                contents.width()));
+        painter->setFont(option.font);
+        painter->setPen(palette::text);
+        painter->drawText(QRect(contents.left(), contents.top() + 22, contents.width(), 20),
+            Qt::AlignLeft | Qt::AlignVCenter,
+            option.fontMetrics.elidedText(index.data(Qt::UserRole + 2).toString(), Qt::ElideRight,
+                contents.width()));
+        painter->setPen(palette::withAlpha(palette::border, 100));
+        painter->drawLine(option.rect.bottomLeft(), option.rect.bottomRight());
+        painter->restore();
+    }
+};
 
 } // namespace
 
@@ -186,11 +231,13 @@ VerificationWidget::VerificationWidget(QWidget* parent)
 
     auto* layout = new QVBoxLayout(this);
     m_issues = new QListWidget(this);
-    QPalette issuePalette = m_issues->palette();
-    issuePalette.setColor(QPalette::Window, palette::chrome);
-    issuePalette.setColor(QPalette::Base, palette::chrome);
-    issuePalette.setColor(QPalette::AlternateBase, palette::chrome);
-    m_issues->setPalette(issuePalette);
+    m_issues->setObjectName(QStringLiteral("verificationList"));
+    m_issues->setFrameShape(QFrame::NoFrame);
+    m_issues->setItemDelegate(new IssueDelegate(m_issues));
+    m_issues->setUniformItemSizes(true);
+    m_issues->setMouseTracking(true);
+    m_issues->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_issues->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_issues->setSelectionMode(QAbstractItemView::SingleSelection);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_issues);
@@ -573,7 +620,14 @@ void VerificationWidget::setIssues(QVector<VerificationIssue> issues) {
     for (const VerificationIssue& issue : issues) {
         auto* item = new QListWidgetItem(formatIssue(issue), m_issues);
         item->setData(Qt::UserRole, issue.timestampMilliseconds);
+        item->setData(Qt::UserRole + 1, issue.message);
+        item->setData(Qt::UserRole + 2, QStringLiteral("%1  |  %2 %3")
+            .arg(formatTimestamp(issue.timestampMilliseconds),
+                issue.hitObjectIds.size() == 1 ? QStringLiteral("ObjectID") : QStringLiteral("ObjectIDs"),
+                issueObjectIds(issue)));
+        item->setToolTip(formatIssue(issue));
     }
+    emit issuesChanged(static_cast<int>(issues.size()));
 }
 
 } // namespace infalsus::gui

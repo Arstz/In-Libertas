@@ -50,10 +50,9 @@ private:
     QSize labelSize(const QString& label) const {
         QStyleOptionButton option;
         initStyleOption(&option);
-        const int padding = 2 * (style()->pixelMetric(QStyle::PM_ButtonMargin, &option, this)
-            + style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &option, this));
-        return {fontMetrics().size(Qt::TextShowMnemonic, label).width() + padding,
-            QPushButton::sizeHint().height()};
+        option.text = label;
+        return style()->sizeFromContents(QStyle::CT_PushButton, &option,
+            fontMetrics().size(Qt::TextShowMnemonic, label), this);
     }
 
     QStringList m_labels;

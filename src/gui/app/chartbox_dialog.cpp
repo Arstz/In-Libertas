@@ -117,12 +117,8 @@ ChartboxDialog::ChartboxDialog(const QString& chartReference, const bool hasProj
 
     setWindowTitle(QStringLiteral("Chartbox"));
     setMinimumWidth(630);
-    const QString disabledButtonStyle = QStringLiteral(
-        "QPushButton:disabled { background-color: #303030; color: #888888; "
-        "border: 1px solid #484848; border-radius: 3px; }");
     for (auto* button : {m_showKeyButton, m_uploadButton, m_deleteButton, m_openButton, m_refreshButton, m_closeButton}) {
         button->setMinimumSize(button->sizeHint());
-        button->setStyleSheet(disabledButtonStyle);
     }
     m_apiKey->setEchoMode(QLineEdit::Password);
     m_apiKey->setPlaceholderText(QStringLiteral("Enter your API key"));

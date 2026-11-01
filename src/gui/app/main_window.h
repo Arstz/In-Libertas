@@ -17,7 +17,6 @@ class ConveyorView;
 class PlaybackController;
 class HitsoundBank;
 class QAudioFormat;
-class QButtonGroup;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -44,6 +43,7 @@ class TimelineWidget;
 class EventsWidget;
 class FieldPresetsWidget;
 class VerificationWidget;
+class SkyGridControls;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -157,8 +157,7 @@ private:
     QLabel* m_songVolumeLabel = nullptr;
     QLabel* m_effectsVolumeLabel = nullptr;
     QComboBox* m_flatModeSelector = nullptr;
-    QToolButton* m_skyGridToggle = nullptr;
-    QButtonGroup* m_skyGridSizes = nullptr;
+    SkyGridControls* m_skyGridControls = nullptr;
     QDoubleSpinBox* m_noteSpeedSelector = nullptr;
     QLabel* m_timingPositionLabel = nullptr;
     QLabel* m_statusLabel = nullptr;

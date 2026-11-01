@@ -5,6 +5,7 @@
 #include "gui/widgets/timeline_widget.h"
 
 #include <QtCore/QSignalBlocker>
+#include <QtCore/QVariant>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtWidgets/QHBoxLayout>
@@ -40,7 +41,7 @@ class PlaybackButton final : public QToolButton {
 public:
     explicit PlaybackButton(QWidget* parent)
         : QToolButton(parent) {
-        setCheckable(true);
+        setObjectName(QStringLiteral("playbackButton"));
     }
 
 protected:
@@ -51,8 +52,8 @@ protected:
             kIconSize, kIconSize);
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(palette::floorNoteBlue);
-        if (isChecked()) {
+        painter.setBrush(isEnabled() ? palette::floorNoteBlue : palette::textDisabled);
+        if (property("playing").toBool()) {
             painter.drawRect(QRectF(iconArea.left(), iconArea.top(), kPauseBarWidth, iconArea.height()));
             painter.drawRect(QRectF(iconArea.right() - kPauseBarWidth, iconArea.top(),
                 kPauseBarWidth, iconArea.height()));
@@ -120,14 +121,14 @@ protected:
         const double indicatorX = kSelectorMargin + trackWidth * value() / maximum();
         const double indicatorTop = kTrackY + kIndicatorGap;
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(palette::textMuted, 1.0));
+        painter.setPen(QPen(palette::border, 2.0));
         painter.drawLine(QPointF(kSelectorMargin, kTrackY), QPointF(width() - kSelectorMargin, kTrackY));
         for (int index = minimum(); index <= maximum(); ++index) {
             const double x = kSelectorMargin + trackWidth * index / maximum();
             painter.setPen(palette::text);
             painter.drawText(QRectF(x - kLabelWidth * 0.5, kLabelTop, kLabelWidth, kLabelHeight),
                 Qt::AlignCenter, QString::number(rateForIndex(index), 'g', 2));
-            painter.setPen(QPen(palette::textMuted, 1.0));
+            painter.setPen(QPen(index == value() ? palette::floorNoteBlue : palette::border, 1.0));
             painter.drawLine(QPointF(x, kTrackY - kTickHalfHeight), QPointF(x, kTrackY + kTickHalfHeight));
         }
         painter.setPen(Qt::NoPen);
@@ -175,7 +176,8 @@ PlaybackControls::PlaybackControls(QWidget* parent)
 
 void PlaybackControls::setPlaying(const bool playing) {
     const QString label = playing ? QStringLiteral("Pause") : QStringLiteral("Play");
-    m_playPauseButton->setChecked(playing);
+    m_playPauseButton->setProperty("playing", playing);
+    m_playPauseButton->update();
     m_playPauseButton->setToolTip(label);
     m_playPauseButton->setAccessibleName(label);
 }

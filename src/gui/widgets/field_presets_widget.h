@@ -6,12 +6,12 @@
 
 class QComboBox;
 class QLineEdit;
-class QListWidget;
 class QPushButton;
 
 namespace infalsus::gui {
 
 class EditorState;
+class PresetGrid;
 
 class FieldPresetsWidget final : public QWidget {
     Q_OBJECT
@@ -29,7 +29,7 @@ private:
 
     EditorState* m_state = nullptr;
     QVector<FieldPreset> m_presets;
-    QListWidget* m_tiles = nullptr;
+    PresetGrid* m_tiles = nullptr;
     QPushButton* m_addSelection = nullptr;
     QComboBox* m_sizeMode = nullptr;
     QLineEdit* m_milliseconds = nullptr;

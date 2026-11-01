@@ -70,9 +70,9 @@ void TimelineWidget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.fillRect(rect(), palette::chrome);
     const QRectF track = rect().adjusted(8.0, 11.0, -8.0, -11.0);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(palette::gridLine);
-    painter.drawRoundedRect(track, 4.0, 4.0);
+    painter.setPen(QPen(palette::border, 1.0));
+    painter.setBrush(palette::inputBackground);
+    painter.drawRect(track);
 
     ensureEventMarkers();
     painter.drawPixmap(0, 0, m_eventMarkers);
