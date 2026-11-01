@@ -48,7 +48,7 @@ public:
         if (subControl == SC_SpinBoxUp || subControl == SC_SpinBoxDown) {
             area.translate(rightToLeft ? -1 : 1, 0);
         } else if (subControl == SC_SpinBoxEditField) {
-            area.adjust(rightToLeft ? -1 : 0, 0, rightToLeft ? 0 : 1, 0);
+            area.adjust(rightToLeft ? -1 : 5, 0, rightToLeft ? -5 : 1, 0);
         }
         return area;
     }
@@ -165,6 +165,7 @@ public:
             selection-color: @text;
         }
         QLineEdit, QComboBox { min-height: 20px; }
+        QComboBox { padding-left: 9px; padding-right: 9px; }
         QAbstractSpinBox { min-height: 26px; }
         QLineEdit:hover, QComboBox:hover { border-color: @text; }
         QLineEdit:focus, QComboBox:focus,

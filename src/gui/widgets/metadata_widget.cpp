@@ -52,7 +52,7 @@ MetadataWidget::MetadataWidget(QWidget* parent)
         spinBox->setRange(0, 36000000);
         spinBox->setSingleStep(100);
         spinBox->setSuffix(QStringLiteral(" ms"));
-        spinBox->setAlignment(Qt::AlignRight);
+        spinBox->setAlignment(Qt::AlignLeft);
     }
     m_previewStartCurrentTimeButton = new QPushButton(QStringLiteral("Set current time"), this);
     m_previewEndCurrentTimeButton = new QPushButton(QStringLiteral("Set current time"), this);
@@ -61,7 +61,7 @@ MetadataWidget::MetadataWidget(QWidget* parent)
     m_chartId = new QLineEdit(this);
     m_rating = new QSpinBox(this);
     m_rating->setRange(0, 99);
-    m_rating->setAlignment(Qt::AlignRight);
+    m_rating->setAlignment(Qt::AlignLeft);
     m_charters = new QLineEdit(this);
     m_jacketDesigner = new QLineEdit(this);
     m_jacketButton = new QPushButton(this);

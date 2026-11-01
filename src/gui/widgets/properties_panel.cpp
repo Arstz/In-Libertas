@@ -174,7 +174,7 @@ void addNumberField(QFormLayout* layout, const QString& label, const QVector<Val
     editor->setSingleStep(step);
     editor->setSuffix(suffix);
     editor->setKeyboardTracking(false);
-    editor->setAlignment(Qt::AlignRight);
+    editor->setAlignment(Qt::AlignLeft);
     if constexpr (std::is_same_v<SpinBox, QDoubleSpinBox>) {
         editor->setDecimals(kCoordinateDecimals);
         editor->setValue(average);
