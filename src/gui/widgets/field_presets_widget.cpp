@@ -15,6 +15,7 @@
 #include <QtGui/QPainterPath>
 #include <QtGui/QRegularExpressionValidator>
 #include <QtGui/QResizeEvent>
+#include <QtGui/QShowEvent>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QInputDialog>
@@ -23,6 +24,7 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QScrollBar>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QVBoxLayout>
 
@@ -131,14 +133,18 @@ private:
 
 }
 
-class PresetGrid final : public QWidget {
+class PresetGrid final : public QScrollArea {
 public:
-    explicit PresetGrid(QWidget* parent) : QWidget(parent) {
-        setMinimumWidth(kPresetTileSize);
-        setAutoFillBackground(true);
+    explicit PresetGrid(QWidget* parent) : QScrollArea(parent) {
+        setFrameShape(QFrame::NoFrame);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setMinimumSize(152, 150);
+        auto* content = new QWidget(this);
+        content->setMinimumWidth(kPresetTileSize);
         QPalette colors = QWidget::palette();
         colors.setColor(QPalette::Window, palette::inputBackground);
-        setPalette(colors);
+        content->setPalette(colors);
+        setWidget(content);
     }
 
     void clear() {
@@ -150,6 +156,7 @@ public:
     }
 
     void addTile(QWidget* tile) {
+        tile->setParent(widget());
         m_tiles.append(tile);
         tile->show();
         arrangeTiles();
@@ -157,22 +164,42 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* event) override {
-        QWidget::resizeEvent(event);
+        QScrollArea::resizeEvent(event);
+        arrangeTiles();
+    }
+
+    void showEvent(QShowEvent* event) override {
+        QScrollArea::showEvent(event);
         arrangeTiles();
     }
 
 private:
+    static constexpr int kGap = 8;
+    static constexpr int kStride = kPresetTileSize + kGap;
+
+    static int columnsForWidth(const int width) {
+        return std::max(1, (width + kGap) / kStride);
+    }
+
+    int heightForColumns(const int columns) const {
+        const int count = static_cast<int>(m_tiles.size());
+        const int rows = (count + columns - 1) / columns;
+        return rows == 0 ? 0 : rows * kStride - kGap;
+    }
+
     void arrangeTiles() {
-        constexpr int gap = 8;
-        constexpr int stride = kPresetTileSize + gap;
-        const int columns = std::max(1, (width() + gap) / stride);
+        QSize available = maximumViewportSize();
+        if (heightForColumns(columnsForWidth(available.width())) > available.height()) {
+            available.rwidth() -= verticalScrollBar()->sizeHint().width();
+        }
+        const int columns = columnsForWidth(available.width());
+        widget()->resize(std::max(kPresetTileSize, available.width()),
+            std::max(available.height(), heightForColumns(columns)));
         const int count = static_cast<int>(m_tiles.size());
         for (int index = 0; index < count; ++index) {
-            m_tiles.at(index)->setGeometry((index % columns) * stride, (index / columns) * stride,
+            m_tiles.at(index)->setGeometry((index % columns) * kStride, (index / columns) * kStride,
                 kPresetTileSize, kPresetTileSize);
         }
-        const int rows = (count + columns - 1) / columns;
-        setMinimumHeight(rows == 0 ? 0 : rows * stride - gap);
     }
 
     QVector<QWidget*> m_tiles;
@@ -206,14 +233,8 @@ FieldPresetsWidget::FieldPresetsWidget(EditorState* state, QWidget* parent)
     values->addWidget(m_divisor);
     sizeRow->addWidget(m_sizeMode);
     sizeRow->addWidget(values, 1);
-    auto* scroll = new QScrollArea(this);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setWidgetResizable(true);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll->setMinimumSize(152, 150);
-    m_tiles = new PresetGrid(scroll);
-    scroll->setWidget(m_tiles);
-    layout->addWidget(scroll, 1);
+    m_tiles = new PresetGrid(this);
+    layout->addWidget(m_tiles, 1);
     layout->addLayout(sizeRow);
     m_presets.append(circleFieldPreset());
     loadPresets();

@@ -125,7 +125,7 @@ SettingsDialog::SettingsDialog(KeyBindingRouter* keyBindings, const VisualSettin
     setWindowTitle(QStringLiteral("Settings"));
     resize(kSettingsWidth, kSettingsHeight);
     navigation->addItems({QStringLiteral("Keybinds"), QStringLiteral("Visuals"), QStringLiteral("Handling"),
-        QStringLiteral("Hitsounds"), QStringLiteral("Playtest"), QStringLiteral("System")});
+        QStringLiteral("Sounds"), QStringLiteral("Playtest"), QStringLiteral("System")});
     navigation->setCurrentRow(0);
     navigation->setFixedWidth(kNavigationWidth);
     navigation->setUniformItemSizes(true);
