@@ -4,9 +4,21 @@ using System.Runtime.InteropServices;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+#if BEPINEX
+using _b;
+#else
 using Il2Cpp_b;
+#endif
+#if BEPINEX
+using ifapp.Game.Data;
+#else
 using Il2Cppifapp.Game.Data;
+#endif
+#if BEPINEX
+using Str;
+#else
 using Il2CppStr;
+#endif
 using UnityEngine;
 using UnityEngine.ResourceManagement.AsyncOperations;
 

@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <Loader Condition="'$(Loader)' == ''">BepInEx</Loader>
+    <BaseIntermediateOutputPath>obj\$(Loader)\</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

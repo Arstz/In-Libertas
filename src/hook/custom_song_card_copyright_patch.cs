@@ -1,8 +1,23 @@
+#if BEPINEX
+extern alias GameDataInterop;
+#endif
 using System;
 using HarmonyLib;
+#if BEPINEX
+using _SH = GameDataInterop::_K._SH;
+#else
 using Il2Cpp_K;
+#endif
+#if BEPINEX
+using ifapp.Game.Data;
+#else
 using Il2Cppifapp.Game.Data;
+#endif
+#if BEPINEX
+using ifapp.Game.Scenes.SongSelect;
+#else
 using Il2Cppifapp.Game.Scenes.SongSelect;
+#endif
 
 namespace InFalsusCustomSongHook;
 

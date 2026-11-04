@@ -12,6 +12,6 @@ A GUI editor for .spc charts and a hook for the game In Falsus by lowiro. This r
 - [vcpkg](https://github.com/microsoft/vcpkg), with Qt 6.10 or newer (Core, Gui, Multimedia, OpenGL, OpenGLWidgets, and Widgets) installed for `x64-windows`. Qt Multimedia must use its FFmpeg backend.
 - Qt's JPEG and GIF plugins, and `qtimageformats[core,webp]:x64-windows` for WebP. The build also deploys Qt's ICO and TGA plugins; BMP and PNG are built into Qt Gui.
 - FFmpeg with the stable libvorbis encoder enabled (`vcpkg install "ffmpeg[vorbis]:x64-windows" --recurse`) for Ogg Vorbis export. No separate `ffmpeg.exe` or audiowaveform executable is needed.
-- An In Falsus installation with MelonLoader, so the hook project can reference its generated IL2CPP assemblies.
+- An In Falsus installation with a compatible loader installed, so the hook project can reference its generated IL2CPP assemblies.
 
-Run `tools\build.ps1`. The editor and its runtime files are written to `build\In Libertas`; the managed hook and native jacket resolver bridge are written to `build\Mods`.
+Run `tools\build.ps1`. The editor and its runtime files are written to `build\In Libertas`; the mods and dependent libraries are written to `build\hook`.

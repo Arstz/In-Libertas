@@ -1,6 +1,10 @@
 using System;
 using HarmonyLib;
+#if BEPINEX
+using _k;
+#else
 using Il2Cpp_k;
+#endif
 
 namespace InFalsusCustomSongHook;
 

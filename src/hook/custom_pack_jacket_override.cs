@@ -3,7 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine;
+#if BEPINEX
+using PackStyle = ifapp.Game.Data.PackSelectSceneAssets.SongSelectPackAssets;
+#else
 using PackStyle = Il2Cppifapp.Game.Data.PackSelectSceneAssets.SongSelectPackAssets;
+#endif
 
 namespace InFalsusCustomSongHook;
 

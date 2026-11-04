@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
-    [string] $Configuration = 'Release'
+    [string] $Configuration = 'Release',
+    [ValidateSet('All', 'MelonLoader', 'BepInEx')]
+    [string] $Loader = 'BepInEx'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +17,7 @@ $hookProject = Join-Path $projectRoot 'src\hook\InFalsusCustomSongHook.csproj'
 $nativeBridgeSource = Join-Path $projectRoot 'src\hook\native_jacket_resolver_bridge\native_jacket_resolver_bridge.cpp'
 $nativeBridgeObject = Join-Path $nativeBridgeBuildDirectory 'native_jacket_resolver_bridge.obj'
 $nativeBridgePdb = Join-Path $nativeBridgeBuildDirectory 'native_jacket_resolver_bridge.pdb'
+$nativeBridgeLinkPdb = Join-Path $nativeBridgeBuildDirectory 'InFalsusNativeJacketResolverBridge.pdb'
 $nativeBridgeImportLibrary = Join-Path $nativeBridgeBuildDirectory 'InFalsusNativeJacketResolverBridge.lib'
 $nativeBridgeOutput = Join-Path $modsOutputDirectory 'InFalsusNativeJacketResolverBridge.dll'
 $vcpkgRoot = 'C:\vcpkg\vcpkg'
@@ -74,14 +77,37 @@ function Invoke-VisualStudioCommand {
 $configureCommand = "`"$cmakePath`" -S `"$projectRoot`" -B `"$buildDirectory`" -G `"Visual Studio 17 2022`" -A x64 -DCMAKE_TOOLCHAIN_FILE=`"$toolchainFile`" -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=`"$editorOutputDirectory`" -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=`"$editorOutputDirectory`""
 $buildCommand = "`"$cmakePath`" --build `"$buildDirectory`" --config $Configuration --parallel"
 $nativeBridgeOptimization = if ($Configuration -eq 'Debug') { '/Od /Zi' } else { '/O2' }
-$nativeBridgeCommand = "cl.exe /nologo /std:c++20 /EHsc /LD /MD $nativeBridgeOptimization /Fo`"$nativeBridgeObject`" /Fd`"$nativeBridgePdb`" /Fe`"$nativeBridgeOutput`" `"$nativeBridgeSource`" /link /IMPLIB:`"$nativeBridgeImportLibrary`""
+$nativeBridgeCommand = "cl.exe /nologo /std:c++20 /EHsc /LD /MD $nativeBridgeOptimization /Fo`"$nativeBridgeObject`" /Fd`"$nativeBridgePdb`" /Fe`"$nativeBridgeOutput`" `"$nativeBridgeSource`" /link /IMPLIB:`"$nativeBridgeImportLibrary`" /PDB:`"$nativeBridgeLinkPdb`""
 
 Invoke-VisualStudioCommand $configureCommand
 Invoke-VisualStudioCommand $buildCommand
 New-Item -ItemType Directory -Force -Path $nativeBridgeBuildDirectory, $modsOutputDirectory | Out-Null
 Invoke-VisualStudioCommand $nativeBridgeCommand
 
-& dotnet build $hookProject --configuration $Configuration --output $modsOutputDirectory --nologo
-if ($LASTEXITCODE -ne 0) {
-    throw "Hook build failed with exit code $LASTEXITCODE."
+foreach ($hookLoader in @('MelonLoader', 'BepInEx')) {
+    if ($Loader -ne 'All' -and $Loader -ne $hookLoader) { continue }
+    $hookBuildDirectory = Join-Path $buildDirectory "hook\$hookLoader\$Configuration"
+    $hookOutputDirectory = if ($hookLoader -eq 'MelonLoader') {
+        $modsOutputDirectory
+    } else {
+        Join-Path $buildDirectory 'BepInEx\plugins\InLibertas'
+    }
+    & dotnet build $hookProject --configuration $Configuration --output $hookBuildDirectory "-p:Loader=$hookLoader" --nologo
+    if ($LASTEXITCODE -ne 0) {
+        throw "$hookLoader hook build failed with exit code $LASTEXITCODE."
+    }
+    New-Item -ItemType Directory -Force -Path $hookOutputDirectory | Out-Null
+    Copy-Item -LiteralPath (Join-Path $hookBuildDirectory 'InFalsusCustomSongHook.dll') -Destination $hookOutputDirectory -Force
+    if ($hookLoader -eq 'BepInEx') {
+        Get-ChildItem -LiteralPath $modsOutputDirectory -File | Where-Object {
+            $_.Name -eq 'InFalsusNativeJacketResolverBridge.dll' -or $_.Name -eq 'InLibertasJacketCodec.dll' -or
+            $_.Name -like 'libwebp*.dll' -or $_.Name -like 'libsharpyuv*.dll'
+        } | Copy-Item -Destination $hookOutputDirectory -Force
+    }
+    Get-ChildItem -LiteralPath $hookOutputDirectory -File | Where-Object {
+        $_.Name -like '*.deps.json' -or $_.Extension -eq '.pdb'
+    } | Remove-Item -Force
 }
+Get-ChildItem -LiteralPath $modsOutputDirectory -File | Where-Object {
+    $_.Name -like '*.deps.json' -or $_.Extension -eq '.pdb'
+} | Remove-Item -Force

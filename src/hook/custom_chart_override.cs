@@ -1,9 +1,18 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using HarmonyLib;
+#if BEPINEX
+using _b;
+#else
 using Il2Cpp_b;
+#endif
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+#if BEPINEX
+using _n;
+#else
 using Il2Cpp_n;
+#endif
 
 namespace InFalsusCustomSongHook;
 
@@ -15,76 +24,91 @@ namespace InFalsusCustomSongHook;
 internal static class CustomChartOverride
 {
     private static readonly object Gate = new();
-    private static readonly System.Collections.Generic.Dictionary<string, Il2CppStructArray<byte>> BytesByChartKey =
+    private static Dictionary<string, Il2CppStructArray<byte>> BytesByChartKey =
         new(StringComparer.OrdinalIgnoreCase);
-    private static readonly System.Collections.Generic.HashSet<string> LoadAttempted = new(StringComparer.OrdinalIgnoreCase);
     [HarmonyPrefix]
-    private static void Prefix(ref Il2CppSystem.ReadOnlySpan<byte> __0, ref string __1)
+    private static void Prefix(ref Il2CppSystem.ReadOnlySpan<byte> __0, ref string __1, out Il2CppStructArray<byte> __state)
     {
+        __state = null;
         CustomSongConfig config = CustomSongInstaller.FindActiveSongByChartKey(__1);
         if (config is null) return;
 
         try
         {
-            EnsureLoaded(config);
-            if (BytesByChartKey.TryGetValue(config.ChartKey, out Il2CppStructArray<byte> bytes))
-            {
-                // Keep _bytes rooted for the process lifetime: the native parser
-                // receives a span into this managed IL2CPP allocation.
-                __0 = new Il2CppSystem.ReadOnlySpan<byte>(bytes);
-                string parserKey = GetParserKey(config);
-                // The protected ICP1 note fields are decoded with rolling state
-                // seeded by this argument.  The external test payload is an
-                // alamode0 payload, so parsing it as custom0 would make every
-                // protected field after the header decode incorrectly.
-                __1 = parserKey;
-                CustomSongMod.Log.Msg($"[CustomSong] external chart selected: requested={config.ChartKey}; parserKey={parserKey}; file={config.ExternalChartStem}; {__0.Length} bytes");
-            }
+            __state = GetPayload(config);
+            __0 = new Il2CppSystem.ReadOnlySpan<byte>(__state);
+            string parserKey = GetParserKey(config);
+            __1 = parserKey;
+            CustomSongMod.Log.Msg($"[CustomSong] external chart selected: requested={config.ChartKey}; parserKey={parserKey}; file={config.ExternalChartStem}; {__0.Length} bytes");
         }
         catch (Exception exception)
         {
-            // Preserve the template source span if an external file is invalid.
             CustomSongMod.Log.Error("[CustomSong] external chart unavailable: " + exception.Message);
         }
     }
 
     [HarmonyFinalizer]
-    private static Exception Finalizer(string __1, Exception __exception)
+    private static Exception Finalizer(Exception __exception, Il2CppStructArray<byte> __state)
     {
-        CustomSongConfig config = CustomSongInstaller.FindActiveSongByChartKey(__1);
-        if (__exception is not null && config is not null)
+        if (__exception is not null && __state is not null)
             CustomSongMod.Log.Error("[CustomSong] external parser threw: " + __exception);
+        GC.KeepAlive(__state);
         return __exception;
     }
 
-    private static void EnsureLoaded(CustomSongConfig config)
+    private static Il2CppStructArray<byte> GetPayload(CustomSongConfig config)
     {
         lock (Gate)
         {
-            if (LoadAttempted.Contains(config.ChartKey)) return;
-            LoadAttempted.Add(config.ChartKey);
-
-            if (string.IsNullOrWhiteSpace(config.ContentDirectory))
-                throw new InvalidOperationException("Custom chart has no chart-folder content directory.");
-
-            string spcPath = Path.Combine(config.ContentDirectory, config.ExternalChartStem + ".spc");
-            string samPath = Path.Combine(config.ContentDirectory, config.ExternalChartStem + ".sam");
-            if (!File.Exists(spcPath)) spcPath = null;
-            if (!File.Exists(samPath)) samPath = null;
-            byte[] payload;
-            if (spcPath is not null)
-                payload = File.ReadAllBytes(spcPath);
-            else if (samPath is not null)
-                payload = DecodeSam(File.ReadAllBytes(samPath));
-            else
-                throw new FileNotFoundException(
-                    "Expected " + config.ExternalChartStem + ".spc or .sam in " +
-                    config.ContentDirectory);
-
-            ValidateAndTrimIcp1(ref payload);
-            BytesByChartKey[config.ChartKey] = new Il2CppStructArray<byte>(payload);
-            CustomSongMod.Log.Msg("[CustomSong] external chart payload loaded: " + (spcPath ?? samPath));
+            if (!BytesByChartKey.TryGetValue(config.ChartKey, out Il2CppStructArray<byte> payload)) {
+                payload = new Il2CppStructArray<byte>(ReadPayload(config));
+                BytesByChartKey.Add(config.ChartKey, payload);
+            }
+            return payload;
         }
+    }
+
+    internal static Dictionary<string, Il2CppStructArray<byte>> PrepareLibrary(CustomSongConfig root) {
+        Dictionary<string, Il2CppStructArray<byte>> payloads = new(StringComparer.OrdinalIgnoreCase);
+        foreach (CustomSongCollection collection in root.Collections)
+            foreach (CustomSongConfig song in collection.Songs)
+                foreach (CustomSongConfig chart in song.ExpandDifficulties())
+                    payloads.Add(chart.ChartKey, new Il2CppStructArray<byte>(ReadPayload(chart)));
+        return payloads;
+    }
+
+    internal static void CommitLibrary(Dictionary<string, Il2CppStructArray<byte>> payloads) {
+        lock (Gate) {
+            BytesByChartKey = payloads;
+        }
+    }
+
+    internal static void Reset() {
+        lock (Gate) {
+            BytesByChartKey = new(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static byte[] ReadPayload(CustomSongConfig config) {
+        if (string.IsNullOrWhiteSpace(config.ContentDirectory))
+            throw new InvalidOperationException("Custom chart has no chart-folder content directory.");
+
+        string spcPath = Path.Combine(config.ContentDirectory, config.ExternalChartStem + ".spc");
+        string samPath = Path.Combine(config.ContentDirectory, config.ExternalChartStem + ".sam");
+        if (!File.Exists(spcPath)) spcPath = null;
+        if (!File.Exists(samPath)) samPath = null;
+        byte[] payload;
+        if (spcPath is not null)
+            payload = File.ReadAllBytes(spcPath);
+        else if (samPath is not null)
+            payload = DecodeSam(File.ReadAllBytes(samPath));
+        else
+            throw new FileNotFoundException(
+                "Expected " + config.ExternalChartStem + ".spc or .sam in " + config.ContentDirectory);
+
+        ValidateAndTrimIcp1(ref payload);
+        CustomSongMod.Log.Msg("[CustomSong] external chart payload loaded: " + (spcPath ?? samPath));
+        return payload;
     }
 
     private static byte[] DecodeSam(byte[] sam)

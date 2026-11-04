@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using MelonLoader;
 
 namespace InFalsusCustomSongHook;
 
@@ -117,7 +116,7 @@ internal sealed class CustomSongConfig
         return entries.ToArray();
     }
 
-    private static string GameRoot => MelonLoader.Utils.MelonEnvironment.GameRootDirectory;
+    private static string GameRoot => CustomSongRuntime.GameRoot;
     public static string CustomChartsRoot => Path.Combine(GameRoot, "CustomCharts");
     internal static string SongIdRegistryPath => Path.Combine(GameRoot, "UserData", "InLibertas", "song-ids.json");
 
@@ -132,7 +131,10 @@ internal sealed class CustomSongConfig
         return TryLoadFolderLibrary(out config, out message);
     }
 
-    private static bool TryLoadFolderLibrary(out CustomSongConfig config, out string message)
+    internal static bool TryLoadForReload(out CustomSongConfig config, out string message) =>
+        TryLoadFolderLibrary(out config, out message, true);
+
+    private static bool TryLoadFolderLibrary(out CustomSongConfig config, out string message, bool reload = false)
     {
         config = null;
         try
@@ -180,13 +182,14 @@ internal sealed class CustomSongConfig
                 }
                 catch (Exception exception)
                 {
+                    if (reload) throw new InvalidDataException(directory + ": " + exception.Message, exception);
                     string warning = directory + ": " + exception.Message;
                     if (ReportedFolderErrors.Add(warning))
                         CustomSongMod.Log.Warning("[CustomSong] skipped chart folder " + warning);
                 }
             }
 
-            if (songs.Count == 0)
+            if (songs.Count == 0 && !reload)
             {
                 message = "no enabled chart folders with config.json in " + CustomChartsRoot;
                 return false;
@@ -195,7 +198,7 @@ internal sealed class CustomSongConfig
             config = new CustomSongConfig
             {
                 Enabled = true,
-                Collections = new[]
+                Collections = songs.Count == 0 ? Array.Empty<CustomSongCollection>() : new[]
                 {
                     new CustomSongCollection
                     {

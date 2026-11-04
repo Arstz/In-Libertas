@@ -24,7 +24,7 @@ static constexpr BYTE kPipelinePrologue[] = {
     0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x53
 };
 static_assert(sizeof(AsyncOperationHandle) == 24);
-static constexpr int kBridgeApiVersion = 1;
+static constexpr int kBridgeApiVersion = 2;
 
 static JacketBuilder g_originalBuilder = nullptr;
 static AcquireHandle g_acquireHandle = nullptr;
@@ -97,6 +97,13 @@ extern "C" __declspec(dllexport) void __fastcall RegisterJacketReplacement(
 extern "C" __declspec(dllexport) LONG __fastcall GetJacketBuilderBridgeCallCount() {
 
     return g_callCount;
+}
+
+extern "C" __declspec(dllexport) void __fastcall UnregisterJacketReplacement(void* largeMarker, void* smallMarker) {
+    AcquireSRWLockExclusive(&g_replacementsLock);
+    g_markerHandles.erase(largeMarker);
+    g_markerHandles.erase(smallMarker);
+    ReleaseSRWLockExclusive(&g_replacementsLock);
 }
 
 extern "C" __declspec(dllexport) int __fastcall GetJacketBuilderBridgeApiVersion() {

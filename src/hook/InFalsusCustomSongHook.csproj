@@ -8,50 +8,76 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <NoWarn>$(NoWarn);CS0649;CS0169</NoWarn>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <DefineConstants Condition="'$(Loader)' == 'MelonLoader'">$(DefineConstants);MELONLOADER</DefineConstants>
+    <DefineConstants Condition="'$(Loader)' == 'BepInEx'">$(DefineConstants);BEPINEX</DefineConstants>
+    <RestoreAdditionalProjectSources Condition="'$(Loader)' == 'BepInEx'">https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
   </PropertyGroup>
 
   <PropertyGroup>
     <GameDir Condition="'$(GameDir)' == ''">E:\SteamLibrary\steamapps\common\In Falsus</GameDir>
     <MlDir>$(GameDir)\MelonLoader\net6</MlDir>
+    <GameAssemblyPrefix Condition="'$(Loader)' == 'MelonLoader'">Il2Cpp</GameAssemblyPrefix>
+    <Il2CppDir Condition="'$(Il2CppDir)' == '' and '$(Loader)' == 'BepInEx'">$(GameDir)\BepInEx\interop</Il2CppDir>
     <Il2CppDir Condition="'$(Il2CppDir)' == ''">$(GameDir)\MelonLoader\Il2CppAssemblies</Il2CppDir>
     <StagedAddressablesDir Condition="'$(StagedAddressablesDir)' == ''">$(Il2CppDir)</StagedAddressablesDir>
     <BridgeRuntime Condition="'$(BridgeRuntime)' == ''">$(MlDir)\Il2CppInterop.Runtime.dll</BridgeRuntime>
     <NativeResolverBridge Condition="'$(NativeResolverBridge)' == ''">$(MSBuildProjectDirectory)\..\..\build\Mods\InFalsusNativeJacketResolverBridge.dll</NativeResolverBridge>
+    <ModOutputDir Condition="'$(Loader)' == 'BepInEx'">$(GameDir)\BepInEx\plugins\InLibertas</ModOutputDir>
+    <ModOutputDir Condition="'$(Loader)' == 'MelonLoader'">$(GameDir)\Mods</ModOutputDir>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="$(MSBuildProjectDirectory)\..\..\build\Mods\InLibertasJacketCodec.dll" CopyToOutputDirectory="PreserveNewest" Link="InLibertasJacketCodec.dll" />
     <None Include="$(MSBuildProjectDirectory)\..\..\build\Mods\libwebp*.dll" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
     <None Include="$(MSBuildProjectDirectory)\..\..\build\Mods\libsharpyuv*.dll" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
-    <Reference Include="MelonLoader"><HintPath>$(MlDir)\MelonLoader.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="0Harmony"><HintPath>$(MlDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(BridgeRuntime)</HintPath><Private>false</Private></Reference>
+    <Reference Include="MelonLoader" Condition="'$(Loader)' == 'MelonLoader'"><HintPath>$(MlDir)\MelonLoader.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony" Condition="'$(Loader)' == 'MelonLoader'"><HintPath>$(MlDir)\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime" Condition="'$(Loader)' == 'MelonLoader'"><HintPath>$(BridgeRuntime)</HintPath><Private>false</Private></Reference>
     <Reference Include="Il2Cppmscorlib"><HintPath>$(Il2CppDir)\Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppGame"><HintPath>$(Il2CppDir)\Il2CppGame.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppGame.Data"><HintPath>$(Il2CppDir)\Il2CppGame.Data.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppStr"><HintPath>$(Il2CppDir)\Il2CppStr.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppGame.Common"><HintPath>$(Il2CppDir)\Il2CppGame.Common.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppGame.UI.Common"><HintPath>$(Il2CppDir)\Il2CppGame.UI.Common.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppGame.Input"><HintPath>$(Il2CppDir)\Il2CppGame.Input.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppGame.Audio"><HintPath>$(Il2CppDir)\Il2CppGame.Audio.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="Il2CppFMODUnity"><HintPath>$(Il2CppDir)\Il2CppFMODUnity.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(GameAssemblyPrefix)Game"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)Game.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(GameAssemblyPrefix)Game.Data"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)Game.Data.dll</HintPath><Private>false</Private><Aliases>global,GameDataInterop</Aliases></Reference>
+    <Reference Include="$(GameAssemblyPrefix)Str"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)Str.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(GameAssemblyPrefix)Game.Common"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)Game.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(GameAssemblyPrefix)Game.UI.Common"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)Game.UI.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(GameAssemblyPrefix)Game.Input"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)Game.Input.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(GameAssemblyPrefix)Game.Audio"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)Game.Audio.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(GameAssemblyPrefix)FMODUnity"><HintPath>$(Il2CppDir)\$(GameAssemblyPrefix)FMODUnity.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(Il2CppDir)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(Il2CppDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.UnityWebRequestModule"><HintPath>$(Il2CppDir)\UnityEngine.UnityWebRequestModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.UnityWebRequestTextureModule"><HintPath>$(Il2CppDir)\UnityEngine.UnityWebRequestTextureModule.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="UnityEngine.UnityWebRequestWWWModule"><HintPath>$(Il2CppDir)\UnityEngine.UnityWebRequestWWWModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.AssetBundleModule"><HintPath>$(Il2CppDir)\UnityEngine.AssetBundleModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.Addressables"><HintPath>$(StagedAddressablesDir)\Unity.Addressables.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.ResourceManager"><HintPath>$(StagedAddressablesDir)\Unity.ResourceManager.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 
-  <Target Name="CopyToGameMods" AfterTargets="Build" Condition="'$(Deploy)' == 'true' and Exists('$(GameDir)\MelonLoader')">
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\Mods" />
-    <Copy SourceFiles="$(NativeResolverBridge)" DestinationFolder="$(GameDir)\Mods" Condition="Exists('$(NativeResolverBridge)')" />
+  <ItemGroup Condition="'$(Loader)' == 'BepInEx'">
+    <PackageDownload Include="BepInEx.Unity.IL2CPP" Version="[6.0.0-be.785]" />
+    <PackageReference Include="BepInEx.Core" Version="6.0.0-be.785" IncludeAssets="compile" PrivateAssets="all" />
+    <PackageReference Include="BepInEx.Unity.Common" Version="6.0.0-be.785" IncludeAssets="compile" PrivateAssets="all" />
+    <PackageReference Include="Il2CppInterop.Runtime" Version="1.5.3" IncludeAssets="compile" PrivateAssets="all" />
+    <Reference Include="BepInEx.Unity.IL2CPP">
+      <HintPath>$(NuGetPackageRoot)bepinex.unity.il2cpp\6.0.0-be.785\lib\net6.0\BepInEx.Unity.IL2CPP.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="ValidateLoader" BeforeTargets="PrepareForBuild" Condition="'$(Loader)' != 'MelonLoader' and '$(Loader)' != 'BepInEx'">
+    <Error Text="Loader must be MelonLoader or BepInEx." />
+  </Target>
+  <Target Name="ValidateGameInterop" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(Il2CppDir)\$(GameAssemblyPrefix)Game.dll')"
+           Text="$(Loader) game interop assemblies are missing from $(Il2CppDir). Launch the game once with the selected IL2CPP loader to generate them, or set Il2CppDir to its generated interop directory." />
+  </Target>
+  <Target Name="CopyToGameMods" AfterTargets="Build" Condition="'$(Deploy)' == 'true'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModOutputDir)" />
+    <Copy SourceFiles="$(NativeResolverBridge)" DestinationFolder="$(ModOutputDir)" Condition="Exists('$(NativeResolverBridge)')" />
     <ItemGroup>
       <JacketCodecRuntime Include="$(TargetDir)InLibertasJacketCodec.dll;$(TargetDir)libwebp*.dll;$(TargetDir)libsharpyuv*.dll" />
     </ItemGroup>
-    <Copy SourceFiles="@(JacketCodecRuntime)" DestinationFolder="$(GameDir)\Mods" />
-    <Message Importance="high" Text="[InFalsusCustomSongHook] copied $(TargetFileName) to Mods" />
+    <Copy SourceFiles="@(JacketCodecRuntime)" DestinationFolder="$(ModOutputDir)" />
+    <Message Importance="high" Text="[InFalsusCustomSongHook] copied $(TargetFileName) to $(ModOutputDir)" />
   </Target>
 </Project>

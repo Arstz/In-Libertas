@@ -6,10 +6,26 @@ using System.Runtime.CompilerServices;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+#if BEPINEX
+using ifapp.Game;
+#else
 using Il2Cppifapp.Game;
+#endif
+#if BEPINEX
+using ifapp.Game.Common;
+#else
 using Il2Cppifapp.Game.Common;
+#endif
+#if BEPINEX
+using ifapp.Game.Data;
+#else
 using Il2Cppifapp.Game.Data;
+#endif
+#if BEPINEX
+using ifapp.Game.Scenes;
+#else
 using Il2Cppifapp.Game.Scenes;
+#endif
 using UnityEngine;
 
 namespace InFalsusCustomSongHook;
@@ -19,7 +35,7 @@ namespace InFalsusCustomSongHook;
 /// SongSelectScene builds its active list. The external chart hook supplies
 /// the actual ICP1 payload.
 /// </summary>
-internal static class CustomSongInstaller
+internal static partial class CustomSongInstaller
 {
     // The selector indexes this array directly by difficulty position:
     // Minimal=0, Evolved=1, Ultimate=2, Forbidden=3.  Shipped songs keep
@@ -319,6 +335,7 @@ internal static class CustomSongInstaller
         PackData packData,
         DynamicStringMapping dynamicStrings,
         CustomSongConfig root) {
+        _baseline ??= new CustomLibrarySnapshot(songData, packData, dynamicStrings);
         Il2CppReferenceArray<SongInfo> oldSongs = songData.allSongInfo ??
             throw new InvalidOperationException("SongData.allSongInfo is unavailable.");
         Il2CppReferenceArray<PackInfo> oldPacks = packData.PackInfo ??
@@ -327,7 +344,7 @@ internal static class CustomSongInstaller
         bool rebuildingEarlyCache = songData._Ffb is not null;
         if (rebuildingEarlyCache)
         {
-            if (Resources.FindObjectsOfTypeAll(Il2CppType.Of<SongSelectScene>()).Length != 0)
+            if (!_reloading && Resources.FindObjectsOfTypeAll(Il2CppType.Of<SongSelectScene>()).Length != 0)
                 throw new InvalidOperationException(
                     "SongSelectScene already exists; refusing to replace its cached SongData filter.");
         }
@@ -445,9 +462,6 @@ internal static class CustomSongInstaller
         songData.allSongInfo = nextSongs;
         AppendCollections(packData, root.Collections, planned);
         AppendCollectionDisplayMetadata(dynamicStrings, root.Collections);
-        // Rebuild all serialized string-map dictionaries as the game itself
-        // does after asset deserialization. Calling only _TZA on the three
-        // touched maps leaves their lookup state stale on this build.
         dynamicStrings.OnAfterDeserialize();
 
         // OnAfterDeserialize clears resolver dictionaries. Build them only
@@ -544,17 +558,29 @@ internal static class CustomSongInstaller
         {
             if (existingIndex >= mapping.IdValues.Count)
                 throw new InvalidOperationException($"{fieldName} mapping has mismatched id/value counts.");
+#if BEPINEX
+            NativeTextMapping.StoreValue(mapping.IdValues, values, existingIndex);
+#else
             mapping.IdValues[existingIndex] = values;
+#endif
             if (mapping.IdStr is not null && existingIndex < mapping.IdStr.Count)
                 mapping.IdStr[existingIndex] = text;
         }
         else
         {
             mapping.Ids.Add(id);
+#if BEPINEX
+            NativeTextMapping.StoreValue(mapping.IdValues, values);
+#else
             mapping.IdValues.Add(values);
+#endif
             mapping.IdStr?.Add(text);
         }
+#if BEPINEX
+        NativeTextMapping.Set(mapping, id, values);
+#else
         mapping._TZA();
+#endif
     }
 
     private static DynamicStringMapping.TextMappingValues CreateTextValues(string text, LocalizedSongTitles localizations) => new() {
@@ -596,6 +622,7 @@ internal static class CustomSongInstaller
 
     internal static void ApplyCollectionAssets(PackSelectSceneAssets assets) {
         if (!_libraryInstalled || assets?.packToAssets is null) return;
+        CaptureCollectionAssets(assets);
         _collectionAssetProbeComplete = false;
         try
         {
@@ -1019,13 +1046,19 @@ internal static class CustomSongInstaller
 
         string resolved = string.IsNullOrWhiteSpace(text) ? "Custom Song" : text;
         DynamicStringMapping.TextMappingValues values = CreateTextValues(resolved, localizations);
+#if BEPINEX
+        NativeTextMapping.StoreValue(mapping.IdValues, values, index);
+#else
         mapping.IdValues[index] = values;
+#endif
         if (mapping.IdStr is not null && index < mapping.IdStr.Count)
             mapping.IdStr[index] = resolved;
 
-        // Recreate the runtime SongId -> TextMappingValues dictionary from the
-        // parallel serialized lists after changing the reserved entry.
+#if BEPINEX
+        NativeTextMapping.Set(mapping, songId, values);
+#else
         mapping._TZA();
+#endif
     }
 
     private static Il2CppReferenceArray<T> Append<T>(Il2CppReferenceArray<T> source, T value) where T : Il2CppSystem.ValueType

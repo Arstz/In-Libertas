@@ -7,6 +7,7 @@ using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
 
 namespace InFalsusCustomSongHook;
 
@@ -15,7 +16,7 @@ namespace InFalsusCustomSongHook;
 /// </summary>
 internal static class NativeJacketResolverOverride
 {
-    private const int kBridgeApiVersion = 1;
+    private const int kBridgeApiVersion = 2;
     private static IntPtr _bridgeModule;
     private static bool _installed;
     private static readonly object RegistrationGate = new();
@@ -42,6 +43,26 @@ internal static class NativeJacketResolverOverride
     private delegate void RegisterReplacementDelegate(
         IntPtr largeMarker, IntPtr smallMarker,
         ref NativeAsyncOperationHandle largeHandle, ref NativeAsyncOperationHandle smallHandle);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate void UnregisterReplacementDelegate(IntPtr largeMarker, IntPtr smallMarker);
+
+    internal static bool ReleaseMaterials(Material large, Material small) {
+        string identity = large.Pointer.ToInt64().ToString("X") + ":" + small.Pointer.ToInt64().ToString("X");
+        lock (RegistrationGate) {
+            if (!RegisteredPairs.TryGetValue(identity, out RegisteredJacketPair pair)) return true;
+            try {
+                UnregisterReplacementDelegate unregister = Marshal.GetDelegateForFunctionPointer<UnregisterReplacementDelegate>(
+                    NativeLibrary.GetExport(LoadBridge(), "UnregisterJacketReplacement"));
+                unregister(GetNativeObjectPointer(pair.LargeMarker), GetNativeObjectPointer(pair.SmallMarker));
+                pair.ReleaseHandles();
+                RegisteredPairs.Remove(identity);
+                return true;
+            } catch (Exception exception) {
+                CustomSongMod.Log.Warning("[CustomSong] jacket operation retirement failed: " + exception.Message);
+                return false;
+            }
+        }
+    }
 
     internal static void Install() {
         if (_installed) return;
@@ -127,7 +148,10 @@ internal static class NativeJacketResolverOverride
         finally
         {
             _installed = false;
-            lock (RegistrationGate) RegisteredPairs.Clear();
+            lock (RegistrationGate) {
+                foreach (RegisteredJacketPair pair in RegisteredPairs.Values) pair.ReleaseHandles();
+                RegisteredPairs.Clear();
+            }
             NativeLibrary.Free(_bridgeModule);
             _bridgeModule = IntPtr.Zero;
         }
@@ -219,5 +243,15 @@ internal static class NativeJacketResolverOverride
         // reachable from the native marker map.
         private object LargeHandleRoot { get; }
         private object SmallHandleRoot { get; }
+
+        internal void ReleaseHandles() {
+            ReleaseHandle(LargeHandleRoot);
+            ReleaseHandle(SmallHandleRoot);
+        }
+
+        private static void ReleaseHandle(object value) {
+            var handle = value as AsyncOperationHandle<Material>;
+            if (handle?.IsValid() == true) Addressables.Release(handle);
+        }
     }
 }

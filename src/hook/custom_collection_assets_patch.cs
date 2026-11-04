@@ -1,6 +1,14 @@
 using HarmonyLib;
+#if BEPINEX
+using ifapp.Game;
+#else
 using Il2Cppifapp.Game;
+#endif
+#if BEPINEX
+using ifapp.Game.Scenes;
+#else
 using Il2Cppifapp.Game.Scenes;
+#endif
 
 namespace InFalsusCustomSongHook;
 

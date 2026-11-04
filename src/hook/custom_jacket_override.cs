@@ -4,7 +4,11 @@ using System.IO;
 using System.Reflection;
 using Il2CppInterop.Runtime.InteropTypes;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+#if BEPINEX
+using ifapp.Game.Data;
+#else
 using Il2Cppifapp.Game.Data;
+#endif
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 
@@ -15,6 +19,43 @@ internal static class CustomJacketOverride
     private static readonly object Gate = new();
     private static readonly Dictionary<string, RuntimeJacketPair> JacketsByPayload = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<DeferredJacketRecord> DeferredRecords = new();
+
+    internal static ReloadSession BeginReload() => new();
+
+    internal sealed class ReloadSession : IDisposable {
+        private readonly Dictionary<string, RuntimeJacketPair> m_previous;
+        private readonly List<DeferredJacketRecord> m_deferred;
+        private bool m_committed;
+
+        internal ReloadSession() {
+            lock (Gate) {
+                m_previous = new(JacketsByPayload, StringComparer.OrdinalIgnoreCase);
+                m_deferred = new(DeferredRecords);
+                JacketsByPayload.Clear();
+                DeferredRecords.Clear();
+            }
+        }
+
+        internal void Commit() => m_committed = true;
+
+        public void Dispose() {
+            lock (Gate) {
+                if (m_committed) {
+                    foreach (RuntimeJacketPair pair in m_previous.Values) ReleasePair(pair);
+                } else {
+                    foreach (RuntimeJacketPair pair in JacketsByPayload.Values) ReleasePair(pair);
+                    JacketsByPayload.Clear();
+                    foreach (var pair in m_previous) JacketsByPayload.Add(pair.Key, pair.Value);
+                    DeferredRecords.Clear();
+                    DeferredRecords.AddRange(m_deferred);
+                }
+            }
+        }
+    }
+
+    private static void ReleasePair(RuntimeJacketPair pair) {
+        if (NativeJacketResolverOverride.ReleaseMaterials(pair.Large.Material, pair.Small.Material)) pair.Dispose();
+    }
 
     internal static bool ApplySelectorReferences(SongJacketEntry entry, CustomSongConfig config)
     {
@@ -73,9 +114,13 @@ internal static class CustomJacketOverride
                 if (!TryLoadTemplateMaterial(templateLarge, "large", out Material templateLargeMaterial) ||
                     !TryLoadTemplateMaterial(templateSmall, "small", out Material templateSmallMaterial))
                     return false;
-                pair = new RuntimeJacketPair(
-                    LoadMaterial(templateLargeMaterial, config.JacketLargePath),
-                    LoadMaterial(templateSmallMaterial, config.JacketSmallPath));
+                RuntimeJacket large = LoadMaterial(templateLargeMaterial, config.JacketLargePath);
+                try {
+                    pair = new RuntimeJacketPair(large, LoadMaterial(templateSmallMaterial, config.JacketSmallPath));
+                } catch {
+                    large.Dispose();
+                    throw;
+                }
                 JacketsByPayload.Add(identity, pair);
             }
 

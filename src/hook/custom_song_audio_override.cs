@@ -1,11 +1,24 @@
+#if BEPINEX
+using GameAudioSystem = FMOD.System;
+#else
+using GameAudioSystem = Il2CppFMOD.System;
+#endif
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using HarmonyLib;
 using Il2CppInterop.Runtime;
+#if BEPINEX
+using _J;
+#else
 using Il2Cpp_J;
+#endif
+#if BEPINEX
+using FMOD;
+#else
 using Il2CppFMOD;
+#endif
 
 namespace InFalsusCustomSongHook;
 
@@ -185,7 +198,7 @@ internal static class CustomSongAudioOverride {
     }
 
     private static OwnedSound OpenSound(_Cg controller, RouteState route, IntPtr templateSound, bool nonblocking) {
-        Il2CppFMOD.System system = GetSystem(templateSound);
+        GameAudioSystem system = GetSystem(templateSound);
         CREATESOUNDEXINFO info = default;
         MODE mode = (MODE)kExternalStreamMode;
 
@@ -339,13 +352,13 @@ internal static class CustomSongAudioOverride {
         Marshal.WriteIntPtr(IntPtr.Add(controller.Pointer, kNativeChannelOffset), channel);
     }
 
-    private static Il2CppFMOD.System GetSystem(IntPtr sound) {
+    private static GameAudioSystem GetSystem(IntPtr sound) {
         m_getSystemObject ??= ResolveExport<SoundGetSystemObjectDelegate>("FMOD5_Sound_GetSystemObject");
         int status = m_getSystemObject(sound, out IntPtr handle);
         if (status != 0 || handle == IntPtr.Zero)
             throw new InvalidOperationException($"FMOD Sound::getSystemObject returned {status}");
 
-        return new Il2CppFMOD.System { handle = handle };
+        return new GameAudioSystem { handle = handle };
     }
 
     private static T ResolveExport<T>(string exportName) where T : Delegate {
