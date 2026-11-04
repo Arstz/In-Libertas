@@ -725,6 +725,7 @@ void MainWindow::buildInterface() {
         }
         m_statusLabel->setText(QStringLiteral("Audio fallback clock: %1").arg(message));
     });
+    connect(m_playback, &PlaybackController::audioOutputRecovered, this, &MainWindow::updateStatus);
     connect(m_flatView, &FlatView::waveformError, this, [this](const QString& message) {
         m_statusLabel->setText(QStringLiteral("Waveform decoding failed: %1").arg(message));
     });

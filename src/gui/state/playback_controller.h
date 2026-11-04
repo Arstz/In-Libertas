@@ -10,6 +10,7 @@
 #include <QtCore/QUrl>
 #include <QtMultimedia/QAudioDecoder>
 #include <QtMultimedia/QAudioSink>
+#include <QtMultimedia/QMediaDevices>
 
 #include <chrono>
 #include <memory>
@@ -58,6 +59,7 @@ public:
 
 signals:
     void audioError(const QString& message);
+    void audioOutputRecovered();
     void audioSourceChanged();
     void audioDecoded(const QByteArray& samples, const QAudioFormat& format);
     void mediaDurationChanged(qint64 durationMilliseconds);
@@ -71,12 +73,17 @@ private slots:
     void finishDecoding();
 
 private:
+    friend struct PlaybackControllerTestAccess;
+
     [[nodiscard]] qint64 clockPosition() const;
     void resetAudioSource();
     void resetAudioPlayback();
     void createAudioDecoder();
     void startAudioPlayback();
     void handleAudioError(const QString& message);
+    void handleAudioOutputError(const QString& message);
+    void useFallbackClock(const QString& message);
+    void recoverAudioOutput();
     void changePlaybackRate(int direction);
     void restartClock(qint64 positionMilliseconds);
     void stopClock();
@@ -94,6 +101,8 @@ private:
     QVector<HitsoundEvent> m_hitsoundEvents;
     QVector<infalsus::TimingPoint> m_timingPoints;
     QTimer m_clockUpdateTimer;
+    QTimer m_audioRecoveryTimer;
+    QMediaDevices m_mediaDevices;
     QByteArray m_audioData;
     std::shared_ptr<AudioPlaybackData> m_decodedAudio;
     qint64 m_chartDurationMilliseconds = 0;

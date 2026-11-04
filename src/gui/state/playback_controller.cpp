@@ -11,6 +11,7 @@
 namespace {
 
 constexpr int kClockUpdateIntervalMilliseconds = 4;
+constexpr int kAudioRecoveryIntervalMilliseconds = 1000;
 constexpr int kOutputBufferMicroseconds = 30000;
 constexpr int kDefaultSampleRate = 48000;
 constexpr int kDefaultChannelCount = 2;
@@ -29,8 +30,11 @@ PlaybackController::PlaybackController(QObject* parent)
     m_audioFormat.setSampleFormat(QAudioFormat::Float);
     m_clockUpdateTimer.setInterval(kClockUpdateIntervalMilliseconds);
     m_clockUpdateTimer.setTimerType(Qt::PreciseTimer);
+    m_audioRecoveryTimer.setInterval(kAudioRecoveryIntervalMilliseconds);
 
     connect(&m_clockUpdateTimer, &QTimer::timeout, this, &PlaybackController::updateClock);
+    connect(&m_audioRecoveryTimer, &QTimer::timeout, this, &PlaybackController::recoverAudioOutput);
+    connect(&m_mediaDevices, &QMediaDevices::audioOutputsChanged, this, &PlaybackController::recoverAudioOutput);
 }
 
 PlaybackController::~PlaybackController() {
@@ -250,6 +254,7 @@ void PlaybackController::togglePlayback() {
         const qint64 currentPosition = clockPosition();
 
         m_playbackActive = false;
+        m_audioRecoveryTimer.stop();
         stopClock();
         publishPosition(currentPosition);
         emit playbackChanged(false);
@@ -261,13 +266,16 @@ void PlaybackController::togglePlayback() {
     }
     m_playbackActive = true;
     stopHitsoundPreview();
-    m_usingFallbackClock = m_audioFailed;
-    if (m_usingFallbackClock) {
+    if (m_audioFailed) {
+        m_usingFallbackClock = true;
         restartClock(m_positionMilliseconds);
     } else if (m_audioSink) {
         m_audioSink->resume();
         m_clockUpdateTimer.start();
     } else {
+        if (m_usingFallbackClock) {
+            restartClock(m_positionMilliseconds);
+        }
         startAudioPlayback();
     }
     emit playbackChanged(true);
@@ -291,7 +299,7 @@ void PlaybackController::updateClock() {
         return;
     }
     if (m_audioSink && m_audioSink->error() != QAudio::NoError && m_audioSink->error() != QAudio::UnderrunError) {
-        handleAudioError(QStringLiteral("Audio output failed (%1).").arg(static_cast<int>(m_audioSink->error())));
+        handleAudioOutputError(QStringLiteral("Audio output failed (%1).").arg(static_cast<int>(m_audioSink->error())));
         return;
     }
 
@@ -300,6 +308,7 @@ void PlaybackController::updateClock() {
 
     if ((!m_audioSink && updatedPosition >= m_chartDurationMilliseconds) || audioFinished) {
         m_playbackActive = false;
+        m_audioRecoveryTimer.stop();
         resetAudioPlayback();
         stopClock();
         publishPosition(m_chartDurationMilliseconds);
@@ -374,6 +383,7 @@ void PlaybackController::resetAudioSource() {
     const bool wasPlaying = m_playbackActive;
 
     m_playbackActive = false;
+    m_audioRecoveryTimer.stop();
     stopClock();
     m_audioDecoder.reset();
     resetAudioPlayback();
@@ -411,6 +421,9 @@ void PlaybackController::createAudioDecoder() {
 }
 
 void PlaybackController::startAudioPlayback() {
+    if (m_playbackActive && m_usingFallbackClock && !m_audioFailed) {
+        m_audioRecoveryTimer.start();
+    }
     if (m_audioSink || (m_hasAudioSource && (!m_decodedAudio || m_decodedAudio->samples.isEmpty())) || m_audioFailed
         || m_chartDurationMilliseconds <= m_positionMilliseconds) {
         return;
@@ -429,31 +442,71 @@ void PlaybackController::startAudioPlayback() {
     if (m_audioStream->bytesAvailable() == 0) {
         return;
     }
-    m_audioSink = std::make_unique<QAudioSink>(m_audioFormat);
+    const QAudioDevice output = QMediaDevices::defaultAudioOutput();
+    if (output.isNull()) {
+        handleAudioOutputError(QStringLiteral("No audio output device is available."));
+        return;
+    }
+    m_audioSink = std::make_unique<QAudioSink>(output, m_audioFormat);
     m_audioSink->setBufferSize(m_audioFormat.bytesForDuration(kOutputBufferMicroseconds));
     m_audioSink->start(m_audioStream.get());
     if (m_audioSink->error() != QAudio::NoError) {
-        handleAudioError(QStringLiteral("Could not start audio output (%1).").arg(static_cast<int>(m_audioSink->error())));
+        handleAudioOutputError(QStringLiteral("Could not start audio output (%1).").arg(static_cast<int>(m_audioSink->error())));
         return;
     }
+    const bool recovered = m_usingFallbackClock;
+    m_usingFallbackClock = false;
+    m_audioRecoveryTimer.stop();
     m_clockUpdateTimer.start();
+    if (recovered) {
+        emit audioOutputRecovered();
+    }
 }
 
 void PlaybackController::handleAudioError(const QString& message) {
-    const qint64 currentPosition = m_playbackActive ? clockPosition() : m_positionMilliseconds;
-
     if (m_audioFailed) {
         return;
     }
     m_audioFailed = true;
+    m_audioRecoveryTimer.stop();
+    useFallbackClock(message);
+}
+
+void PlaybackController::handleAudioOutputError(const QString& message) {
+    const bool alreadyUsingFallback = m_usingFallbackClock;
+    useFallbackClock(alreadyUsingFallback ? QString() : message);
+    if (m_playbackActive && !m_audioFailed) {
+        m_audioRecoveryTimer.start();
+    }
+}
+
+void PlaybackController::useFallbackClock(const QString& message) {
+    const qint64 currentPosition = m_playbackActive
+        ? std::max(m_positionMilliseconds, clockPosition()) : m_positionMilliseconds;
+
     resetAudioPlayback();
+    m_usingFallbackClock = true;
     if (m_playbackActive) {
-        m_usingFallbackClock = true;
         publishPosition(currentPosition);
         restartClock(m_positionMilliseconds);
     }
     if (!message.isEmpty()) {
         emit audioError(message);
+    }
+}
+
+void PlaybackController::recoverAudioOutput() {
+    const qint64 currentPosition = m_playbackActive
+        ? std::max(m_positionMilliseconds, clockPosition()) : m_positionMilliseconds;
+
+    stopHitsoundPreview();
+    resetAudioPlayback();
+    publishPosition(currentPosition);
+    if (m_playbackActive) {
+        if (m_usingFallbackClock) {
+            restartClock(m_positionMilliseconds);
+        }
+        startAudioPlayback();
     }
 }
 
