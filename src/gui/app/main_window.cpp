@@ -455,11 +455,12 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             }
         }
         if (watched == centralWidget() && event->type() == QEvent::Resize) {
-            QTimer::singleShot(0, this, &MainWindow::updateToolsToolbarGeometry);
+            updateToolsToolbarGeometry();
         }
     }
-    if ((watched == m_flatView || watched == m_toolsToolbar) && event->type() == QEvent::Resize) {
-        QTimer::singleShot(0, this, &MainWindow::updateVolumeSliderPlacement);
+    if (((watched == m_flatView || watched == m_toolsToolbar) && event->type() == QEvent::Resize)
+        || (watched == m_flatView && event->type() == QEvent::Move)) {
+        updateVolumeSliderPlacement();
     }
 
     if (event->type() == QEvent::ApplicationDeactivate || event->type() == QEvent::WindowDeactivate) {
