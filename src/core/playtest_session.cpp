@@ -2,7 +2,6 @@
 #include "core/chart_document.h"
 
 #include <cmath>
-#include <limits>
 #include <utility>
 
 namespace infalsus {
@@ -10,6 +9,8 @@ namespace {
 
 constexpr std::uint64_t kEarlyMask = 0x1FDF9F1E3C181ULL;
 constexpr std::uint64_t kLateMask = 0xFCF8F060C080ULL;
+constexpr double kSkyContactTolerance = 0.02;
+constexpr double kCursorSampleInterval = 8.0;
 
 bool allowed(std::uint64_t mask, PlaytestGrade grade, PlaytestGrade previous) {
     return (mask & (1ULL << (7 * static_cast<int>(grade) + static_cast<int>(previous)))) != 0;
@@ -233,12 +234,16 @@ void PlaytestSession::move(const double normalizedDelta, const double chartTime,
     advance(chartTime, monotonicTime);
     const double timestamp = eventTime < 0.0 ? monotonicTime : eventTime;
     m_cursor += normalizedDelta;
-    if (normalizedDelta > 0.0) {
+    recordMotion(normalizedDelta, timestamp);
+}
+
+void PlaytestSession::recordMotion(const double delta, const double monotonicTime) {
+    if (delta > 0.0) {
         m_leftMotion.clear();
-        m_rightMotion.push_back({timestamp, normalizedDelta});
-    } else if (normalizedDelta < 0.0) {
+        m_rightMotion.push_back({monotonicTime, delta});
+    } else if (delta < 0.0) {
         m_rightMotion.clear();
-        m_leftMotion.push_back({timestamp, -normalizedDelta});
+        m_leftMotion.push_back({monotonicTime, -delta});
     }
 }
 
@@ -265,6 +270,11 @@ void PlaytestSession::setAutoplay(const bool enabled) {
     m_contactSkyGroups.clear();
     m_autoplayStartTime = m_time;
     m_autoplay = enabled;
+    if (enabled) {
+        planAutoplayCursor();
+    } else {
+        m_autoplayCursor.clear();
+    }
 }
 
 void PlaytestSession::expireMotion(const double time) {
@@ -377,8 +387,285 @@ void PlaytestSession::evaluate(const double time, const double monotonicTime) {
     }
 }
 
+void PlaytestSession::planAutoplayCursor() {
+    struct Sample {
+        double time;
+        double left = 0.0;
+        double right = 1.0;
+        double position = 0.5;
+        double midpoint = 0.5;
+        bool constrained = false;
+        bool fixed = false;
+    };
+    struct Stroke {
+        double time;
+        double center;
+        double direction;
+        double amplitude;
+        double halfDuration = 40.0;
+        double left = 0.0;
+        double right = 1.0;
+        int layers = 1;
+        bool aligned = true;
+        double headBias = 0.8;
+    };
+    QVector<Stroke> strokes;
+    QVector<double> times{m_time};
+    double end = m_time;
+    for (const auto& state : m_notes) {
+        const auto& note = state.note;
+        if (note.kind == NoteKind::Sky && note.endMilliseconds >= m_time) {
+            times.append(std::max<double>(m_time, note.startMilliseconds));
+            times.append(note.endMilliseconds);
+            end = std::max<double>(end, note.endMilliseconds);
+        } else if (note.kind == NoteKind::Flick && note.startMilliseconds >= m_time) {
+            const bool right = (note.auxiliary & 0x400U) != 0 || (note.auxiliary & 0x1000U) == 0;
+            const double direction = right ? 1.0 : -1.0;
+            const double leftEdge = note.startX - note.startWidth * 0.5;
+            const double rightEdge = note.startX + note.startWidth * 0.5;
+            if (!strokes.isEmpty() && strokes.last().time == note.startMilliseconds) {
+                auto& stroke = strokes.last();
+                stroke.left = std::min(stroke.left, leftEdge);
+                stroke.right = std::max(stroke.right, rightEdge);
+                stroke.aligned = stroke.aligned && stroke.direction == direction;
+                ++stroke.layers;
+                continue;
+            }
+            strokes.append({static_cast<double>(note.startMilliseconds),
+                std::clamp(note.startX, 0.0, 1.0), direction,
+                std::max(0.002, note.startWidth * 0.5), 40.0, leftEdge, rightEdge});
+        }
+    }
+    m_autoplayCursor.clear();
+    if (end == m_time && strokes.isEmpty()) {
+        m_autoplayCursor.append({m_time, cursor()});
+        return;
+    }
+    for (qsizetype index = 0; index < strokes.size(); ++index) {
+        auto& stroke = strokes[index];
+        if (!stroke.aligned) {
+            stroke.left = stroke.center - stroke.amplitude;
+            stroke.right = stroke.center + stroke.amplitude;
+        }
+        stroke.left = std::clamp(stroke.left, 0.0, 1.0);
+        stroke.right = std::clamp(stroke.right, stroke.left, 1.0);
+        stroke.center = (stroke.left + stroke.right) * 0.5;
+        stroke.amplitude = (stroke.right - stroke.left) * 0.5;
+        if (stroke.layers > 1 && stroke.aligned) {
+            stroke.headBias = 0.0;
+        }
+        for (const qsizetype neighbor : {index - 1, index + 1}) {
+            if (neighbor >= 0 && neighbor < strokes.size()) {
+                stroke.halfDuration = std::min(stroke.halfDuration,
+                    std::abs(strokes[neighbor].time - stroke.time) * 0.3);
+            }
+        }
+        times.append(std::max(m_time, stroke.time - stroke.halfDuration * (1.0 + stroke.headBias)));
+        times.append(stroke.time);
+        times.append(stroke.time + stroke.halfDuration * (1.0 - stroke.headBias));
+        end = std::max(end, stroke.time + stroke.halfDuration * (1.0 - stroke.headBias) + 120.0);
+    }
+    end = std::max(end, m_endTime);
+    times.append(end);
+    for (double time = m_time + kCursorSampleInterval; time < end; time += kCursorSampleInterval) {
+        times.append(time);
+    }
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end()), times.end());
+    QVector<Sample> samples;
+    samples.reserve(times.size());
+    QVector<int> activeFields;
+    const auto& skyIndexes = m_sides[static_cast<int>(FloorSide::Sky)];
+    qsizetype nextSky = 0;
+    int primary = -1;
+    double previous = cursor();
+    for (const double time : times) {
+        while (nextSky < skyIndexes.size() && m_notes[skyIndexes[nextSky]].note.startMilliseconds <= time) {
+            const int index = skyIndexes[nextSky++];
+            const auto& note = m_notes[index].note;
+            if (note.kind == NoteKind::Sky && note.endMilliseconds >= time) {
+                activeFields.append(index);
+            }
+        }
+        activeFields.removeIf([&](const int index) { return m_notes[index].note.endMilliseconds < time; });
+        Sample sample{time};
+        if (!activeFields.isEmpty()) {
+            if (!activeFields.contains(primary)) {
+                primary = *std::min_element(activeFields.cbegin(), activeFields.cend(), [&](const int a, const int b) {
+                    const auto [al, ar] = skyBounds(m_notes[a].note, time);
+                    const auto [bl, br] = skyBounds(m_notes[b].note, time);
+                    return std::abs(std::clamp(previous, al, std::max(al, ar)) - previous)
+                        < std::abs(std::clamp(previous, bl, std::max(bl, br)) - previous);
+                });
+            }
+            const auto [left, right] = skyBounds(m_notes[primary].note, time);
+            sample.left = std::clamp(left - kSkyContactTolerance, 0.0, 1.0);
+            sample.right = std::clamp(right + kSkyContactTolerance, sample.left, 1.0);
+            double sharedLeft = 0.0;
+            double sharedRight = 1.0;
+            for (const int index : activeFields) {
+                const auto [otherLeft, otherRight] = skyBounds(m_notes[index].note, time);
+                sharedLeft = std::max(sharedLeft, otherLeft);
+                sharedRight = std::min(sharedRight, otherRight);
+                const double contactLeft = std::max(sample.left, otherLeft - kSkyContactTolerance);
+                const double contactRight = std::min(sample.right, otherRight + kSkyContactTolerance);
+                if (contactLeft <= contactRight) {
+                    sample.left = contactLeft;
+                    sample.right = contactRight;
+                }
+            }
+            if (sharedLeft <= sharedRight) {
+                sample.left = sharedLeft;
+                sample.right = sharedRight;
+            } else if (sharedLeft - kSkyContactTolerance <= sharedRight + kSkyContactTolerance) {
+                sample.left = std::clamp(sharedLeft - kSkyContactTolerance, 0.0, 1.0);
+                sample.right = std::clamp(sharedRight + kSkyContactTolerance, sample.left, 1.0);
+            }
+            sample.position = (sample.left + sample.right) * 0.5;
+            sample.midpoint = sample.position;
+            sample.constrained = true;
+            previous = sample.position;
+        }
+        samples.append(sample);
+    }
+    for (const auto& stroke : strokes) {
+        auto first = std::lower_bound(samples.begin(), samples.end(), stroke.time - stroke.halfDuration * (1.0 + stroke.headBias),
+            [](const Sample& sample, const double time) { return sample.time < time; });
+        auto last = std::upper_bound(first, samples.end(), stroke.time + stroke.halfDuration * (1.0 - stroke.headBias),
+            [](const double time, const Sample& sample) { return time < sample.time; });
+        if (first == last) {
+            continue;
+        }
+        const auto& end = *std::prev(last);
+        const double tail = std::clamp(stroke.direction > 0.0 ? stroke.left : stroke.right, first->left, first->right);
+        const double head = std::clamp(stroke.direction > 0.0 ? stroke.right : stroke.left, end.left, end.right);
+        for (auto sample = first; sample != last; ++sample) {
+            const double progress = ((sample->time - stroke.time) / stroke.halfDuration + stroke.headBias + 1.0) * 0.5;
+            sample->position = std::clamp(std::lerp(tail, head, progress), sample->left, sample->right);
+            sample->left = sample->right = sample->position;
+            sample->constrained = sample->fixed = true;
+        }
+    }
+    samples.first().position = samples.first().left = samples.first().right = cursor();
+    samples.first().constrained = samples.first().fixed = true;
+    QVector<std::pair<double, double>> transitions;
+    for (qsizetype index = 1; index < samples.size(); ++index) {
+        const auto& a = samples[index - 1];
+        const auto& b = samples[index];
+        const double distance = std::max(a.left - b.right, b.left - a.right);
+        if (a.constrained && b.constrained && !(a.fixed && b.fixed) && distance > kSkyContactTolerance) {
+            transitions.append({(a.time + b.time) * 0.5, std::clamp(distance / 0.003, 40.0, 120.0)});
+        }
+    }
+    for (const auto& [time, radius] : transitions) {
+        auto first = std::lower_bound(samples.begin(), samples.end(), time - radius,
+            [](const Sample& sample, const double value) { return sample.time < value; });
+        for (auto sample = first; sample != samples.end() && sample->time < time + radius; ++sample) {
+            if (!sample->fixed) {
+                sample->left = 0.0;
+                sample->right = 1.0;
+            }
+        }
+    }
+    const auto limitReach = [](Sample& point, const Sample& neighbor) {
+        const double reach = std::abs(point.time - neighbor.time) * 0.0025;
+        const double left = std::max(point.left, neighbor.left - reach);
+        const double right = std::min(point.right, neighbor.right + reach);
+        if (!point.fixed && left <= right) {
+            point.left = left;
+            point.right = right;
+        }
+    };
+    for (int pass = 0; pass < 2; ++pass) {
+        for (qsizetype index = 1; index < samples.size(); ++index) {
+            limitReach(samples[index], samples[index - 1]);
+        }
+        for (qsizetype index = samples.size() - 2; index >= 0; --index) {
+            limitReach(samples[index], samples[index + 1]);
+        }
+    }
+    qsizetype anchor = 0;
+    for (qsizetype index = 1; index < samples.size(); ++index) {
+        if (!samples[index].constrained && index + 1 < samples.size()) {
+            continue;
+        }
+        if (!samples[index].constrained) {
+            samples[index].position = samples[anchor].position;
+        }
+        for (qsizetype gap = anchor + 1; gap < index; ++gap) {
+            const double progress = (samples[gap].time - samples[anchor].time)
+                / (samples[index].time - samples[anchor].time);
+            samples[gap].position = std::lerp(samples[anchor].position, samples[index].position, progress);
+        }
+        anchor = index;
+    }
+    const auto smooth = [](Sample& point, const Sample& neighbor) {
+        const double dt = std::abs(point.time - neighbor.time);
+        const double weight = -std::expm1(-dt / 80.0);
+        double position = std::lerp(neighbor.position, point.position, weight);
+        if (point.constrained && !point.fixed) {
+            const double bias = -std::expm1(-dt / 320.0);
+            position = std::lerp(position, point.midpoint, bias);
+        }
+        point.position = std::clamp(position, point.left, point.right);
+    };
+    for (int pass = 0; pass < 4; ++pass) {
+        for (qsizetype index = 1; index < samples.size(); ++index) {
+            smooth(samples[index], samples[index - 1]);
+        }
+        for (qsizetype index = samples.size() - 2; index >= 0; --index) {
+            smooth(samples[index], samples[index + 1]);
+        }
+    }
+    m_autoplayCursor.reserve(samples.size());
+    for (qsizetype index = 0; index < samples.size(); ++index) {
+        const auto& point = samples[index];
+        double velocity = 0.0;
+        if (index > 0 && index + 1 < samples.size()) {
+            const auto& before = samples[index - 1];
+            const auto& after = samples[index + 1];
+            const double dtBefore = point.time - before.time;
+            const double dtAfter = after.time - point.time;
+            const double incoming = (point.position - before.position) / dtBefore;
+            const double outgoing = (after.position - point.position) / dtAfter;
+            if (incoming * outgoing > 0.0) {
+                const double w1 = 2.0 * dtAfter + dtBefore;
+                const double w2 = dtAfter + 2.0 * dtBefore;
+                velocity = (w1 + w2) / (w1 / incoming + w2 / outgoing);
+            }
+        }
+        m_autoplayCursor.append({point.time, point.position, velocity});
+    }
+}
+
+double PlaytestSession::autoplayCursor(const double time) const {
+    if (m_autoplayCursor.isEmpty()) {
+        return cursor();
+    }
+    const auto next = std::upper_bound(m_autoplayCursor.cbegin(), m_autoplayCursor.cend(), time,
+        [](const double value, const CursorPoint& point) { return value < point.time; });
+    if (next == m_autoplayCursor.cbegin()) {
+        return next->position;
+    }
+    if (next == m_autoplayCursor.cend()) {
+        return m_autoplayCursor.last().position;
+    }
+    const auto& from = *std::prev(next);
+    const auto& to = *next;
+    const double duration = to.time - from.time;
+    const double p = (time - from.time) / duration;
+    const double p2 = p * p;
+    const double p3 = p2 * p;
+    return std::clamp((2.0 * p3 - 3.0 * p2 + 1.0) * from.position
+        + (p3 - 2.0 * p2 + p) * duration * from.velocity
+        + (-2.0 * p3 + 3.0 * p2) * to.position
+        + (p3 - p2) * duration * to.velocity, 0.0, 1.0);
+}
+
 void PlaytestSession::evaluateAutoplay(const double time, const double monotonicTime) {
-    double cursorDistance = std::numeric_limits<double>::max();
+    const double position = autoplayCursor(time);
+    recordMotion(position - cursor(), monotonicTime);
+    m_cursor = position;
     for (int side = 0; side < 4; ++side) {
         const auto& indexes = m_sides[side];
         auto& first = m_firstPending[side];
@@ -394,7 +681,9 @@ void PlaytestSession::evaluateAutoplay(const double time, const double monotonic
                 continue;
             }
             const bool sustained = state.note.kind == NoteKind::Hold || state.note.kind == NoteKind::Sky;
-            state.active = sustained && time < state.note.endMilliseconds;
+            state.active = sustained && time < state.note.endMilliseconds
+                && (state.note.kind != NoteKind::Sky
+                    || skyContact(state.note, time, time - state.note.startMilliseconds <= 1.0));
             state.recontact = false;
             if (state.active) {
                 state.successfulUntil = std::max(state.successfulUntil, time);
@@ -402,14 +691,6 @@ void PlaytestSession::evaluateAutoplay(const double time, const double monotonic
                     for (int lane = state.firstLane; lane <= state.lastLane; ++lane) {
                         m_autoplayLaneEnds[lane] = std::max(m_autoplayLaneEnds[lane],
                             static_cast<double>(state.note.endMilliseconds));
-                    }
-                } else {
-                    const auto [left, right] = skyBounds(state.note, time);
-                    const double center = std::clamp((left + right) * 0.5, 0.0, 1.0);
-                    const double distance = std::abs(center - cursor());
-                    if (distance < cursorDistance) {
-                        cursorDistance = distance;
-                        m_cursor = center;
                     }
                 }
             }
@@ -420,14 +701,7 @@ void PlaytestSession::evaluateAutoplay(const double time, const double monotonic
                 }
                 if (!tick.finalized) {
                     if (tick.time >= m_autoplayStartTime) {
-                        if (state.note.kind == NoteKind::Flick) {
-                            m_cursor = std::clamp(state.note.startX, 0.0, 1.0);
-                            const bool right = (state.note.auxiliary & 0x400U) != 0
-                                || (state.note.auxiliary & 0x1000U) == 0;
-                            auto& motion = right ? m_rightMotion : m_leftMotion;
-                            motion.push_back({monotonicTime, std::max(0.05, state.note.startWidth)});
-                            cursorDistance = -1.0;
-                        } else if (state.note.kind == NoteKind::Tap) {
+                        if (state.note.kind == NoteKind::Tap) {
                             for (int lane = state.firstLane; lane <= state.lastLane; ++lane) {
                                 m_autoplayLaneEnds[lane] = std::max(m_autoplayLaneEnds[lane], tick.time + 50.0);
                             }
@@ -544,8 +818,8 @@ void PlaytestSession::evaluateFlick(PlaytestNoteState& state, const double time)
 
 bool PlaytestSession::skyContact(const ChartNote& note, const double time, const bool swept) const {
     const auto [left, right] = skyBounds(note, time);
-    return (swept ? sweepRight() : cursor()) >= left - 0.02
-        && (swept ? sweepLeft() : cursor()) <= right + 0.02;
+    return (swept ? sweepRight() : cursor()) >= left - kSkyContactTolerance
+        && (swept ? sweepLeft() : cursor()) <= right + kSkyContactTolerance;
 }
 
 void PlaytestSession::updateSky(SkyGroup& group, const double time, const bool contact) {
@@ -642,7 +916,9 @@ void PlaytestSession::commit(PlaytestNoteState& state, PlaytestTick& tick, const
 }
 
 bool PlaytestSession::complete() const {
-    return m_time >= m_endTime && m_result.processed == m_result.total;
+    const double end = m_autoplay && !m_autoplayCursor.isEmpty()
+        ? std::max(m_endTime, m_autoplayCursor.last().time) : m_endTime;
+    return m_time >= end && m_result.processed == m_result.total;
 }
 
 QVector<PlaytestJudgement> PlaytestSession::takeJudgements() {

@@ -88,6 +88,7 @@ private:
     };
     struct Motion { double time; double distance; };
     struct ScrollPoint { qint64 time; double coordinate; double speed; };
+    struct CursorPoint { double time; double position; double velocity = 0.0; };
     struct SkyGroup {
         double credit = 300.0;
         double lockout = 0.0;
@@ -98,6 +99,9 @@ private:
 
     void evaluate(double time, double monotonicTime);
     void evaluateAutoplay(double time, double monotonicTime);
+    void planAutoplayCursor();
+    [[nodiscard]] double autoplayCursor(double time) const;
+    void recordMotion(double delta, double monotonicTime);
     void advanceTo(double chartTime, double monotonicTime, bool evaluateAtEnd);
     void evaluateFloor(PlaytestNoteState& state, double time, double monotonicTime);
     void evaluateFlick(PlaytestNoteState& state, double time);
@@ -122,6 +126,7 @@ private:
     std::array<double, 6> m_autoplayLaneEnds{};
     std::deque<Motion> m_leftMotion;
     std::deque<Motion> m_rightMotion;
+    QVector<CursorPoint> m_autoplayCursor;
     QVector<PlaytestJudgement> m_judgements;
     PlaytestResult m_result;
     double m_cursor = 0.5;
