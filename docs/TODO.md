@@ -1,1 +1,0 @@
-- Property widget should be reactive to changes in flat view

@@ -2,6 +2,7 @@
 #include "gui/app/game_palette.h"
 
 #include <QtCore/QVariant>
+#include <QtCore/QSignalBlocker>
 #include <QtGui/QValidator>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QKeyEvent>
@@ -73,6 +74,9 @@ template <typename Value>
 }
 
 void setMixedStyle(QWidget* editor, const bool mixed) {
+    if (editor->property("mixed").isValid() && editor->property("mixed").toBool() == mixed) {
+        return;
+    }
     editor->setProperty("mixed", mixed);
     editor->setStyleSheet(mixed
         ? QStringLiteral("QAbstractSpinBox, QLineEdit, QComboBox { color: %1; }")
@@ -89,11 +93,39 @@ public:
         QObject::connect(this->lineEdit(), &QLineEdit::textEdited, this, [this] { startEditing(); });
     }
 
-    void setMixedRange(const Number minimum, const Number maximum) {
-        m_range = SpinBox::textFromValue(minimum) + QStringLiteral(" \u2013 ") + SpinBox::textFromValue(maximum);
-        m_mixed = true;
-        this->setValue(this->value());
-        this->updateGeometry();
+    void setValues(const QVector<Number>& values) {
+        if (this->hasFocus() && this->property("edited").toBool()) {
+            return;
+        }
+        const double average = std::accumulate(values.cbegin(), values.cend(), 0.0) / values.size();
+        const Number value = [&] {
+            if constexpr (std::is_integral_v<Number>) {
+                return static_cast<Number>(std::lround(average));
+            } else {
+                return average;
+            }
+        }();
+        const bool mixed = hasMixedValues(values);
+        QString range;
+        if (mixed) {
+            const auto [first, last] = std::minmax_element(values.cbegin(), values.cend());
+            range = SpinBox::textFromValue(*first) + QStringLiteral(" \u2013 ") + SpinBox::textFromValue(*last);
+        }
+        if (m_initialized && m_mixed == mixed && m_range == range
+            && SpinBox::textFromValue(this->value()) == SpinBox::textFromValue(value)) {
+            return;
+        }
+        const QSignalBlocker blocker(this);
+        const bool rangeChanged = m_mixed != mixed || m_range != range;
+        m_initialized = true;
+        m_mixed = mixed;
+        m_range = range;
+        this->setValue(value);
+        this->setProperty("edited", false);
+        setMixedStyle(this, mixed);
+        if (rangeChanged) {
+            this->updateGeometry();
+        }
     }
 
 protected:
@@ -148,6 +180,7 @@ private:
     }
 
     QString m_range;
+    bool m_initialized = false;
     bool m_mixed = false;
 };
 
@@ -166,8 +199,12 @@ template <typename SpinBox, typename Value, typename Apply>
 void addNumberField(QFormLayout* layout, const QString& label, const QVector<Value>& values,
     const Value minimum, const Value maximum, const Value step, const QString& suffix, Apply apply,
     QWidget* button = nullptr) {
+    auto* existing = layout->parentWidget()->findChild<SpinBox*>(label);
+    if (existing != nullptr) {
+        static_cast<RangeSpinBox<SpinBox>*>(existing)->setValues(values);
+        return;
+    }
     auto* editor = new RangeSpinBox<SpinBox>(layout->parentWidget());
-    const double average = std::accumulate(values.cbegin(), values.cend(), 0.0) / values.size();
 
     editor->setObjectName(label);
     editor->setRange(minimum, maximum);
@@ -177,16 +214,8 @@ void addNumberField(QFormLayout* layout, const QString& label, const QVector<Val
     editor->setAlignment(Qt::AlignLeft);
     if constexpr (std::is_same_v<SpinBox, QDoubleSpinBox>) {
         editor->setDecimals(kCoordinateDecimals);
-        editor->setValue(average);
-    } else {
-        editor->setValue(static_cast<int>(std::lround(average)));
     }
-    const bool mixed = hasMixedValues(values);
-    setMixedStyle(editor, mixed);
-    if (mixed) {
-        const auto [first, last] = std::minmax_element(values.cbegin(), values.cend());
-        editor->setMixedRange(*first, *last);
-    }
+    editor->setValues(values);
     if (button) {
         auto* row = new QWidget(layout->parentWidget());
         auto* rowLayout = new QHBoxLayout(row);
@@ -301,8 +330,20 @@ PropertiesPanel::PropertiesPanel(QWidget* parent)
 }
 
 void PropertiesPanel::setSelection(const EditorState& state) {
+    const bool reuseRows = !m_hitObjects.isEmpty() && m_hitObjectIndexes == state.selectedHitObjects()
+        && std::equal(m_hitObjects.cbegin(), m_hitObjects.cend(), m_hitObjectIndexes.cbegin(),
+            [&state](const ChartNote& previous, const int index) {
+                const ChartNote& current = state.chart().notes.at(index);
+                return previous.kind == current.kind && previous.side == current.side;
+            });
+    const bool updatesWereEnabled = updatesEnabled();
     m_populating = true;
-    clearRows();
+    if (reuseRows) {
+        m_hitObjects.clear();
+    } else {
+        setUpdatesEnabled(false);
+        clearRows();
+    }
     m_hitObjectIndexes = state.selectedHitObjects();
     for (const int index : m_hitObjectIndexes) {
         m_hitObjects.append(state.chart().notes.at(index));
@@ -327,6 +368,9 @@ void PropertiesPanel::setSelection(const EditorState& state) {
         addReadOnlyRow(QStringLiteral("Selection"), QStringLiteral("No selection"));
     }
     m_populating = false;
+    if (!reuseRows && updatesWereEnabled) {
+        setUpdatesEnabled(true);
+    }
 }
 
 void PropertiesPanel::clearRows() {
@@ -346,7 +390,15 @@ void PropertiesPanel::setEventOffset(const qint64 offsetMilliseconds) {
 }
 
 void PropertiesPanel::addReadOnlyRow(const QString& label, const QString& value) {
+    const QString objectName = QStringLiteral("propertyValue_%1").arg(label);
+    if (auto* existing = findChild<QLabel*>(objectName)) {
+        if (existing->text() != value) {
+            existing->setText(value);
+        }
+        return;
+    }
     auto* valueLabel = new QLabel(value, this);
+    valueLabel->setObjectName(objectName);
     valueLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_layout->addRow(label, valueLabel);
 }
@@ -369,24 +421,35 @@ void PropertiesPanel::showHitObjects() {
     }
     if (!fields.isEmpty()) {
         const auto values = propertyValues(fields, [](const ChartNote& hitObject) { return hitObject.groupId; });
-        auto* editor = new QLineEdit(this);
+        auto* editor = findChild<QLineEdit*>(QStringLiteral("Group ID"));
         const bool mixed = hasMixedValues(values);
+        const bool createEditor = editor == nullptr;
 
-        editor->setObjectName(QStringLiteral("Group ID"));
-        editor->setValidator(new GroupIdValidator(editor));
-        editor->setPlaceholderText(QStringLiteral("Mixed"));
-        editor->setText(mixed ? QString() : QString::number(values.front()));
-        setMixedStyle(editor, mixed);
-        m_layout->addRow(QStringLiteral("Group ID"), editor);
-        connect(editor, &QLineEdit::textEdited, editor, [editor] { editor->setProperty("edited", true); });
-        connect(editor, &QLineEdit::editingFinished, editor, [this, editor] {
-            if (!editor->property("edited").toBool() || !editor->hasAcceptableInput()) {
-                return;
+        if (createEditor) {
+            editor = new QLineEdit(this);
+            editor->setObjectName(QStringLiteral("Group ID"));
+            editor->setValidator(new GroupIdValidator(editor));
+            editor->setPlaceholderText(QStringLiteral("Mixed"));
+            m_layout->addRow(QStringLiteral("Group ID"), editor);
+            connect(editor, &QLineEdit::textEdited, editor, [editor] { editor->setProperty("edited", true); });
+            connect(editor, &QLineEdit::editingFinished, editor, [this, editor] {
+                if (!editor->property("edited").toBool() || !editor->hasAcceptableInput()) {
+                    return;
+                }
+                editor->setProperty("edited", false);
+                setMixedStyle(editor, false);
+                applyHitObjectProperty(HitObjectProperty::GroupId, editor->text().toULongLong());
+            });
+        }
+        if (!editor->hasFocus() || !editor->property("edited").toBool()) {
+            const QSignalBlocker blocker(editor);
+            const QString text = mixed ? QString() : QString::number(values.front());
+            if (editor->text() != text) {
+                editor->setText(text);
             }
             editor->setProperty("edited", false);
-            setMixedStyle(editor, false);
-            applyHitObjectProperty(HitObjectProperty::GroupId, editor->text().toULongLong());
-        });
+            setMixedStyle(editor, mixed);
+        }
     }
     const auto apply = [this](const HitObjectProperty property) {
         return [this, property](const auto value) { applyHitObjectProperty(property, QVariant(value)); };

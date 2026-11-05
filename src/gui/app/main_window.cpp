@@ -782,10 +782,10 @@ void MainWindow::buildInterface() {
     connect(m_state, &EditorState::hitObjectRemoved, m_flatView, &FlatView::removeHitObject);
     connect(m_state, &EditorState::hitObjectChanged, m_viewer, &ConveyorView::updateHitObject);
     connect(m_state, &EditorState::hitObjectChanged, m_flatView, &FlatView::updateHitObject);
-    auto* propertiesRefresh = new QTimer(m_properties);
+    auto* propertiesRefresh = new QTimer(this);
     propertiesRefresh->setSingleShot(true);
     propertiesRefresh->setInterval(16);
-    connect(propertiesRefresh, &QTimer::timeout, m_properties, [this] {
+    connect(propertiesRefresh, &QTimer::timeout, this, [this] {
         m_properties->setSelection(*m_state);
     });
     const auto refreshProperties = [propertiesRefresh] {
