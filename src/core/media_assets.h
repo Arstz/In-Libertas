@@ -6,8 +6,14 @@
 
 namespace infalsus {
 
+struct AudioMetadata {
+    QString title;
+    QString artist;
+};
+
 [[nodiscard]] QStringList audioNameFilters();
 [[nodiscard]] QString audioFileDialogFilter();
+[[nodiscard]] AudioMetadata readAudioMetadata(const QString& path);
 [[nodiscard]] QStringList imageNameFilters();
 [[nodiscard]] QString imageFileDialogFilter();
 [[nodiscard]] bool readJacketImage(const QString& path, QImage* image, QString* error);

@@ -2038,10 +2038,12 @@ void MainWindow::createProject() {
             QMessageBox::warning(this, QStringLiteral("Choose jacket"), error);
         }
     }
-    const QString songName = QFileInfo(songPath).completeBaseName();
+    const AudioMetadata songMetadata = readAudioMetadata(songPath);
+    const QString songName = songMetadata.title.isEmpty() ? QFileInfo(songPath).completeBaseName() : songMetadata.title;
     QByteArray audio;
     QByteArray jacket;
     ChartProject project = blankProject(songName);
+    project.metadata.artistName = songMetadata.artist;
     project.songPath = songPath;
     project.jacketPath = jacketPath;
     if (!normalizeAssets(&project, &audio, &jacket, true)) {

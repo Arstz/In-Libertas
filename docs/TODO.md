@@ -1,1 +1,0 @@
-- Read metadata from song file is present

@@ -3,12 +3,14 @@
 
 #include <QtCore/QBuffer>
 #include <QtCore/QSaveFile>
+#include <QtCore/QScopeGuard>
 #include <QtGui/QColorSpace>
 #include <QtGui/QImageReader>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/dict.h>
 }
 
 namespace infalsus {
@@ -108,6 +110,35 @@ QStringList audioNameFilters() {
 
 QString audioFileDialogFilter() {
     return fileDialogFilter(QStringLiteral("Audio files"), audioNameFilters());
+}
+
+AudioMetadata readAudioMetadata(const QString& path) {
+    AVFormatContext* format = nullptr;
+    const QByteArray encodedPath = path.toUtf8();
+    if (avformat_open_input(&format, encodedPath.constData(), nullptr, nullptr) < 0) {
+        return {};
+    }
+    const auto cleanup = qScopeGuard([&] { avformat_close_input(&format); });
+    if (avformat_find_stream_info(format, nullptr) < 0) {
+        return {};
+    }
+    const int audioStream = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (audioStream < 0) {
+        return {};
+    }
+    const auto readTag = [&](const char* name) {
+        for (const AVDictionary* tags : {format->metadata, format->streams[audioStream]->metadata}) {
+            const AVDictionaryEntry* entry = av_dict_get(tags, name, nullptr, 0);
+            if (entry != nullptr) {
+                const QString value = QString::fromUtf8(entry->value).trimmed();
+                if (!value.isEmpty()) {
+                    return value;
+                }
+            }
+        }
+        return QString{};
+    };
+    return {readTag("title"), readTag("artist")};
 }
 
 QStringList imageNameFilters() {
