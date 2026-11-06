@@ -516,16 +516,18 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         }
         if (nativeMessage->message == WM_MOUSEWHEEL && nativeAltHeld()) {
             const auto lParam = static_cast<DWORD_PTR>(nativeMessage->lParam);
-            const int globalX = static_cast<short>(LOWORD(lParam));
-            const int globalY = static_cast<short>(HIWORD(lParam));
-            const QPoint globalPosition(globalX, globalY);
-            const QPoint flatPosition = m_flatView->mapFromGlobal(globalPosition);
-            if (m_flatView->rect().contains(flatPosition)) {
-                const double steps = static_cast<double>(GET_WHEEL_DELTA_WPARAM(nativeMessage->wParam)) / WHEEL_DELTA;
-                adjustFlatZoom(steps);
-                *result = 0;
+            POINT windowPosition{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+            if (ScreenToClient(reinterpret_cast<HWND>(winId()), &windowPosition)) {
+                const qreal pixelRatio = devicePixelRatioF();
+                const QPointF flatPosition = m_flatView->mapFrom(this,
+                    QPointF(windowPosition.x / pixelRatio, windowPosition.y / pixelRatio));
+                if (QRectF(m_flatView->rect()).contains(flatPosition)) {
+                    const double steps = static_cast<double>(GET_WHEEL_DELTA_WPARAM(nativeMessage->wParam)) / WHEEL_DELTA;
+                    adjustFlatZoom(steps);
+                    *result = 0;
 
-                return true;
+                    return true;
+                }
             }
         }
     }
