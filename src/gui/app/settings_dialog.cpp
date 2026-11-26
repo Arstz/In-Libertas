@@ -43,6 +43,27 @@ constexpr int kHitsoundLabelGapCharacters = 15;
 constexpr int kColorTextLightnessThreshold = 128;
 constexpr auto kShortcutConflictStyle = "QLineEdit { border: 2px solid #d9534f; }";
 
+QDoubleSpinBox* addMultiplierRow(QWidget* page, QFormLayout* rows, const QString& label, const QString& name,
+    const double minimum, const double maximum, const double value, const double defaultValue) {
+    auto* controls = new QWidget(page);
+    auto* controlsLayout = new QHBoxLayout(controls);
+    auto* edit = new QDoubleSpinBox(controls);
+    auto* reset = new QPushButton(QStringLiteral("Reset"), controls);
+    edit->setObjectName(name);
+    edit->setDecimals(2);
+    edit->setRange(minimum, maximum);
+    edit->setSingleStep(0.1);
+    edit->setSuffix(QStringLiteral("x"));
+    edit->setValue(value);
+    controlsLayout->setContentsMargins(0, 0, 0, 0);
+    controlsLayout->setSpacing(kControlSpacing);
+    controlsLayout->addWidget(edit, 1);
+    controlsLayout->addWidget(reset);
+    rows->addRow(label, controls);
+    QObject::connect(reset, &QPushButton::clicked, edit, [edit, defaultValue] { edit->setValue(defaultValue); });
+    return edit;
+}
+
 void setShortcutConflictStyle(QKeySequenceEdit* edit, const bool conflict) {
     QLineEdit* field = edit->findChild<QLineEdit*>();
     QWidget* target = field != nullptr ? static_cast<QWidget*>(field) : static_cast<QWidget*>(edit);
@@ -182,6 +203,7 @@ VisualSettings SettingsDialog::selectedVisualSettings() const {
     result.customPlayheadColor = m_playheadColorMode->currentData().toBool();
     result.animatedToolbarUnfolding = m_animatedToolbarUnfolding->isChecked();
     result.autohideToolbar = m_autohideToolbar->isChecked();
+    result.noteSize = m_noteSize->value();
 
     return result;
 }
@@ -198,12 +220,21 @@ VisualSettings SettingsDialog::loadVisualSettings() {
         result.playheadColor = color;
         result.customPlayheadColor = settings.value(QStringLiteral("visuals/custom_playhead_color"), false).toBool();
     }
+    bool valid = false;
+    const double noteSize = settings.value(QStringLiteral("visuals/note_size"),
+        settings.value(QStringLiteral("playtest/note_size"), result.noteSize)).toDouble(&valid);
+    if (valid && std::isfinite(noteSize)) {
+        result.noteSize = std::clamp(noteSize, kMinimumNoteSize, kMaximumNoteSize);
+    }
 
     return result;
 }
 
 HandlingSettings SettingsDialog::selectedHandlingSettings() const {
-    return {.invertMousewheelScroll = m_invertMousewheelScroll->isChecked()};
+    return {
+        .invertMousewheelScroll = m_invertMousewheelScroll->isChecked(),
+        .convertNoteHoldOnResize = m_convertNoteHoldOnResize->isChecked(),
+    };
 }
 
 HandlingSettings SettingsDialog::loadHandlingSettings() {
@@ -211,6 +242,8 @@ HandlingSettings SettingsDialog::loadHandlingSettings() {
     HandlingSettings result;
     result.invertMousewheelScroll = settings.value(QStringLiteral("handling/invert_mousewheel_scroll"),
         result.invertMousewheelScroll).toBool();
+    result.convertNoteHoldOnResize = settings.value(QStringLiteral("handling/convert_note_hold_on_resize"),
+        result.convertNoteHoldOnResize).toBool();
 
     return result;
 }
@@ -374,6 +407,9 @@ void SettingsDialog::buildVisualsPage(QStackedWidget* pages) {
     controlsLayout->addWidget(m_playheadColorButton);
     rows->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     rows->addRow(QStringLiteral("Playhead color"), controls);
+    m_noteSize = addMultiplierRow(page, rows, QStringLiteral("Note size"), QStringLiteral("visuals_note_size"),
+        kMinimumNoteSize, kMaximumNoteSize, m_visuals.noteSize, kDefaultNoteSize);
+    m_noteSize->setToolTip(QStringLiteral("Scale the vertical size of floor taps in the 3D view and playtest."));
     rows->addRow(m_animatedToolbarUnfolding);
     rows->addRow(m_autohideToolbar);
     pageLayout->addLayout(rows);
@@ -408,6 +444,8 @@ void SettingsDialog::saveVisualSettings(const VisualSettings& visuals) {
     settings.setValue(QStringLiteral("visuals/playhead_color"), visuals.playheadColor.name(QColor::HexRgb));
     settings.setValue(QStringLiteral("visuals/animated_toolbar_unfolding"), visuals.animatedToolbarUnfolding);
     settings.setValue(QStringLiteral("visuals/autohide_toolbar"), visuals.autohideToolbar);
+    settings.setValue(QStringLiteral("visuals/note_size"), visuals.noteSize);
+    settings.remove(QStringLiteral("playtest/note_size"));
 }
 
 void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSettings& handling) {
@@ -415,6 +453,7 @@ void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSett
     auto* page = new QWidget(scrollArea);
     auto* pageLayout = new QVBoxLayout(page);
     m_invertMousewheelScroll = new QCheckBox(QStringLiteral("Invert scroll direction for mousewheel"), page);
+    m_convertNoteHoldOnResize = new QCheckBox(QStringLiteral("Convert note / hold on resize"), page);
 
     pages->addWidget(scrollArea);
     scrollArea->setWidgetResizable(true);
@@ -422,12 +461,17 @@ void SettingsDialog::buildHandlingPage(QStackedWidget* pages, const HandlingSett
     m_invertMousewheelScroll->setChecked(handling.invertMousewheelScroll);
     m_invertMousewheelScroll->setToolTip(QStringLiteral("Reverse mousewheel scrolling in Flat View."));
     pageLayout->addWidget(m_invertMousewheelScroll);
+    m_convertNoteHoldOnResize->setChecked(handling.convertNoteHoldOnResize);
+    m_convertNoteHoldOnResize->setToolTip(QStringLiteral(
+        "Drag the top edge of a selected note to extend it into a hold, or drag a hold's end to its start to turn it into a note."));
+    pageLayout->addWidget(m_convertNoteHoldOnResize);
     pageLayout->addStretch();
 }
 
 void SettingsDialog::saveHandlingSettings(const HandlingSettings& handling) {
     QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
     settings.setValue(QStringLiteral("handling/invert_mousewheel_scroll"), handling.invertMousewheelScroll);
+    settings.setValue(QStringLiteral("handling/convert_note_hold_on_resize"), handling.convertNoteHoldOnResize);
 }
 
 void SettingsDialog::buildPlaytestPage(QStackedWidget* pages, const PlaytestSettings& playtest) {
@@ -484,22 +528,10 @@ void SettingsDialog::buildPlaytestPage(QStackedWidget* pages, const PlaytestSett
     connect(autoplayReset, &QPushButton::clicked, this, [this] {
         m_playtestAutoplayEdit->setKeySequence(QKeySequence(kDefaultPlaytestAutoplayKey));
     });
-    auto* controls = new QWidget(page);
-    auto* controlsLayout = new QHBoxLayout(controls);
-    auto* reset = new QPushButton(QStringLiteral("Reset"), controls);
-    m_mouseSensitivity = new QDoubleSpinBox(controls);
-    m_mouseSensitivity->setObjectName(QStringLiteral("playtest_mouse_sensitivity"));
-    m_mouseSensitivity->setRange(kMinimumPlaytestMouseSensitivity, kMaximumPlaytestMouseSensitivity);
-    m_mouseSensitivity->setDecimals(2);
-    m_mouseSensitivity->setSingleStep(0.1);
-    m_mouseSensitivity->setSuffix(QStringLiteral("x"));
-    m_mouseSensitivity->setValue(playtest.mouseSensitivity);
+    m_mouseSensitivity = addMultiplierRow(page, rows, QStringLiteral("Mouse sensitivity"),
+        QStringLiteral("playtest_mouse_sensitivity"), kMinimumPlaytestMouseSensitivity,
+        kMaximumPlaytestMouseSensitivity, playtest.mouseSensitivity, kDefaultPlaytestMouseSensitivity);
     m_mouseSensitivity->setToolTip(QStringLiteral("Multiply mouse movement during playtest."));
-    controlsLayout->setContentsMargins(0, 0, 0, 0);
-    controlsLayout->setSpacing(kControlSpacing);
-    controlsLayout->addWidget(m_mouseSensitivity, 1);
-    controlsLayout->addWidget(reset);
-    rows->addRow(QStringLiteral("Mouse sensitivity"), controls);
     pageLayout->addLayout(rows);
     m_playtestValidationLabel->setWordWrap(true);
     m_playtestValidationLabel->setStyleSheet(QStringLiteral("color: #d07070;"));
@@ -507,9 +539,6 @@ void SettingsDialog::buildPlaytestPage(QStackedWidget* pages, const PlaytestSett
     resetControls->addWidget(resetAll);
     pageLayout->addLayout(resetControls);
     pageLayout->addStretch();
-    connect(reset, &QPushButton::clicked, this, [this] {
-        m_mouseSensitivity->setValue(kDefaultPlaytestMouseSensitivity);
-    });
     connect(resetAll, &QPushButton::clicked, this, [this] {
         for (std::size_t lane = 0; lane < m_playtestLaneEdits.size(); ++lane) {
             m_playtestLaneEdits[lane]->setKeySequence(QKeySequence(kDefaultPlaytestLaneKeys[lane]));

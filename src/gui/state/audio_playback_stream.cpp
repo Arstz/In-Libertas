@@ -1,5 +1,7 @@
 #include "gui/state/audio_playback_stream.h"
 
+#include "core/timing_grid.h"
+
 #include <signalsmith-stretch/signalsmith-stretch.h>
 
 #include <algorithm>
@@ -175,8 +177,7 @@ struct AudioPlaybackStream::ProcessingState {
                 break;
             }
             const int beatsPerMeasure = std::max(1, point.timeSignatureNumerator);
-            const double beatDuration = 60000.0 / std::max(1.0, point.beatsPerMinute)
-                * 4.0 / std::max(1, point.timeSignatureDenominator);
+            const double beatDuration = infalsus::divisorDurationMilliseconds(point, point.timeSignatureDenominator);
             if (!std::isfinite(beatDuration) || beatDuration <= 0.0) {
                 continue;
             }

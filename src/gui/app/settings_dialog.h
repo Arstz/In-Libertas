@@ -67,7 +67,9 @@ private:
     QPushButton* m_playheadColorButton = nullptr;
     QCheckBox* m_animatedToolbarUnfolding = nullptr;
     QCheckBox* m_autohideToolbar = nullptr;
+    QDoubleSpinBox* m_noteSize = nullptr;
     QCheckBox* m_invertMousewheelScroll = nullptr;
+    QCheckBox* m_convertNoteHoldOnResize = nullptr;
     std::array<QKeySequenceEdit*, 6> m_playtestLaneEdits{};
     QKeySequenceEdit* m_playtestAutoplayEdit = nullptr;
     QDoubleSpinBox* m_mouseSensitivity = nullptr;

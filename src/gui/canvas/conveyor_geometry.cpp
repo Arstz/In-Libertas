@@ -276,6 +276,36 @@ double ConveyorGeometry::floorTapEndProgress(const double approachProgress) {
     return approachProgress - depth / kTrackLength;
 }
 
+double ConveyorGeometry::floorDepthInset(const FloorSide side, const double approachProgress, const double lateralInset) {
+    const double laneCenter = side == FloorSide::LeftOuter ? kCentralLeft - kLaneWidth * 0.5
+        : side == FloorSide::RightOuter ? kCentralRight + kLaneWidth * 0.5 : kCentralCenter;
+    const double progress = std::clamp(approachProgress, 0.0, maximumVisibleProgress(side));
+    const CameraPoint center = floorCameraPoint({laneCenter, progress}, side);
+    const CameraPoint across = floorCameraPoint({laneCenter + lateralInset, progress}, side);
+    const CameraPoint along = floorCameraPoint({laneCenter, progress + 1.0}, side);
+    const double lateralChange = across.x * center.z - center.x * across.z;
+    const double depthChange = along.y * center.z - center.y * along.z;
+    return std::abs(lateralChange / depthChange);
+}
+
+QTransform ConveyorGeometry::floorProjection(const FloorSide side) {
+    const auto projectSpan = [](const double left, const FloorSide spanSide) {
+        const double right = left + kLaneWidth;
+        const QPolygonF plane{{left, 0.0}, {right, 0.0}, {right, 1.0}, {left, 1.0}};
+        QPolygonF canvas;
+        for (const QPointF& point : plane) {
+            canvas.append(project(floorCameraPoint(point, spanSide)));
+        }
+        QTransform transform;
+        QTransform::quadToQuad(plane, canvas, transform);
+        return transform;
+    };
+    static const QTransform left = projectSpan(kCentralLeft - kLaneWidth, FloorSide::LeftOuter);
+    static const QTransform central = projectSpan(kCentralLeft, FloorSide::Central);
+    static const QTransform right = projectSpan(kCentralRight, FloorSide::RightOuter);
+    return side == FloorSide::LeftOuter ? left : side == FloorSide::RightOuter ? right : central;
+}
+
 QPainterPath ConveyorGeometry::floorPath(const QPolygonF& points, const FloorSide side, const bool closed) {
     QVector<CameraPoint> cameraPoints;
     cameraPoints.reserve(points.size());

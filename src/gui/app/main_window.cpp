@@ -373,8 +373,10 @@ MainWindow::MainWindow(QWidget* parent)
     SettingsDialog::restoreKeybinds(m_keyBindings);
     m_visualSettings = SettingsDialog::loadVisualSettings();
     m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
+    m_viewer->setNoteSize(m_visualSettings.noteSize);
     m_handlingSettings = SettingsDialog::loadHandlingSettings();
     m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
+    m_flatView->setConvertNoteHoldOnResize(m_handlingSettings.convertNoteHoldOnResize);
     m_playtestSettings = SettingsDialog::loadPlaytestSettings();
     m_viewer->setPlaytestLaneKeys(m_playtestSettings.laneKeys);
     m_viewer->setPlaytestAutoplayKey(m_playtestSettings.autoplayKey);
@@ -706,7 +708,7 @@ void MainWindow::buildInterface() {
     });
     connect(m_playback, &PlaybackController::positionChanged, this, [this](qint64 position) {
         if (!m_playtest) {
-            m_state->setPlaybackPosition(position);
+            m_state->updatePlaybackPosition(position);
         }
     });
     connect(m_playback, &PlaybackController::audioSourceChanged, m_flatView, &FlatView::clearWaveform);
@@ -715,6 +717,7 @@ void MainWindow::buildInterface() {
     connect(m_playbackControls, &PlaybackControls::togglePlaybackRequested, this, &MainWindow::togglePlayback);
     connect(m_playbackControls, &PlaybackControls::playbackRateRequested, m_playback, &PlaybackController::setPlaybackRate);
     connect(m_playback, &PlaybackController::playbackChanged, m_playbackControls, &PlaybackControls::setPlaying);
+    connect(m_playback, &PlaybackController::playbackChanged, m_state, &EditorState::resetGridSeek);
     connect(m_playback, &PlaybackController::playbackRateChanged, m_playbackControls, &PlaybackControls::setPlaybackRate);
     connect(m_playback, &PlaybackController::playbackRateChanged, this, [this](const qreal playbackRate) {
         Q_UNUSED(playbackRate)
@@ -1181,9 +1184,11 @@ void MainWindow::openSettings() {
         m_hitsounds->load(HitsoundBank::loadFiles());
         m_visualSettings = dialog.selectedVisualSettings();
         m_flatView->setPlayheadColor(m_visualSettings.effectivePlayheadColor());
+        m_viewer->setNoteSize(m_visualSettings.noteSize);
         applyToolsToolbarSettings();
         m_handlingSettings = dialog.selectedHandlingSettings();
         m_flatView->setInvertMousewheelScroll(m_handlingSettings.invertMousewheelScroll);
+        m_flatView->setConvertNoteHoldOnResize(m_handlingSettings.convertNoteHoldOnResize);
         m_playtestSettings = dialog.selectedPlaytestSettings();
         m_viewer->setPlaytestLaneKeys(m_playtestSettings.laneKeys);
         m_viewer->setPlaytestAutoplayKey(m_playtestSettings.autoplayKey);

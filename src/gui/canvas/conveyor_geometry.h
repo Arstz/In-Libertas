@@ -26,6 +26,8 @@ public:
     [[nodiscard]] static bool skyVisible(double depthProgress);
     [[nodiscard]] static double maximumVisibleProgress(FloorSide side);
     [[nodiscard]] static double floorTapEndProgress(double approachProgress);
+    [[nodiscard]] static double floorDepthInset(FloorSide side, double approachProgress, double lateralInset);
+    [[nodiscard]] static QTransform floorProjection(FloorSide side);
     [[nodiscard]] static QPainterPath floorPath(const QPolygonF& points, FloorSide side, bool closed = true);
     [[nodiscard]] static QPainterPath skyPath(const QPolygonF& points, bool closed = true);
     [[nodiscard]] static QPainterPath measureMarker(double normalizedDistance);

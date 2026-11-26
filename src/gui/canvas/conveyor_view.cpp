@@ -5,6 +5,7 @@
 #include "gui/canvas/conveyor_geometry.h"
 #include "gui/key_bindings.h"
 #include "core/field_groups.h"
+#include "core/timing_grid.h"
 
 #include <QtCore/QLineF>
 #include <QtCore/QCoreApplication>
@@ -49,6 +50,7 @@ constexpr int kSkyFillAlpha = 105;
 constexpr qreal kRailWidth = 4.0;
 constexpr qreal kSkyContourWidth = 3.0;
 constexpr qreal kNoteContourWidth = 2.0;
+constexpr double kFloorNoteEdgeInset = 0.00625;
 constexpr double kFloorLaneWidth = 0.25;
 constexpr double kFloorHalfLaneWidth = kFloorLaneWidth * 0.5;
 constexpr double kCentralFloorLeftBoundary = 0.125;
@@ -157,6 +159,23 @@ struct FloorSpan {
     }
 
     return palette::white;
+}
+
+struct FloorHighlightFactors {
+    int shoulder;
+    int center;
+};
+
+[[nodiscard]] FloorHighlightFactors floorHighlightFactors(const FloorSide side, const bool held) {
+    // Calibrated against the purple gradient's Oklab lightness.
+    switch (side) {
+    case FloorSide::LeftOuter:
+        return {110, 125};
+    case FloorSide::RightOuter:
+        return {119, held ? 140 : 143};
+    default:
+        return held ? FloorHighlightFactors{127, 159} : FloorHighlightFactors{110, 146};
+    }
 }
 
 [[nodiscard]] QColor difficultyColor(const infalsus::Difficulty difficulty) {
@@ -427,6 +446,11 @@ void ConveyorView::setNoteSpeed(const double noteSpeed) {
         return;
     }
     m_noteSpeed = normalizedSpeed;
+    update();
+}
+
+void ConveyorView::setNoteSize(const double size) {
+    m_noteSize = size;
     update();
 }
 
@@ -1151,9 +1175,7 @@ void ConveyorView::ensureMeasureMarkers() {
         timingPoints.prepend(initial);
     }
     m_measureMarkers.clear();
-    const double initialBpm = timingPoints.front().beatsPerMinute;
-    const double initialMeasureDuration = 240000.0 / (std::isfinite(initialBpm) && initialBpm > 0.0
-        ? initialBpm : infalsus::TimingPoint{}.beatsPerMinute);
+    const double initialMeasureDuration = infalsus::measureDurationMilliseconds(timingPoints.front());
     double chartEnd = m_chart.durationMilliseconds;
     for (const ChartNote& note : m_chart.notes) {
         chartEnd = std::max(chartEnd, static_cast<double>(note.endMilliseconds));
@@ -1173,7 +1195,7 @@ void ConveyorView::ensureMeasureMarkers() {
     }
     for (int pointIndex = 0; pointIndex < timingPoints.size(); ++pointIndex) {
         const infalsus::TimingPoint& point = timingPoints.at(pointIndex);
-        const double measureDuration = 60000.0 / point.beatsPerMinute * point.timeSignatureNumerator;
+        const double measureDuration = infalsus::measureDurationMilliseconds(point);
         const double sectionEnd = pointIndex + 1 < timingPoints.size()
             ? timingPoints.at(pointIndex + 1).timeMilliseconds : chartEnd;
         if (!std::isfinite(measureDuration) || measureDuration <= 0.0) {
@@ -1209,6 +1231,11 @@ void ConveyorView::drawDivisors(QPainter& painter) {
     }
 }
 
+double ConveyorView::floorTapEndProgress(const double startProgress) const {
+    const double endProgress = ConveyorGeometry::floorTapEndProgress(startProgress);
+    return std::lerp(startProgress, endProgress, m_noteSize);
+}
+
 void ConveyorView::drawFloorNote(QPainter& painter, const ChartNote& note) {
     const bool tap = note.kind == NoteKind::Tap;
     const qint64 rawEnd = tap ? note.startMilliseconds : note.endMilliseconds;
@@ -1224,20 +1251,49 @@ void ConveyorView::drawFloorNote(QPainter& painter, const ChartNote& note) {
     const FloorSpan startSpan = floorSpan(note.side, note.startX, note.startWidth);
     const FloorSpan endSpan = tap ? startSpan : floorSpan(note.side, note.endX, note.endWidth);
     const double startProgress = projectionProgress(noteStart);
-    const double endProgress = tap ? ConveyorGeometry::floorTapEndProgress(startProgress) : projectionProgress(rawEnd);
-    const QPainterPath shape = ConveyorGeometry::floorPath({
-        {startSpan.left, startProgress}, {startSpan.right, startProgress},
-        {endSpan.right, endProgress}, {endSpan.left, endProgress}}, note.side);
-    const bool outerHold = note.kind == NoteKind::Hold
+    const double endProgress = tap ? floorTapEndProgress(startProgress) : projectionProgress(rawEnd);
+    const double depth = startProgress - endProgress;
+    const double maxInset = std::abs(depth) * 0.25;
+    const auto depthInset = [side = note.side, depth, maxInset](const double progress) {
+        const double inset = ConveyorGeometry::floorDepthInset(side, progress, kFloorNoteEdgeInset);
+        return std::copysign(std::min(inset, maxInset), depth);
+    };
+    const double insetStart = startProgress - depthInset(startProgress);
+    const double insetEnd = endProgress + depthInset(endProgress);
+    const QPolygonF corners{
+        {startSpan.left + kFloorNoteEdgeInset, insetStart}, {startSpan.right - kFloorNoteEdgeInset, insetStart},
+        {endSpan.right - kFloorNoteEdgeInset, insetEnd}, {endSpan.left + kFloorNoteEdgeInset, insetEnd}};
+    const QPainterPath shape = ConveyorGeometry::floorPath(corners, note.side);
+    if (shape.isEmpty()) {
+        return;
+    }
+    const bool outerHold = !tap
         && (note.side == FloorSide::LeftOuter || note.side == FloorSide::RightOuter);
-    const QColor color = (m_playtestNotes.value(note.id) & 2) != 0
-        ? floorColor(note).lighter(outerHold ? 110 : 150) : floorColor(note);
+    const bool held = (m_playtestNotes.value(note.id) & 2) != 0;
+    const QColor color = held ? floorColor(note).lighter(outerHold ? 110 : 150) : floorColor(note);
+    const bool solidWhiteTap = tap && color == palette::white;
+    const QColor contour = solidWhiteTap ? color : color.darker(135);
+    QBrush fill(color);
+    if (!solidWhiteTap) {
+        QTransform gradientToFloor;
+        if (QTransform::squareToQuad(corners, gradientToFloor)) {
+            const auto [shoulderFactor, centerFactor] = floorHighlightFactors(note.side, held);
+            const QColor shoulder = color.lighter(shoulderFactor);
+            QLinearGradient highlight(0.0, 0.0, 1.0, 0.0);
+            highlight.setColorAt(0.0, color);
+            highlight.setColorAt(0.4, shoulder);
+            highlight.setColorAt(0.5, color.lighter(centerFactor));
+            highlight.setColorAt(0.6, shoulder);
+            highlight.setColorAt(1.0, color);
+            fill = QBrush(highlight);
+            fill.setTransform(gradientToFloor * ConveyorGeometry::floorProjection(note.side));
+        }
+    }
 
     painter.save();
     painter.setOpacity(painter.opacity() * noteOpacity(noteStart));
-    const QColor contour = palette::floorNoteContour;
     painter.setPen(QPen(contour, kNoteContourWidth));
-    painter.setBrush(color);
+    painter.setBrush(fill);
     painter.drawPath(shape);
     painter.restore();
 }
@@ -1516,9 +1572,9 @@ void ConveyorView::drawChart(QPainter& painter) {
             }
             const ScrollRange& range = m_noteScrollRanges.at(index);
             const double minimumCoordinate = note->side == FloorSide::Sky ? minimumSkyCoordinate : minimumFloorCoordinate;
-            const double maximumProgress = ConveyorGeometry::maximumVisibleProgress(note->side);
             if (range.maximum < minimumCoordinate && (note->kind != NoteKind::Tap
-                    || ConveyorGeometry::floorTapEndProgress(projectionProgress(note->startMilliseconds)) > maximumProgress)) {
+                    || floorTapEndProgress(projectionProgress(note->startMilliseconds))
+                        > ConveyorGeometry::maximumVisibleProgress(note->side))) {
                 continue;
             }
             if (!m_playtest && completed && (note->kind != NoteKind::Sky

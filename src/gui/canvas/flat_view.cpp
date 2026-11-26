@@ -47,8 +47,8 @@ constexpr int kWaveformEventValuePrecision = 12;
 constexpr double kMargin = 0.0;
 constexpr double kPlayheadWidth = 6.0;
 constexpr qint64 kTapDurationMilliseconds = 30;
-constexpr qint64 kMinimumHoldDurationMilliseconds = 80;
-constexpr double kHoldEndEdgeHitDistance = 8.0;
+constexpr qint64 kHoldPlacementThresholdMilliseconds = 80;
+constexpr double kFloorEndEdgeHitDistance = 8.0;
 constexpr double kDefaultFieldWidth = 0.18;
 constexpr double kMinimumFlickWidth = 0.06;
 constexpr double kMouseDragDistance = 4.0;
@@ -383,6 +383,11 @@ void FlatView::setInvertMousewheelScroll(const bool inverted) {
     m_invertMousewheelScroll = inverted;
 }
 
+void FlatView::setConvertNoteHoldOnResize(const bool enabled) {
+    m_convertNoteHoldOnResize = enabled;
+    updateToolCursor();
+}
+
 void FlatView::setMode(const FlatViewMode mode) {
     m_mode = mode;
     updateToolCursor();
@@ -707,24 +712,7 @@ qint64 FlatView::snappedTimeAtY(const double y) const {
             static_cast<double>(time) / m_gridDurationMilliseconds)) * m_gridDurationMilliseconds;
     }
 
-    const auto nextPoint = std::upper_bound(m_timingPoints.cbegin(), m_timingPoints.cend(), time,
-        [](const qint64 timestamp, const TimingPoint& point) { return timestamp < point.timeMilliseconds; });
-    const TimingPoint* timingPoint = nextPoint == m_timingPoints.cbegin()
-        ? &m_timingPoints.front() : &*std::prev(nextPoint);
-    const double beatDurationMilliseconds = 60000.0 / timingPoint->beatsPerMinute;
-    const double measureDurationMilliseconds = beatDurationMilliseconds
-        * timingPoint->timeSignatureNumerator * 4.0
-        / std::max(timingPoint->timeSignatureDenominator, 1);
-    const double divisorDurationMilliseconds = measureDurationMilliseconds / m_divisor;
-    if (divisorDurationMilliseconds <= 0.0) {
-        return time;
-    }
-
-    const qint64 divisorIndex = static_cast<qint64>(std::llround(
-        (time - timingPoint->timeMilliseconds) / divisorDurationMilliseconds));
-
-    return std::max<qint64>(0, timingPoint->timeMilliseconds + static_cast<qint64>(std::llround(
-        divisorIndex * divisorDurationMilliseconds)));
+    return closestDivisorTime(m_timingPoints, time, m_divisor);
 }
 
 int FlatView::laneAt(const QPointF& position) const {
@@ -762,21 +750,25 @@ int FlatView::hitObjectAt(const QPointF& position) const {
     return -1;
 }
 
-int FlatView::holdEndHitObjectAt(const QPointF& position) const {
+int FlatView::floorEndHitObjectAt(const QPointF& position) const {
     const QRectF area = groundArea();
     const double laneWidth = area.width() / 6.0;
     for (int index = m_chart.notes.size() - 1; index >= 0; --index) {
         const ChartNote& hitObject = m_chart.notes.at(index);
-        if (hitObject.kind != NoteKind::Hold) {
+        const bool canResizeTap = m_convertNoteHoldOnResize && hitObject.kind == NoteKind::Tap
+            && m_selectedHitObjectIndexes.contains(index);
+        if (hitObject.kind != NoteKind::Hold && !canResizeTap) {
             continue;
         }
         const LaneSpan endSpan = laneSpan(hitObject, hitObject.endX, hitObject.endWidth);
-        const QLineF endEdge(
-            QPointF(area.left() + endSpan.left * laneWidth + 1.0, timeToY(hitObject.endMilliseconds)),
-            QPointF(area.left() + endSpan.right * laneWidth - 1.0, timeToY(hitObject.endMilliseconds)));
-        if (std::abs(position.y() - endEdge.y1()) <= kHoldEndEdgeHitDistance
-            && position.x() >= endEdge.x1() - kHoldEndEdgeHitDistance
-            && position.x() <= endEdge.x2() + kHoldEndEdgeHitDistance) {
+        const double endY = timeToY(canResizeTap ? hitObject.startMilliseconds + kTapDurationMilliseconds
+                                                : hitObject.endMilliseconds);
+        const double hitDistance = canResizeTap
+            ? std::min(kFloorEndEdgeHitDistance, (timeToY(hitObject.startMilliseconds) - endY) / 2.0)
+            : kFloorEndEdgeHitDistance;
+        if (std::abs(position.y() - endY) <= hitDistance
+            && position.x() >= area.left() + endSpan.left * laneWidth + 1.0 - hitDistance
+            && position.x() <= area.left() + endSpan.right * laneWidth - 1.0 + hitDistance) {
             return index;
         }
     }
@@ -1199,19 +1191,19 @@ FlatView::PlaceTarget FlatView::placeTargetAt(const QPointF& position, const Qt:
             && target.segmentAnchor.hitObjectIndex < 0 && !(modifiers & Qt::AltModifier)
             && cycledIndex >= 0 && m_chart.notes.at(cycledIndex).kind == NoteKind::Flick
         ? cycledIndex : -1;
-    const int holdEndIndex = target.fieldControl.kind == FieldControlKind::None
+    const int floorEndIndex = target.fieldControl.kind == FieldControlKind::None
             && target.flickControl.kind == FlickControlKind::None && fieldIndex < 0 && flickIndex < 0
             && target.segmentAnchor.hitObjectIndex < 0 && canInteractGround()
-        ? holdEndHitObjectAt(position) : -1;
+        ? floorEndHitObjectAt(position) : -1;
     target.hitObjectIndex = target.flickControl.kind != FlickControlKind::None ? target.flickControl.hitObjectIndex
         : target.fieldControl.kind != FieldControlKind::None ? target.fieldControl.hitObjectIndex
         : fieldIndex >= 0 ? fieldIndex
         : flickIndex >= 0 ? flickIndex
         : target.segmentAnchor.hitObjectIndex >= 0 ? -1
-        : holdEndIndex >= 0 ? holdEndIndex
+        : floorEndIndex >= 0 ? floorEndIndex
         : cycledIndex >= 0 ? cycledIndex
         : canInteractGround() ? hitObjectAt(position) : -1;
-    target.holdEnd = holdEndIndex >= 0;
+    target.floorEnd = floorEndIndex >= 0;
     return target;
 }
 
@@ -1234,7 +1226,7 @@ ChartNote FlatView::floorHitObjectForDrag(const QPointF& position, const bool sn
     const qint64 endTime = std::max(startTime, releaseTime);
     ChartNote hitObject;
 
-    hitObject.kind = endTime - startTime >= kMinimumHoldDurationMilliseconds ? NoteKind::Hold : NoteKind::Tap;
+    hitObject.kind = endTime - startTime >= kHoldPlacementThresholdMilliseconds ? NoteKind::Hold : NoteKind::Tap;
     hitObject.startMilliseconds = startTime;
     hitObject.endMilliseconds = hitObject.kind == NoteKind::Hold ? endTime : startTime;
     if (pressLane == 0 || pressLane == 5 || releaseLane == 0 || releaseLane == 5) {
@@ -1272,26 +1264,12 @@ ChartNote FlatView::floorHitObjectForMove(const QPointF& position, const bool sn
     const int laneCount = std::max(1, static_cast<int>(std::lround(originalSpan.right - originalSpan.left)));
 
     hitObject.startMilliseconds = std::max<qint64>(0, m_dragOriginal.startMilliseconds + timeOffset);
-    if (hitObject.kind == NoteKind::Hold) {
-        hitObject.endMilliseconds = std::max(
-            hitObject.startMilliseconds + kMinimumHoldDurationMilliseconds,
-            m_dragOriginal.endMilliseconds + timeOffset);
-    } else {
-        hitObject.endMilliseconds = hitObject.startMilliseconds;
-    }
     if (snapToGrid) {
-        const double startY = timeToY(hitObject.startMilliseconds);
-        const qint64 snappedStart = snappedTimeAtY(startY);
-        const qint64 snapOffset = snappedStart - hitObject.startMilliseconds;
-        hitObject.startMilliseconds = snappedStart;
-        if (hitObject.kind == NoteKind::Hold) {
-            hitObject.endMilliseconds = std::max(
-                hitObject.startMilliseconds + kMinimumHoldDurationMilliseconds,
-                hitObject.endMilliseconds + snapOffset);
-        } else {
-            hitObject.endMilliseconds = hitObject.startMilliseconds;
-        }
+        hitObject.startMilliseconds = snappedTimeAtY(timeToY(hitObject.startMilliseconds));
     }
+    const qint64 duration = hitObject.kind == NoteKind::Hold
+        ? m_dragOriginal.endMilliseconds - m_dragOriginal.startMilliseconds : 0;
+    hitObject.endMilliseconds = hitObject.startMilliseconds + duration;
     if (laneCount == 1 && (targetLane == 0 || targetLane == 5)) {
         hitObject.side = floorSideForLane(targetLane);
         hitObject.startX = 0.0;
@@ -1312,10 +1290,17 @@ ChartNote FlatView::floorHitObjectForMove(const QPointF& position, const bool sn
     return hitObject;
 }
 
-ChartNote FlatView::holdHitObjectForEndMove(const QPointF& position, const bool snapToGrid) const {
+ChartNote FlatView::floorHitObjectForEndMove(const QPointF& position, const bool snapToGrid) const {
     ChartNote hitObject = m_dragOriginal;
     const qint64 requestedEnd = snapToGrid ? snappedTimeAtY(position.y()) : timeAtY(position.y());
 
+    if (m_convertNoteHoldOnResize) {
+        hitObject.kind = requestedEnd > hitObject.startMilliseconds ? NoteKind::Hold : NoteKind::Tap;
+        if (hitObject.kind != m_dragOriginal.kind) {
+            hitObject.endX = hitObject.startX;
+            hitObject.endWidth = hitObject.startWidth;
+        }
+    }
     hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, requestedEnd);
 
     return hitObject;
@@ -1682,7 +1667,7 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
         setCursor(Qt::ClosedHandCursor);
         return;
     }
-    const auto interactionCursor = [](const bool holdEnd, const FieldControlKind fieldControl,
+    const auto interactionCursor = [](const bool floorEnd, const FieldControlKind fieldControl,
                                       const FlickControlKind flickControl) {
         if (flickControl != FlickControlKind::None
             || fieldControl == FieldControlKind::StartLeft || fieldControl == FieldControlKind::StartRight
@@ -1690,7 +1675,7 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
             || fieldControl == FieldControlKind::LeftSide || fieldControl == FieldControlKind::RightSide) {
             return Qt::SizeHorCursor;
         }
-        return holdEnd || fieldControl != FieldControlKind::None ? Qt::SizeVerCursor : Qt::SizeAllCursor;
+        return floorEnd || fieldControl != FieldControlKind::None ? Qt::SizeVerCursor : Qt::SizeAllCursor;
     };
     switch (m_tool) {
     case EditorTool::Select:
@@ -1701,9 +1686,10 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
         break;
     case EditorTool::Place:
         if (m_draggingHitObject) {
-            if (!m_selectionOnlyClick && (m_dragOriginal.kind == NoteKind::Hold || m_dragOriginal.kind == NoteKind::Sky
+            if (!m_selectionOnlyClick && (m_draggingFloorEnd || m_dragOriginal.kind == NoteKind::Hold
+                || m_dragOriginal.kind == NoteKind::Sky
                 || m_dragFlickControl.kind != FlickControlKind::None)) {
-                setCursor(interactionCursor(m_draggingHoldEnd, m_dragFieldControl.kind, m_dragFlickControl.kind));
+                setCursor(interactionCursor(m_draggingFloorEnd, m_dragFieldControl.kind, m_dragFlickControl.kind));
                 break;
             }
         } else if (!m_placingHitObject && groundArea().contains(position)
@@ -1711,8 +1697,9 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
             const PlaceTarget target = placeTargetAt(position, modifiers);
             if (target.hitObjectIndex >= 0 && m_selectedHitObjectIndexes.contains(target.hitObjectIndex)) {
                 const NoteKind kind = m_chart.notes.at(target.hitObjectIndex).kind;
-                if (kind == NoteKind::Hold || kind == NoteKind::Sky || target.flickControl.kind != FlickControlKind::None) {
-                    setCursor(interactionCursor(target.holdEnd, target.fieldControl.kind, target.flickControl.kind));
+                if (target.floorEnd || kind == NoteKind::Hold || kind == NoteKind::Sky
+                    || target.flickControl.kind != FlickControlKind::None) {
+                    setCursor(interactionCursor(target.floorEnd, target.fieldControl.kind, target.flickControl.kind));
                     break;
                 }
             }
@@ -1867,7 +1854,7 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
     m_pressPosition = event->position();
     m_pressModifiers = event->modifiers();
     m_dragMoved = false;
-    m_draggingHoldEnd = false;
+    m_draggingFloorEnd = false;
     m_selectionOnlyClick = false;
     m_placementStartMilliseconds = snappedTimeAtY(m_pressPosition.y());
     if (m_tool == EditorTool::Place && (m_pressModifiers & (Qt::AltModifier | Qt::ShiftModifier))
@@ -1901,7 +1888,7 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
     m_dragFlickControl = target.flickControl;
     m_fieldSegmentAnchor = target.segmentAnchor;
     m_dragHitObjectIndex = target.hitObjectIndex;
-    m_draggingHoldEnd = target.holdEnd;
+    m_draggingFloorEnd = target.floorEnd;
     m_draggingHitObject = m_dragHitObjectIndex >= 0;
     m_placingHitObject = m_dragHitObjectIndex < 0;
     if (m_draggingHitObject) {
@@ -1989,15 +1976,17 @@ void FlatView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
-    if ((event->position() - m_pressPosition).manhattanLength() >= kMouseDragDistance) {
+    const QPointF dragOffset = event->position() - m_pressPosition;
+    const double dragDistance = m_draggingFloorEnd ? std::abs(dragOffset.y()) : dragOffset.manhattanLength();
+    if (dragDistance >= kMouseDragDistance) {
         m_dragMoved = true;
     }
     if (m_draggingHitObject && m_dragFieldControl.kind != FieldControlKind::None) {
         emit hitObjectBatchMoveRequested(m_dragLinkedFieldIndexes, fieldHitObjectsForControlMove(event->position(), false));
     } else if (m_draggingHitObject && m_dragFlickControl.kind != FlickControlKind::None) {
         emit hitObjectMoveRequested(m_dragHitObjectIndex, flickHitObjectForControlMove(event->position()));
-    } else if (m_draggingHitObject && m_draggingHoldEnd && m_dragMoved) {
-        emit hitObjectMoveRequested(m_dragHitObjectIndex, holdHitObjectForEndMove(event->position(), false));
+    } else if (m_draggingHitObject && m_draggingFloorEnd && m_dragMoved) {
+        emit hitObjectMoveRequested(m_dragHitObjectIndex, floorHitObjectForEndMove(event->position(), false));
     } else if (m_draggingHitObject && m_dragOriginal.kind == NoteKind::Sky && m_dragMoved) {
         emit hitObjectMoveRequested(m_dragHitObjectIndex, fieldHitObjectForMove(event->position(), false));
     } else if (m_draggingHitObject && m_dragOriginal.kind == NoteKind::Flick && m_dragMoved) {
@@ -2087,8 +2076,8 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
         } else if (m_dragFlickControl.kind != FlickControlKind::None) {
             emit hitObjectMoveRequested(m_dragHitObjectIndex, flickHitObjectForControlMove(event->position()));
             emit hitObjectMoveFinished();
-        } else if (m_draggingHoldEnd && m_dragMoved) {
-            emit hitObjectMoveRequested(m_dragHitObjectIndex, holdHitObjectForEndMove(event->position(), true));
+        } else if (m_draggingFloorEnd && m_dragMoved) {
+            emit hitObjectMoveRequested(m_dragHitObjectIndex, floorHitObjectForEndMove(event->position(), true));
             emit hitObjectMoveFinished();
         } else if (m_dragOriginal.kind == NoteKind::Sky && m_dragMoved) {
             emit hitObjectMoveRequested(m_dragHitObjectIndex, fieldHitObjectForMove(event->position(), true));
@@ -2119,7 +2108,7 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
     m_draggingHitObject = false;
     m_placingHitObject = false;
     m_selectionOnlyClick = false;
-    m_draggingHoldEnd = false;
+    m_draggingFloorEnd = false;
     m_dragFieldControl = {};
     m_dragFlickControl = {};
     m_fieldSegmentAnchor = {};
@@ -2176,12 +2165,10 @@ void FlatView::wheelEvent(QWheelEvent* event) {
     } else {
         const int direction = (steps > 0.0 ? -1 : 1) * (m_invertMousewheelScroll ? -1 : 1);
         const int count = std::max(1, static_cast<int>(std::lround(std::abs(steps))));
-        for (int index = 0; index < count; ++index) {
-            if ((event->modifiers() & Qt::ShiftModifier) != 0) {
-                emit measureSeekRequested(direction);
-            } else {
-                emit divisorSeekRequested(direction);
-            }
+        if ((event->modifiers() & Qt::ShiftModifier) != 0) {
+            emit measureSeekRequested(direction * count);
+        } else {
+            emit divisorSeekRequested(direction * count);
         }
     }
     event->accept();
@@ -2326,51 +2313,30 @@ void FlatView::drawDividers(QPainter& painter, const QRectF& area) const {
             break;
         }
         const qint64 sectionEnd = pointIndex + 1 < m_timingPoints.size()
-            ? m_timingPoints.at(pointIndex + 1).timeMilliseconds
-            : std::max(m_chart.durationMilliseconds, visibleEnd);
-        const double beatDuration = 60000.0 / point.beatsPerMinute;
-        const double measureDuration = beatDuration * point.timeSignatureNumerator * 4.0
-            / std::max(point.timeSignatureDenominator, 1);
-        if (measureDuration <= 0.0 || sectionEnd < visibleStart || sectionStart > visibleEnd) {
-            continue;
-        }
-
-        const qint64 firstMeasure = std::max<qint64>(
-            0,
-            static_cast<qint64>(std::floor((visibleStart - sectionStart) / measureDuration)));
-        for (qint64 measureIndex = firstMeasure;; ++measureIndex) {
-            const double measureStart = sectionStart + measureIndex * measureDuration;
-            if (measureStart >= sectionEnd || measureStart > visibleEnd) {
+            ? m_timingPoints.at(pointIndex + 1).timeMilliseconds : std::numeric_limits<qint64>::max();
+        const TimingGrid grid(point, m_divisor);
+        for (qint64 tick = std::max<qint64>(0, grid.firstTickAtOrAfter(visibleStart));; ++tick) {
+            const qint64 time = grid.roundedTimeAtTick(tick);
+            if (time > visibleEnd || time >= sectionEnd) {
                 break;
             }
-            for (int subdivision = 0; subdivision < m_divisor; ++subdivision) {
-                const double time = measureStart + measureDuration * subdivision / m_divisor;
-                if (time < visibleStart || time > visibleEnd || time >= sectionEnd) {
-                    continue;
-                }
 
-                QColor color = palette::text;
-                double width = 0.25;
-                if (subdivision == 0) {
-                    color = palette::white;
-                    width = 0.5;
-                } else if (m_divisor % 2 == 0 && subdivision == m_divisor / 2) {
-                    color = palette::outerNoteRed;
-                } else if (m_divisor % 4 == 0 && subdivision % (m_divisor / 4) == 0) {
-                    color = palette::floorNoteBlue;
-                } else if (m_divisor % 3 == 0 && subdivision % (m_divisor / 3) == 0) {
-                    color = palette::guideYellow;
-                } else if (m_divisor % 6 == 0 && subdivision % (m_divisor / 6) == 0) {
-                    color = palette::outerNotePurple;
-                }
-                const double y = timeToY(static_cast<qint64>(std::llround(time)));
-                // Fractional-width stroked lines are inconsistent across the
-                // raster and OpenGL QPainter engines. An aligned strip keeps
-                // the paused grid crisp on either backing surface.
-                const double thickness = subdivision == 0 ? 2.0 : std::max(1.0, width);
-                const double alignedY = std::floor(y) + 0.5;
-                painter.fillRect(QRectF(area.left(), alignedY - thickness * 0.5, area.width(), thickness), color);
+            const qint64 subdivision = grid.subdivisionAtTick(tick);
+            QColor color = palette::text;
+            if (subdivision == 0) {
+                color = palette::white;
+            } else if (m_divisor % 2 == 0 && subdivision % (m_divisor / 2) == 0) {
+                color = palette::outerNoteRed;
+            } else if (m_divisor % 4 == 0 && subdivision % (m_divisor / 4) == 0) {
+                color = palette::floorNoteBlue;
+            } else if (m_divisor % 3 == 0 && subdivision % (m_divisor / 3) == 0) {
+                color = palette::guideYellow;
+            } else if (m_divisor % 6 == 0 && subdivision % (m_divisor / 6) == 0) {
+                color = palette::outerNotePurple;
             }
+            const double thickness = subdivision == 0 ? 2.0 : 1.0;
+            const double alignedY = std::floor(timeToY(time)) + 0.5;
+            painter.fillRect(QRectF(area.left(), alignedY - thickness * 0.5, area.width(), thickness), color);
         }
     }
 }

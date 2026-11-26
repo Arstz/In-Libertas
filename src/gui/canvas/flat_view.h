@@ -32,6 +32,7 @@ public:
     void setPlaybackPosition(qint64 positionMilliseconds);
     void setPlayheadColor(const QColor& color);
     void setInvertMousewheelScroll(bool inverted);
+    void setConvertNoteHoldOnResize(bool enabled);
     void setMode(FlatViewMode mode);
     void setSkyGridEnabled(bool enabled);
     void setSkyGridDivisor(int divisor);
@@ -121,7 +122,7 @@ private:
         FieldControl fieldControl;
         FlickControl flickControl;
         FieldSegmentAnchor segmentAnchor;
-        bool holdEnd = false;
+        bool floorEnd = false;
     };
 
     [[nodiscard]] QRectF groundArea() const;
@@ -133,7 +134,7 @@ private:
     [[nodiscard]] double snappedSkyMoveOffset(const QVector<double>& edges, double requestedOffset) const;
     [[nodiscard]] int laneAt(const QPointF& position) const;
     [[nodiscard]] int hitObjectAt(const QPointF& position) const;
-    [[nodiscard]] int holdEndHitObjectAt(const QPointF& position) const;
+    [[nodiscard]] int floorEndHitObjectAt(const QPointF& position) const;
     [[nodiscard]] int fieldHitObjectAt(const QPointF& position) const;
     [[nodiscard]] int flickHitObjectAt(const QPointF& position) const;
     [[nodiscard]] QVector<int> hitObjectsAt(const QPointF& position) const;
@@ -147,7 +148,7 @@ private:
     [[nodiscard]] ChartNote hitObjectForPlacement(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote floorHitObjectForDrag(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote floorHitObjectForMove(const QPointF& position, bool snapToGrid) const;
-    [[nodiscard]] ChartNote holdHitObjectForEndMove(const QPointF& position, bool snapToGrid) const;
+    [[nodiscard]] ChartNote floorHitObjectForEndMove(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote flickHitObjectForDrag(const QPointF& position) const;
     [[nodiscard]] ChartNote flickHitObjectForMove(const QPointF& position, bool snapToGrid) const;
     [[nodiscard]] ChartNote flickHitObjectForControlMove(const QPointF& position) const;
@@ -232,13 +233,14 @@ private:
     int m_clickCycleIndex = -1;
     bool m_dragMoved = false;
     bool m_skyGridEnabled = false;
-    bool m_draggingHoldEnd = false;
+    bool m_draggingFloorEnd = false;
     bool m_draggingHitObject = false;
     bool m_placingHitObject = false;
     bool m_selectionOnlyClick = false;
     bool m_marqueeSelecting = false;
     bool m_movingSelection = false;
     bool m_invertMousewheelScroll = kDefaultInvertMousewheelScroll;
+    bool m_convertNoteHoldOnResize = kDefaultConvertNoteHoldOnResize;
     bool m_dragNavigating = false;
 };
 

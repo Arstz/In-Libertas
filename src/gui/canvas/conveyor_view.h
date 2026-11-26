@@ -4,6 +4,7 @@
 #include "core/chart_project.h"
 #include "core/field_groups.h"
 #include "core/playtest_session.h"
+#include "gui/app/visual_settings.h"
 
 #include <QtCore/QPointF>
 #include <QtCore/QHash>
@@ -28,6 +29,7 @@ public:
     void setSongCard(const infalsus::ChartMetadata& metadata, infalsus::Difficulty difficulty,
         infalsus::DifficultyMetadata difficultyMetadata, QImage jacket);
     void setNoteSpeed(double noteSpeed);
+    void setNoteSize(double size);
     void setPlaytestLaneKeys(const std::array<Qt::Key, 6>& keys);
     void setPlaytestAutoplayKey(Qt::Key key);
     void setPlaybackPosition(qint64 positionMilliseconds);
@@ -71,6 +73,7 @@ private:
     void drawConveyor(QPainter& painter);
     void ensureMeasureMarkers();
     void drawDivisors(QPainter& painter);
+    [[nodiscard]] double floorTapEndProgress(double startProgress) const;
     void drawFloorNote(QPainter& painter, const ChartNote& note);
     void drawFlick(QPainter& painter, const ChartNote& note);
     void ensureFieldBoundaries();
@@ -112,6 +115,7 @@ private:
     qint64 m_playbackPositionMilliseconds = 0;
     qint64 m_measureChartEndMilliseconds = 0;
     double m_noteSpeed = 2.5;
+    double m_noteSize = infalsus::gui::kDefaultNoteSize;
     double m_frameScrollCoordinate = 0.0;
     bool m_noteIndexesDirty = true;
     bool m_fieldBoundariesDirty = true;

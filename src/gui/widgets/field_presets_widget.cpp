@@ -283,8 +283,7 @@ qint64 FieldPresetsWidget::durationMilliseconds() const {
         }
         point = candidate;
     }
-    return std::max<qint64>(1, std::llround(detail::measureDurationMilliseconds(point)
-        / m_divisor->currentData().toInt()));
+    return std::max<qint64>(1, std::llround(divisorDurationMilliseconds(point, m_divisor->currentData().toInt())));
 }
 
 void FieldPresetsWidget::addSelection() {

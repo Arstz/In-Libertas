@@ -4,7 +4,7 @@
 
 #include <QtCore/QObject>
 
-#include <chrono>
+#include <optional>
 
 namespace infalsus::gui {
 
@@ -80,6 +80,8 @@ public:
     void removeSpeedEvent(int index);
     void removeSelection();
     void setPlaybackPosition(qint64 positionMilliseconds);
+    void updatePlaybackPosition(qint64 positionMilliseconds);
+    void resetGridSeek();
     void setDivisor(int divisor);
     void increaseDivisor();
     void decreaseDivisor();
@@ -191,9 +193,14 @@ private:
         EventSnapshot eventsAfter;
     };
 
+    struct GridSeek {
+        qint64 position;
+        std::optional<int> divisor;
+    };
+
     [[nodiscard]] const TimingPoint& timingPointAt(qint64 positionMilliseconds) const;
     [[nodiscard]] qint64 closestDivisorTime(qint64 positionMilliseconds) const;
-    void seekByGrid(int direction, int divisor);
+    void seekByGrid(int direction, std::optional<int> divisor);
     [[nodiscard]] bool isValidHitObjectIndex(int index) const;
     [[nodiscard]] static bool hitObjectsEqual(const ChartNote& first, const ChartNote& second);
     [[nodiscard]] EventSnapshot eventSnapshot() const;
@@ -214,6 +221,7 @@ private:
     QVector<SpeedEvent> m_speedEvents;
     QVector<BookmarkEvent> m_bookmarks;
     qint64 m_playbackPositionMilliseconds = 0;
+    std::optional<GridSeek> m_lastBackwardGridSeek;
     int m_divisor = 4;
     Difficulty m_difficulty = Difficulty::Minimal;
     EditorTool m_tool = EditorTool::Place;
@@ -243,9 +251,6 @@ private:
     int m_selectedSpeedEvent = -1;
     QVector<int> m_selectedSpeedEvents;
     QVector<int> m_selectedBookmarks;
-    qint64 m_lastScrubTargetMilliseconds = -1;
-    std::chrono::steady_clock::time_point m_lastScrubTime;
-    int m_lastScrubDirection = 0;
     bool m_activeMoveMergesAdd = false;
 };
 

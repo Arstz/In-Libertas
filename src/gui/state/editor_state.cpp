@@ -19,7 +19,6 @@ namespace infalsus::gui {
 
 namespace {
 
-constexpr std::array<int, 12> kDivisors{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64};
 constexpr std::uint32_t kFieldLeftEasingMask = 0x1CU;
 constexpr std::uint32_t kFieldRightEasingMask = 0xE0U;
 constexpr std::uint32_t kFieldLeftSineOut = 0x08U;
@@ -28,24 +27,21 @@ constexpr std::uint32_t kFieldRightSineOut = 0x40U;
 constexpr std::uint32_t kFieldRightSineIn = 0x80U;
 constexpr std::uint32_t kFlickRight = 0x400U;
 constexpr std::uint32_t kFlickLeft = 0x1000U;
-constexpr qint64 kMinimumFieldDurationMilliseconds = 2;
+constexpr qint64 kMinimumSustainedDurationMilliseconds = 2;
 
 [[nodiscard]] bool isSkyHitObject(const ChartNote& hitObject) {
     return hitObject.kind == NoteKind::Sky || hitObject.kind == NoteKind::Flick;
 }
 
-void constrainFieldDuration(ChartNote& hitObject) {
-    if (hitObject.kind == NoteKind::Sky) {
-        hitObject.endMilliseconds = std::max(
-            hitObject.endMilliseconds,
-            hitObject.startMilliseconds + kMinimumFieldDurationMilliseconds);
-    }
+void constrainHitObjectDuration(ChartNote& hitObject) {
+    const qint64 minimumDuration = hitObject.kind == NoteKind::Hold || hitObject.kind == NoteKind::Sky
+        ? kMinimumSustainedDurationMilliseconds : 0;
+    hitObject.endMilliseconds = std::max(hitObject.endMilliseconds, hitObject.startMilliseconds + minimumDuration);
 }
 
 void normalizeHitObject(ChartNote& hitObject) {
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
-    hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-    constrainFieldDuration(hitObject);
+    constrainHitObjectDuration(hitObject);
     hitObject.startX = std::clamp(hitObject.startX, 0.0, 1.0);
     hitObject.endX = std::clamp(hitObject.endX, 0.0, 1.0);
     hitObject.startWidth = std::clamp(hitObject.startWidth, 0.01, 1.0);
@@ -245,6 +241,7 @@ EditorState::EditorState(QObject* parent)
     : QObject(parent) {
     m_timingPoints.append(TimingPoint{});
     m_speedEvents.append(SpeedEvent{});
+    connect(this, &EditorState::divisorChanged, this, &EditorState::resetGridSeek);
 }
 
 const ChartData& EditorState::chart() const {
@@ -277,12 +274,8 @@ int EditorState::divisor() const {
 
 qint64 EditorState::divisorDurationMilliseconds() const {
     const TimingPoint& point = timingPointAt(m_playbackPositionMilliseconds);
-    const double beatDurationMilliseconds = 60000.0 / point.beatsPerMinute;
-    const double measureDurationMilliseconds = beatDurationMilliseconds * point.timeSignatureNumerator * 4.0
-        / std::max(point.timeSignatureDenominator, 1);
-
     return std::max<qint64>(1, static_cast<qint64>(std::llround(
-        measureDurationMilliseconds / m_divisor)));
+        infalsus::divisorDurationMilliseconds(point, m_divisor))));
 }
 
 Difficulty EditorState::difficulty() const {
@@ -340,6 +333,7 @@ int EditorState::selectedEventCount() const {
 
 void EditorState::setChart(ChartData chart) {
     m_chart = std::move(chart);
+    resetGridSeek();
     m_playbackPositionMilliseconds = std::clamp(m_playbackPositionMilliseconds, qint64(0), m_chart.durationMilliseconds);
     m_undoHistory.clear();
     m_redoHistory.clear();
@@ -575,17 +569,15 @@ QString EditorState::interpolateSelectedSpeedEvents(const SpeedInterpolationOpti
             if (sectionEnd <= first.timeMilliseconds || point.timeMilliseconds >= second.timeMilliseconds) {
                 continue;
             }
-            const double step = detail::measureDurationMilliseconds(point) / options.divisor;
-            qint64 tick = std::max<qint64>(0, static_cast<qint64>(std::floor(
-                (first.timeMilliseconds - point.timeMilliseconds) / step)));
+            const TimingGrid grid(point, options.divisor);
+            qint64 tick = grid.firstTickAtOrAfter(std::max(point.timeMilliseconds, first.timeMilliseconds + 1));
             while (true) {
-                const qint64 time = point.timeMilliseconds + static_cast<qint64>(std::llround(tick * step));
+                const qint64 time = grid.roundedTimeAtTick(tick);
                 if (time >= sectionEnd) {
                     break;
                 }
                 addEvent(time);
-                tick = std::max(tick + 1, static_cast<qint64>(std::ceil(
-                    (static_cast<double>(time - point.timeMilliseconds) + 0.5) / step)));
+                tick = grid.firstTickAtOrAfter(time + 1);
             }
         }
     }
@@ -697,6 +689,11 @@ void EditorState::removeLaneEvent(const int index) {
 }
 
 void EditorState::setPlaybackPosition(const qint64 positionMilliseconds) {
+    resetGridSeek();
+    updatePlaybackPosition(positionMilliseconds);
+}
+
+void EditorState::updatePlaybackPosition(const qint64 positionMilliseconds) {
     const qint64 clampedPosition = std::clamp(positionMilliseconds, qint64(0), m_chart.durationMilliseconds);
     if (m_playbackPositionMilliseconds == clampedPosition) {
         return;
@@ -705,8 +702,12 @@ void EditorState::setPlaybackPosition(const qint64 positionMilliseconds) {
     emit playbackPositionChanged(m_playbackPositionMilliseconds);
 }
 
+void EditorState::resetGridSeek() {
+    m_lastBackwardGridSeek.reset();
+}
+
 void EditorState::setDivisor(const int divisor) {
-    if (m_divisor == divisor || std::find(kDivisors.begin(), kDivisors.end(), divisor) == kDivisors.end()) {
+    if (m_divisor == divisor || std::find(kSupportedDivisors.begin(), kSupportedDivisors.end(), divisor) == kSupportedDivisors.end()) {
         return;
     }
     m_divisor = divisor;
@@ -714,15 +715,15 @@ void EditorState::setDivisor(const int divisor) {
 }
 
 void EditorState::increaseDivisor() {
-    const auto iterator = std::find(kDivisors.begin(), kDivisors.end(), m_divisor);
-    if (iterator != kDivisors.end() && std::next(iterator) != kDivisors.end()) {
+    const auto iterator = std::find(kSupportedDivisors.begin(), kSupportedDivisors.end(), m_divisor);
+    if (iterator != kSupportedDivisors.end() && std::next(iterator) != kSupportedDivisors.end()) {
         setDivisor(*std::next(iterator));
     }
 }
 
 void EditorState::decreaseDivisor() {
-    const auto iterator = std::find(kDivisors.begin(), kDivisors.end(), m_divisor);
-    if (iterator != kDivisors.begin() && iterator != kDivisors.end()) {
+    const auto iterator = std::find(kSupportedDivisors.begin(), kSupportedDivisors.end(), m_divisor);
+    if (iterator != kSupportedDivisors.begin() && iterator != kSupportedDivisors.end()) {
         setDivisor(*std::prev(iterator));
     }
 }
@@ -732,45 +733,28 @@ void EditorState::seekByDivisor(const int direction) {
 }
 
 void EditorState::seekByMeasure(const int direction) {
-    seekByGrid(direction, 1);
+    seekByGrid(direction, std::nullopt);
 }
 
-void EditorState::seekByGrid(const int direction, const int divisor) {
-    if (direction == 0 || m_timingPoints.isEmpty()) {
+void EditorState::seekByGrid(const int direction, const std::optional<int> divisor) {
+    if (direction == 0) {
         return;
     }
-    constexpr double kGridTolerance = 0.0001;
-    constexpr auto kRepeatWindow = std::chrono::milliseconds(50);
-    const TimingPoint& point = timingPointAt(m_playbackPositionMilliseconds);
-    const double beatDuration = 60000.0 / std::max(point.beatsPerMinute, 1.0);
-    const double measureDuration = beatDuration * std::max(point.timeSignatureNumerator, 1) * 4.0
-        / std::max(point.timeSignatureDenominator, 1);
-    const double tickDuration = measureDuration / divisor;
-    const double gridPosition = static_cast<double>(m_playbackPositionMilliseconds - point.timeMilliseconds) / tickDuration;
-    const double nearestTick = std::round(gridPosition);
-    const qint64 nearestTime = point.timeMilliseconds
-        + static_cast<qint64>(std::llround(nearestTick * tickDuration));
-    const bool isOnGrid = m_playbackPositionMilliseconds == nearestTime;
-    const double targetTick = isOnGrid
-        ? nearestTick + direction
-        : direction > 0
-            ? std::floor(gridPosition + kGridTolerance) + 1.0
-            : std::ceil(gridPosition - kGridTolerance) - 1.0;
-    qint64 target = point.timeMilliseconds + static_cast<qint64>(std::llround(targetTick * tickDuration));
-    const auto now = std::chrono::steady_clock::now();
-    const bool isStuck = std::abs(target - m_playbackPositionMilliseconds) < 1;
-    const bool isRepeat = m_lastScrubDirection == direction
-        && now - m_lastScrubTime < kRepeatWindow
-        && target == m_lastScrubTargetMilliseconds;
-    if (isStuck || isRepeat) {
-        target = point.timeMilliseconds + static_cast<qint64>(std::llround(
-            (targetTick + direction) * tickDuration));
+    const int step = std::clamp(direction, -1, 1);
+    qint64 target = adjacentGridTime(m_timingPoints, m_playbackPositionMilliseconds, step, divisor);
+    if (step < 0 && m_lastBackwardGridSeek && m_lastBackwardGridSeek->divisor == divisor
+        && target == m_lastBackwardGridSeek->position) {
+        target = adjacentGridTime(m_timingPoints, target, step, divisor);
     }
-    target = std::clamp(target, qint64(0), m_chart.durationMilliseconds);
-    m_lastScrubTime = now;
-    m_lastScrubTargetMilliseconds = target;
-    m_lastScrubDirection = direction;
-    setPlaybackPosition(target);
+    for (int remaining = direction - step; remaining != 0; remaining -= step) {
+        target = adjacentGridTime(m_timingPoints, target, step, divisor);
+    }
+    if (step < 0) {
+        m_lastBackwardGridSeek = GridSeek{target, divisor};
+        updatePlaybackPosition(target);
+    } else {
+        setPlaybackPosition(target);
+    }
 }
 
 void EditorState::setDifficulty(const Difficulty difficulty) {
@@ -800,8 +784,7 @@ void EditorState::setFlatViewMode(const FlatViewMode mode) {
 void EditorState::addHitObject(ChartNote hitObject) {
     const QVector<int> selectionBefore = m_selectedHitObjects;
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
-    hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-    constrainFieldDuration(hitObject);
+    constrainHitObjectDuration(hitObject);
     if (hitObject.id == 0) {
         hitObject.id = m_nextHitObjectId++;
     } else {
@@ -857,6 +840,9 @@ void EditorState::copyHitObjects(QVector<ChartNote> hitObjects) {
     copiedIndexes.reserve(hitObjects.size());
     for (ChartNote& hitObject : hitObjects) {
         const int index = m_chart.notes.size();
+        if (hitObject.kind == NoteKind::Hold) {
+            constrainHitObjectDuration(hitObject);
+        }
         hitObject.id = m_nextHitObjectId++;
         insertHitObject(index, hitObject);
         entry.batchIndexes.append(index);
@@ -1128,7 +1114,7 @@ void EditorState::resnapAllHitObjects() {
             if (snapped.endMilliseconds <= snapped.startMilliseconds) {
                 snapped.endMilliseconds = nextValidDivisorTime(m_timingPoints, snapped.startMilliseconds);
             }
-            constrainFieldDuration(snapped);
+            constrainHitObjectDuration(snapped);
         }
         if (hitObjectsEqual(original, snapped)) {
             continue;
@@ -1425,8 +1411,7 @@ void EditorState::moveHitObject(const int index, ChartNote hitObject) {
         hitObject.id = m_chart.notes.at(index).id;
     }
     hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
-    hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-    constrainFieldDuration(hitObject);
+    constrainHitObjectDuration(hitObject);
     replaceHitObject(index, hitObject, false);
 }
 
@@ -1514,8 +1499,7 @@ void EditorState::moveHitObjectBatch(const QVector<int> indexes, const QVector<C
         ChartNote hitObject = hitObjects.at(itemIndex);
         hitObject.id = m_chart.notes.at(chartIndex).id;
         hitObject.startMilliseconds = std::max<qint64>(0, hitObject.startMilliseconds);
-        hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
-        constrainFieldDuration(hitObject);
+        constrainHitObjectDuration(hitObject);
         if (hitObjectsEqual(m_chart.notes.at(chartIndex), hitObject)) {
             continue;
         }
@@ -1726,16 +1710,8 @@ const TimingPoint& EditorState::timingPointAt(const qint64 positionMilliseconds)
 }
 
 qint64 EditorState::closestDivisorTime(const qint64 positionMilliseconds) const {
-    const TimingPoint& point = timingPointAt(positionMilliseconds);
-    const double beatDurationMilliseconds = 60000.0 / std::max(point.beatsPerMinute, 1.0);
-    const double measureDurationMilliseconds = beatDurationMilliseconds * point.timeSignatureNumerator * 4.0
-        / std::max(point.timeSignatureDenominator, 1);
-    const double divisorDurationMilliseconds = measureDurationMilliseconds / m_divisor;
-    const double divisorIndex = std::round(
-        static_cast<double>(positionMilliseconds - point.timeMilliseconds) / divisorDurationMilliseconds);
-
     return std::clamp(
-        point.timeMilliseconds + static_cast<qint64>(std::llround(divisorIndex * divisorDurationMilliseconds)),
+        infalsus::closestDivisorTime(m_timingPoints, positionMilliseconds, m_divisor),
         qint64(0),
         m_chart.durationMilliseconds);
 }
