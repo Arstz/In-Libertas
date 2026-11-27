@@ -25,8 +25,6 @@ constexpr std::uint32_t kFieldLeftSineOut = 0x08U;
 constexpr std::uint32_t kFieldLeftSineIn = 0x10U;
 constexpr std::uint32_t kFieldRightSineOut = 0x40U;
 constexpr std::uint32_t kFieldRightSineIn = 0x80U;
-constexpr std::uint32_t kFlickRight = 0x400U;
-constexpr std::uint32_t kFlickLeft = 0x1000U;
 constexpr qint64 kMinimumSustainedDurationMilliseconds = 2;
 
 [[nodiscard]] bool isSkyHitObject(const ChartNote& hitObject) {

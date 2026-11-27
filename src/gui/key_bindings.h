@@ -13,7 +13,7 @@ class QWidget;
 namespace infalsus::gui {
 
 enum class KeyCommand {
-    NewProject, OpenProject, ImportSpc, SaveProject, SaveProjectAs, ExportProject,
+    NewProject, OpenProject, ImportSpc, ImportKsh, SaveProject, SaveProjectAs, ExportProject,
     Undo, Redo, Cut, Copy, Paste, DeleteSelection, SelectAll, MirrorSelection,
     FlipSelectionVertically, ToggleFieldGrouping, ResnapAll, RefreshVerification,
     PlaceTool, SelectTool, MoveTool, ZoomIn, ZoomInAlternate, ZoomOut, ZoomOutAlternate,

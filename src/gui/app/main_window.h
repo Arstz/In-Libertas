@@ -19,6 +19,7 @@ class HitsoundBank;
 class QAudioFormat;
 class QComboBox;
 class QDoubleSpinBox;
+class QFileInfo;
 class QLabel;
 class QMenu;
 class QPropertyAnimation;
@@ -83,7 +84,10 @@ private:
     [[nodiscard]] bool confirmDiscardUnsavedChanges(const QString& action);
     void markProjectDirty();
     void importSpc();
+    void importKshChart();
     void loadChartFile(const QString& chartPath);
+    void loadImportedProject(const QFileInfo& fileInfo, ChartProject project, Difficulty difficulty,
+        const QByteArray& audio = {}, const QByteArray& jacket = {});
     void createProject();
     void openProject();
     void openRecentProject(const QString& path);
@@ -161,7 +165,6 @@ private:
     QDoubleSpinBox* m_noteSpeedSelector = nullptr;
     QLabel* m_timingPositionLabel = nullptr;
     QLabel* m_statusLabel = nullptr;
-    QString m_folderPath;
     ChartProject m_project;
     QString m_projectPath;
     QByteArray m_projectSongData;

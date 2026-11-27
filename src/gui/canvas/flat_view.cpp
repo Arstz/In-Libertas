@@ -1,5 +1,7 @@
 #include "gui/canvas/flat_view.h"
 
+#include "core/field_easing.h"
+
 #include "core/timing_grid.h"
 #include "gui/app/game_palette.h"
 #include "gui/widgets/splitter_grip.h"
@@ -50,7 +52,6 @@ constexpr qint64 kTapDurationMilliseconds = 30;
 constexpr qint64 kHoldPlacementThresholdMilliseconds = 80;
 constexpr double kFloorEndEdgeHitDistance = 8.0;
 constexpr double kDefaultFieldWidth = 0.18;
-constexpr double kMinimumFlickWidth = 0.06;
 constexpr double kMouseDragDistance = 4.0;
 constexpr int kFieldSamples = 18;
 constexpr int kFieldFillAlpha = 105;
@@ -58,7 +59,6 @@ constexpr double kFieldContourWidth = 1.5;
 constexpr double kMillisecondsPerSecond = 1000.0;
 constexpr double kFieldControlRadius = 5.0;
 constexpr double kFieldEdgeHitDistance = 10.0;
-constexpr double kMinimumFieldWidth = 0.01;
 constexpr double kFieldSnapCoordinateDistance = 0.035;
 constexpr double kSkyGridSnapDistancePixels = 8.0;
 constexpr int kFloorLaneCount = 6;
@@ -67,12 +67,10 @@ constexpr std::uint32_t kFieldLinear = 0x24U;
 constexpr int kFlickTrailSamples = 18;
 constexpr double kFlickTriangleHeight = 45.0;
 constexpr double kMinimumFlickTrailWidth = 0.06;
-constexpr std::uint32_t kCenterSineOut = 0x08U;
-constexpr std::uint32_t kCenterSineIn = 0x10U;
-constexpr std::uint32_t kWidthSineOut = 0x40U;
-constexpr std::uint32_t kWidthSineIn = 0x80U;
-constexpr std::uint32_t kFlickRight = 0x400U;
-constexpr std::uint32_t kFlickLeft = 0x1000U;
+constexpr auto kCenterSineOut = fieldEasingFlag(FieldEasing::SineOut, false);
+constexpr auto kCenterSineIn = fieldEasingFlag(FieldEasing::SineIn, false);
+constexpr auto kWidthSineOut = fieldEasingFlag(FieldEasing::SineOut, true);
+constexpr auto kWidthSineIn = fieldEasingFlag(FieldEasing::SineIn, true);
 constexpr int kInactiveOpacity = 50;
 
 struct WaveformEventLabel {
@@ -262,19 +260,7 @@ struct SkySpan {
 }
 
 [[nodiscard]] double easingFor(const std::uint32_t auxiliary, const bool rightSide, const double progress) {
-    const std::uint32_t mode = rightSide ? (auxiliary & 0xE0U) : (auxiliary & 0x1CU);
-    const double clampedProgress = std::clamp(progress, 0.0, 1.0);
-    const std::uint32_t sineOut = rightSide ? kWidthSineOut : kCenterSineOut;
-    const std::uint32_t sineIn = rightSide ? kWidthSineIn : kCenterSineIn;
-
-    if (mode == sineOut) {
-        return std::sin(clampedProgress * std::numbers::pi * 0.5);
-    }
-    if (mode == sineIn) {
-        return 1.0 - std::cos(clampedProgress * std::numbers::pi * 0.5);
-    }
-
-    return clampedProgress;
+    return fieldEdgeProgress(auxiliary, rightSide, progress);
 }
 
 [[nodiscard]] double fieldLeftEdge(const ChartNote& hitObject, const bool atStart) {

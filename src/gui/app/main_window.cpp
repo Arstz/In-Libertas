@@ -20,6 +20,7 @@
 #include "gui/widgets/monospace_time_label.h"
 #include "gui/widgets/sky_grid_controls.h"
 #include "core/chart_document.h"
+#include "core/ksh_import.h"
 #include "core/project_document.h"
 #include "core/project_assets.h"
 #include "core/project_format.h"
@@ -51,8 +52,11 @@
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QComboBox>
+#include <QtWidgets/QDialog>
+#include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QDoubleSpinBox>
 #include <QtWidgets/QFileDialog>
+#include <QtWidgets/QFormLayout>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QInputDialog>
 #include <QtWidgets/QLineEdit>
@@ -78,6 +82,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <optional>
 #include <utility>
 
 #ifndef NOMINMAX
@@ -165,6 +170,56 @@ constexpr int kToolButtonTextPadding = 8;
     const QString safeFileName = QFileInfo(fileName).fileName();
     return QUrl(QStringLiteral("memory://project/%1").arg(
         QString::fromLatin1(QUrl::toPercentEncoding(safeFileName))));
+}
+
+[[nodiscard]] QString chooseChartToImport(QWidget* parent, const QString& title, const QString& filter,
+    const QString& directoryKey) {
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
+    const QString directory = settings.value(directoryKey).toString();
+    const QString path = QFileDialog::getOpenFileName(parent, title,
+        !directory.isEmpty() && QDir(directory).exists() ? directory : QString(), filter);
+    if (!path.isEmpty()) {
+        settings.setValue(directoryKey, QFileInfo(path).absolutePath());
+    }
+
+    return path;
+}
+
+[[nodiscard]] std::optional<KshImportOptions> chooseKshImportOptions(QWidget* parent, const QString& title) {
+    QSettings settings(QStringLiteral("InLibertas"), QStringLiteral("In Libertas"));
+    const QString widthSetting = QStringLiteral("import/ksh_field_width_lanes");
+    const QString prioritySetting = QStringLiteral("import/ksh_flick_priority");
+    const double savedWidth = settings.value(widthSetting, kDefaultKshFieldWidthLanes).toDouble();
+    const auto savedPriority = settings.value(prioritySetting, static_cast<int>(KshImportOptions{}.flickPriority)).toInt();
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+
+    auto* form = new QFormLayout(&dialog);
+    auto* width = new QDoubleSpinBox(&dialog);
+    width->setDecimals(2);
+    width->setRange(kMinimumKshFieldWidthLanes, kMaximumKshFieldWidthLanes);
+    width->setValue(std::isfinite(savedWidth) ? savedWidth : kDefaultKshFieldWidthLanes);
+    form->addRow(QStringLiteral("Single-laser field width (lanes)"), width);
+
+    auto* priority = new QComboBox(&dialog);
+    priority->addItem(QStringLiteral("Blue"), static_cast<int>(KshLaser::Blue));
+    priority->addItem(QStringLiteral("Red"), static_cast<int>(KshLaser::Red));
+    priority->setCurrentIndex(std::max(0, priority->findData(savedPriority)));
+    form->addRow(QStringLiteral("Laser priority"), priority);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Import"));
+    form->addRow(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+        return std::nullopt;
+    }
+    settings.setValue(widthSetting, width->value());
+    settings.setValue(prioritySetting, priority->currentData());
+
+    return KshImportOptions{.flickPriority = static_cast<KshLaser>(priority->currentData().toInt()),
+        .fieldWidthLanes = width->value()};
 }
 
 struct ImportedSpcIdentity {
@@ -632,6 +687,7 @@ void MainWindow::buildInterface() {
     auto* openProjectAction = fileMenu->addAction(QStringLiteral("Open project..."));
     m_recentProjectMenu = fileMenu->addMenu(QStringLiteral("Open recent project"));
     auto* importSpcAction = fileMenu->addAction(QStringLiteral("Import SPC..."));
+    auto* importKshAction = fileMenu->addAction(QStringLiteral("Import KSH..."));
     auto* saveProjectAction = fileMenu->addAction(QStringLiteral("Save project"));
     auto* saveProjectAsAction = fileMenu->addAction(QStringLiteral("Save project as..."));
     auto* exportProjectAction = fileMenu->addAction(QStringLiteral("Export project..."));
@@ -661,6 +717,7 @@ void MainWindow::buildInterface() {
     m_keyBindings->registerAction(KeyCommand::NewProject, newProjectAction);
     m_keyBindings->registerAction(KeyCommand::OpenProject, openProjectAction);
     m_keyBindings->registerAction(KeyCommand::ImportSpc, importSpcAction);
+    m_keyBindings->registerAction(KeyCommand::ImportKsh, importKshAction);
     m_keyBindings->registerAction(KeyCommand::SaveProject, saveProjectAction);
     m_keyBindings->registerAction(KeyCommand::SaveProjectAs, saveProjectAsAction);
     m_keyBindings->registerAction(KeyCommand::ExportProject, exportProjectAction);
@@ -672,6 +729,7 @@ void MainWindow::buildInterface() {
     connect(newProjectAction, &QAction::triggered, this, &MainWindow::createProject);
     connect(openProjectAction, &QAction::triggered, this, &MainWindow::openProject);
     connect(importSpcAction, &QAction::triggered, this, &MainWindow::importSpc);
+    connect(importKshAction, &QAction::triggered, this, &MainWindow::importKshChart);
     connect(saveProjectAction, &QAction::triggered, this, &MainWindow::saveProject);
     connect(saveProjectAsAction, &QAction::triggered, this, &MainWindow::saveProjectAs);
     connect(exportProjectAction, &QAction::triggered, this, &MainWindow::exportProject);
@@ -1618,10 +1676,58 @@ void MainWindow::importSpc() {
     if (!confirmDiscardUnsavedChanges(QStringLiteral("importing an SPC"))) {
         return;
     }
-    const QString chartPath = QFileDialog::getOpenFileName(this, QStringLiteral("Import SPC"), m_folderPath,
-        QStringLiteral("In Falsus chart (*.spc);;All files (*)"));
+    const QString chartPath = chooseChartToImport(this, QStringLiteral("Import SPC"),
+        QStringLiteral("In Falsus chart (*.spc);;All files (*)"), QStringLiteral("import/spc_directory"));
     if (!chartPath.isEmpty()) {
         loadChartFile(chartPath);
+    }
+}
+
+void MainWindow::importKshChart() {
+    const QString title = QStringLiteral("Import KSH");
+    const QString chartPath = chooseChartToImport(this, title, QStringLiteral("K-Shoot MANIA chart (*.ksh)"),
+        QStringLiteral("import/ksh_directory"));
+    if (chartPath.isEmpty()) {
+        return;
+    }
+    const auto options = chooseKshImportOptions(this, title);
+    if (!options) {
+        return;
+    }
+    KshImportResult result = importKsh(chartPath, *options);
+    if (!result.error.isEmpty()) {
+        QMessageBox::warning(this, title, result.error);
+        return;
+    }
+    const QFileInfo fileInfo(chartPath);
+    if (result.songPath.isEmpty()) {
+        result.songPath = QFileDialog::getOpenFileName(this, QStringLiteral("Choose project song"),
+            fileInfo.absolutePath(), audioFileDialogFilter());
+        if (result.songPath.isEmpty()) {
+            return;
+        }
+    }
+    if (result.jacketPath.isEmpty()) {
+        result.jacketPath = QFileDialog::getOpenFileName(this, QStringLiteral("Choose jacket"),
+            fileInfo.absolutePath(), imageFileDialogFilter());
+        if (result.jacketPath.isEmpty()) {
+            return;
+        }
+    }
+    if (!confirmDiscardUnsavedChanges(QStringLiteral("importing a KSH chart"))) {
+        return;
+    }
+    const Difficulty difficulty = result.chart.difficulty;
+    ChartProject project = blankProject(result.metadata.songName);
+    QByteArray audio;
+    QByteArray jacket;
+
+    project.metadata = std::move(result.metadata);
+    project.songPath = std::move(result.songPath);
+    project.jacketPath = std::move(result.jacketPath);
+    project.difficulties.at(difficultyIndex(difficulty)) = std::move(result.chart);
+    if (normalizeAssets(&project, &audio, &jacket, true)) {
+        loadImportedProject(fileInfo, std::move(project), difficulty, audio, jacket);
     }
 }
 
@@ -1632,43 +1738,49 @@ void MainWindow::loadChartFile(const QString& chartPath) {
         return;
     }
 
-    const QFileInfo chartFileInfo(chartPath);
-    const ImportedSpcIdentity identity = identityForImportedSpc(chartFileInfo);
-    m_folderPath = chartFileInfo.absolutePath();
-    const QString audioPath = audioPathForFolder(m_folderPath);
-    m_projectSongData.clear();
-    m_projectJacketData.clear();
-    m_projectJacketImage = {};
+    const QFileInfo fileInfo(chartPath);
+    const ImportedSpcIdentity identity = identityForImportedSpc(fileInfo);
+    ChartProject project = blankProject(identity.songName);
+    DifficultyChart& chart = project.difficulties.at(difficultyIndex(identity.difficulty));
+
+    project.songPath = audioPathForFolder(fileInfo.absolutePath());
+    project.jacketPath = jacketPathForImportedSpc(fileInfo, identity.songName);
+    chart.hitObjects = result.chart;
+    chart.timingPoints = result.timingPoints;
+    chart.laneEvents = result.laneEvents;
+    chart.speedEvents = result.speedEvents;
+    loadImportedProject(fileInfo, std::move(project), identity.difficulty);
+}
+
+void MainWindow::loadImportedProject(const QFileInfo& fileInfo, ChartProject project, const Difficulty difficulty,
+    const QByteArray& audio, const QByteArray& jacket) {
     cancelInitialTimingAnalysis();
-    m_project = blankProject(identity.songName);
-    m_project.songPath = audioPath;
-    m_project.jacketPath = jacketPathForImportedSpc(chartFileInfo, identity.songName);
-    DifficultyChart& importedDifficulty = m_project.difficulties.at(difficultyIndex(identity.difficulty));
-    importedDifficulty.hitObjects = result.chart;
-    importedDifficulty.timingPoints = result.timingPoints;
-    importedDifficulty.laneEvents = result.laneEvents;
-    importedDifficulty.speedEvents = result.speedEvents;
+    m_project = std::move(project);
+    if (audio.isEmpty()) {
+        m_projectSongData.clear();
+        m_projectJacketData.clear();
+        m_projectJacketImage = {};
+    } else {
+        loadProjectAssets(m_project.songPath, audio, m_project.jacketPath, jacket);
+    }
     m_projectPath.clear();
     m_hasProject = true;
-    m_loadedDifficulty = identity.difficulty;
+    m_loadedDifficulty = difficulty;
     m_loadingProject = true;
     m_metadata->setChartId({});
     m_metadata->setJacketAvailable(!m_project.jacketPath.isEmpty());
     m_metadata->setJacketEditingEnabled(true);
-    m_metadata->setDifficultyMetadata(importedDifficulty.metadata);
     m_state->setMetadata(m_project.metadata);
-    m_state->setDifficulty(identity.difficulty);
-    m_state->setChart(importedDifficulty.hitObjects);
-    m_state->setTimingPoints(importedDifficulty.timingPoints);
-    m_state->setLaneEvents(importedDifficulty.laneEvents);
-    m_state->setSpeedEvents(importedDifficulty.speedEvents);
-    m_state->setBookmarks(importedDifficulty.bookmarks);
-    m_state->setPlaybackPosition(0);
-    m_loadingProject = false;
+    m_state->setDifficulty(difficulty);
+    loadDifficulty(difficulty);
     m_projectDirty = true;
-    m_playback->setAudioSource(audioPath.isEmpty() ? QUrl() : QUrl::fromLocalFile(audioPath));
+    if (audio.isEmpty()) {
+        m_playback->setAudioSource(m_project.songPath.isEmpty() ? QUrl() : QUrl::fromLocalFile(m_project.songPath));
+    } else {
+        m_playback->setAudioData(m_projectSongData, inMemoryAudioHint(m_project.songPath));
+    }
     updateViewerSongCard();
-    m_statusLabel->setText(QStringLiteral("Imported %1 as a new unsaved project.").arg(chartFileInfo.fileName()));
+    m_statusLabel->setText(QStringLiteral("Imported %1 as a new unsaved project.").arg(fileInfo.fileName()));
 }
 
 bool MainWindow::readProjectJacket(QImage* image, QString* error) const {

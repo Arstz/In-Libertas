@@ -35,6 +35,7 @@ constexpr CommandDefinition kCommands[]{
     {KeyCommand::NewProject, "new_project", "File / New project", "Ctrl+N"},
     {KeyCommand::OpenProject, "open_project", "File / Open project", "Ctrl+O"},
     {KeyCommand::ImportSpc, "import_spc", "File / Import SPC", ""},
+    {KeyCommand::ImportKsh, "import_ksh", "File / Import KSH", ""},
     {KeyCommand::SaveProject, "save_project", "File / Save project", "Ctrl+S"},
     {KeyCommand::SaveProjectAs, "save_project_as", "File / Save project as", "Ctrl+Shift+S"},
     {KeyCommand::ExportProject, "export_project", "File / Export project", ""},
