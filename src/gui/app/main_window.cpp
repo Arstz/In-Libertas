@@ -987,20 +987,20 @@ void MainWindow::buildToolBar() {
     auto* actions = new QActionGroup(m_toolsToolbar);
     auto* placeAction = m_toolsToolbar->addAction(QStringLiteral("Place"));
     auto* selectAction = m_toolsToolbar->addAction(QStringLiteral("Select"));
-    auto* moveAction = m_toolsToolbar->addAction(QStringLiteral("Move"));
+    auto* transformAction = m_toolsToolbar->addAction(QStringLiteral("Transform"));
     m_keyBindings->registerAction(KeyCommand::PlaceTool, placeAction, false);
     m_keyBindings->registerAction(KeyCommand::SelectTool, selectAction, false);
-    m_keyBindings->registerAction(KeyCommand::MoveTool, moveAction, false);
+    m_keyBindings->registerAction(KeyCommand::TransformTool, transformAction, false);
     m_toolsToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
     m_toolsToolbar->setMovable(false);
     placeAction->setCheckable(true);
     selectAction->setCheckable(true);
-    moveAction->setCheckable(true);
+    transformAction->setCheckable(true);
     placeAction->setChecked(true);
     actions->setExclusive(true);
     actions->addAction(placeAction);
     actions->addAction(selectAction);
-    actions->addAction(moveAction);
+    actions->addAction(transformAction);
     m_toolsToolbar->setFixedWidth(kToolsToolbarMinimumWidth);
     m_volumeSlider = new QSlider(Qt::Vertical, m_toolsToolbar);
     m_volumeSlider->setObjectName(QStringLiteral("volumeSlider"));
@@ -1031,11 +1031,11 @@ void MainWindow::buildToolBar() {
 
     connect(placeAction, &QAction::triggered, this, [this] { m_state->setTool(EditorTool::Place); });
     connect(selectAction, &QAction::triggered, this, [this] { m_state->setTool(EditorTool::Select); });
-    connect(moveAction, &QAction::triggered, this, [this] { m_state->setTool(EditorTool::Move); });
-    connect(m_state, &EditorState::toolChanged, this, [placeAction, selectAction, moveAction](const EditorTool tool) {
+    connect(transformAction, &QAction::triggered, this, [this] { m_state->setTool(EditorTool::Transform); });
+    connect(m_state, &EditorState::toolChanged, this, [placeAction, selectAction, transformAction](const EditorTool tool) {
         placeAction->setChecked(tool == EditorTool::Place);
         selectAction->setChecked(tool == EditorTool::Select);
-        moveAction->setChecked(tool == EditorTool::Move);
+        transformAction->setChecked(tool == EditorTool::Transform);
     });
     connect(m_volumeSlider, &QSlider::valueChanged, this, [this](const int volume) {
         m_playback->setVolume(logarithmicVolumeForPercent(volume));
@@ -1823,8 +1823,8 @@ void MainWindow::updateStatus() {
             return QStringLiteral("Place");
         case EditorTool::Select:
             return QStringLiteral("Select");
-        case EditorTool::Move:
-            return QStringLiteral("Move");
+        case EditorTool::Transform:
+            return QStringLiteral("Transform");
         }
 
         return QString();

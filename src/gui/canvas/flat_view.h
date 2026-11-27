@@ -12,6 +12,8 @@
 #include <QtGui/QPainterPath>
 #include <QtOpenGLWidgets/QOpenGLWidget>
 
+#include <optional>
+
 class QPainter;
 class QMouseEvent;
 class QResizeEvent;
@@ -125,6 +127,17 @@ private:
         bool floorEnd = false;
     };
 
+    struct TransformBounds {
+        double left = 0.0;
+        double right = 0.0;
+        qint64 start = 0;
+        qint64 end = 0;
+        double visibleEnd = 0.0;
+        bool hasGround = false;
+        bool hasSky = false;
+        bool canResizeWidth = true;
+    };
+
     [[nodiscard]] QRectF groundArea() const;
     [[nodiscard]] QRectF waveformArea() const;
     void updateWaveformDividerGeometry();
@@ -140,7 +153,15 @@ private:
     [[nodiscard]] QVector<int> hitObjectsAt(const QPointF& position) const;
     [[nodiscard]] QVector<int> hitObjectsInRect(const QRectF& rectangle, Qt::KeyboardModifiers modifiers) const;
     [[nodiscard]] QVector<int> selectionForClick(int hitObjectIndex, Qt::KeyboardModifiers modifiers) const;
-    [[nodiscard]] QVector<ChartNote> hitObjectsForSelectionMove(const QPointF& position, bool snapToGrid) const;
+    [[nodiscard]] double hitObjectEndCap(const ChartNote& hitObject) const;
+    [[nodiscard]] TransformBounds selectionTransformBounds() const;
+    [[nodiscard]] QRectF transformRectangle(const TransformBounds& bounds) const;
+    [[nodiscard]] std::optional<Qt::Edges> transformEdgesAt(const QPointF& position,
+        const TransformBounds& bounds) const;
+    [[nodiscard]] QVector<ChartNote> transformedSelection(const QPointF& position, bool snapTime) const;
+    void transformSelectionHorizontally(QVector<ChartNote>& hitObjects, double requestedOffset) const;
+    void transformSelectionTime(QVector<ChartNote>& hitObjects, qint64 requestedOffset, bool snapTime) const;
+    void finishSelectionTransform();
     [[nodiscard]] FlickControl flickControlAt(const QPointF& position) const;
     [[nodiscard]] FieldControl fieldControlAt(const QPointF& position) const;
     [[nodiscard]] FieldSegmentAnchor fieldSegmentAnchorAt(const QPointF& position) const;
@@ -184,6 +205,7 @@ private:
     void drawFlickControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const;
     void drawFieldControls(QPainter& painter, const QRectF& area, const ChartNote& hitObject) const;
     void drawSelectionRectangle(QPainter& painter) const;
+    void drawTransformRectangle(QPainter& painter) const;
     [[nodiscard]] bool shouldDrawFieldControls(int hitObjectIndex) const;
     [[nodiscard]] bool shouldDrawFlickControls(int hitObjectIndex) const;
 
@@ -225,9 +247,10 @@ private:
     FieldSegmentAnchor m_fieldSegmentAnchor;
     QVector<int> m_dragLinkedFieldIndexes;
     QVector<ChartNote> m_dragLinkedFieldOriginals;
-    QVector<int> m_dragSelectionIndexes;
-    QVector<ChartNote> m_dragSelectionOriginals;
-    qint64 m_dragSelectionEarliestStart = 0;
+    QVector<int> m_transformIndexes;
+    QVector<ChartNote> m_transformOriginals;
+    TransformBounds m_transformBounds;
+    std::optional<Qt::Edges> m_transformDragEdges;
     QVector<int> m_clickCycleIndexes;
     QPointF m_clickCyclePosition;
     int m_clickCycleIndex = -1;
@@ -238,7 +261,6 @@ private:
     bool m_placingHitObject = false;
     bool m_selectionOnlyClick = false;
     bool m_marqueeSelecting = false;
-    bool m_movingSelection = false;
     bool m_invertMousewheelScroll = kDefaultInvertMousewheelScroll;
     bool m_convertNoteHoldOnResize = kDefaultConvertNoteHoldOnResize;
     bool m_dragNavigating = false;

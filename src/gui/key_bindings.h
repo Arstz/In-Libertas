@@ -16,7 +16,7 @@ enum class KeyCommand {
     NewProject, OpenProject, ImportSpc, ImportKsh, SaveProject, SaveProjectAs, ExportProject,
     Undo, Redo, Cut, Copy, Paste, DeleteSelection, SelectAll, MirrorSelection,
     FlipSelectionVertically, ToggleFieldGrouping, ResnapAll, RefreshVerification,
-    PlaceTool, SelectTool, MoveTool, ZoomIn, ZoomInAlternate, ZoomOut, ZoomOutAlternate,
+    PlaceTool, SelectTool, TransformTool, ZoomIn, ZoomInAlternate, ZoomOut, ZoomOutAlternate,
     AddTimingPoint, AddSpeedEvent, AddBookmark, InterpolateSpeedEvents,
     TogglePlayback, HoldMetronome, EnterPlaytest, IncreasePlaybackRate, DecreasePlaybackRate,
     SeekBackward, SeekForward, IncreaseDivisor, DecreaseDivisor, CycleFlatMode, ToggleSkyGrid,

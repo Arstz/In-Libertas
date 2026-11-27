@@ -25,7 +25,6 @@ constexpr std::uint32_t kFieldLeftSineOut = 0x08U;
 constexpr std::uint32_t kFieldLeftSineIn = 0x10U;
 constexpr std::uint32_t kFieldRightSineOut = 0x40U;
 constexpr std::uint32_t kFieldRightSineIn = 0x80U;
-constexpr qint64 kMinimumSustainedDurationMilliseconds = 2;
 
 [[nodiscard]] bool isSkyHitObject(const ChartNote& hitObject) {
     return hitObject.kind == NoteKind::Sky || hitObject.kind == NoteKind::Flick;
@@ -1512,7 +1511,11 @@ void EditorState::moveHitObjectBatch(const QVector<int> indexes, const QVector<C
 }
 
 void EditorState::finishHitObjectBatchMove() {
-    if (m_activeBatchMoveIndexes.isEmpty() || m_batchMoveStarts.size() != m_activeBatchMoveIndexes.size()) {
+    const bool validBatch = std::all_of(m_batchMoveStarts.cbegin(), m_batchMoveStarts.cend(),
+        [this](const HistoryEntry& start) {
+            return isValidHitObjectIndex(start.index) && m_chart.notes.at(start.index).id == start.before.id;
+        });
+    if (!validBatch || m_activeBatchMoveIndexes.isEmpty() || m_batchMoveStarts.size() != m_activeBatchMoveIndexes.size()) {
         m_activeBatchMoveIndexes.clear();
         m_batchMoveStarts.clear();
         m_batchMoveSelectionStart.clear();

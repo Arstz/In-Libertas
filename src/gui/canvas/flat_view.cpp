@@ -207,6 +207,27 @@ struct SkySpan {
     double right = 1.0;
 };
 
+struct TransformCornerHandle {
+    QRectF rectangle;
+    Qt::Edges edges;
+};
+
+[[nodiscard]] std::array<TransformCornerHandle, 4> transformCornerHandles(const QRectF& bounds) {
+    constexpr double size = kFieldControlRadius * 2.0;
+    const double insetX = std::min(kFieldControlRadius, bounds.width() / 3.0);
+    const double insetY = std::min(kFieldControlRadius, bounds.height() / 3.0);
+    const double left = bounds.left() + insetX - size;
+    const double right = bounds.right() - insetX;
+    const double top = bounds.top() + insetY - size;
+    const double bottom = bounds.bottom() - insetY;
+    return {{
+        {QRectF(left, top, size, size), Qt::LeftEdge | Qt::TopEdge},
+        {QRectF(right, top, size, size), Qt::RightEdge | Qt::TopEdge},
+        {QRectF(left, bottom, size, size), Qt::LeftEdge | Qt::BottomEdge},
+        {QRectF(right, bottom, size, size), Qt::RightEdge | Qt::BottomEdge},
+    }};
+}
+
 [[nodiscard]] bool isMultiLane(const ChartNote& note) {
     constexpr double kSingleLaneWidth = 0.25;
 
@@ -257,6 +278,32 @@ struct SkySpan {
     }
 
     return FloorSide::Central;
+}
+
+[[nodiscard]] bool isGroundHitObject(const ChartNote& hitObject) {
+    return hitObject.kind != NoteKind::Sky && hitObject.kind != NoteKind::Flick;
+}
+
+[[nodiscard]] qint64 transformEndTime(const ChartNote& hitObject) {
+    return hitObject.kind == NoteKind::Tap || hitObject.kind == NoteKind::Flick
+        ? hitObject.startMilliseconds : std::max(hitObject.startMilliseconds, hitObject.endMilliseconds);
+}
+
+void translateFloorHitObject(ChartNote& hitObject, const int lanes) {
+    const LaneSpan start = laneSpan(hitObject, hitObject.startX, hitObject.startWidth);
+    const LaneSpan end = laneSpan(hitObject, hitObject.endX, hitObject.endWidth);
+    hitObject.side = floorSideForLane(static_cast<int>(start.left) + lanes);
+    if (hitObject.side == FloorSide::Central) {
+        hitObject.startX = (start.left + lanes) / 4.0;
+        hitObject.endX = (end.left + lanes) / 4.0;
+        hitObject.startWidth = (start.right - start.left) / 4.0;
+        hitObject.endWidth = (end.right - end.left) / 4.0;
+    } else {
+        hitObject.startX = 0.0;
+        hitObject.endX = 0.0;
+        hitObject.startWidth = 1.0;
+        hitObject.endWidth = 1.0;
+    }
 }
 
 [[nodiscard]] double easingFor(const std::uint32_t auxiliary, const bool rightSide, const double progress) {
@@ -336,6 +383,7 @@ FlatView::~FlatView() {
 }
 
 void FlatView::setChart(const ChartData& chart) {
+    finishSelectionTransform();
     m_chart = chart;
     invalidateFieldGroups();
     updateToolCursor();
@@ -402,8 +450,10 @@ void FlatView::setTool(const EditorTool tool) {
         return;
     }
 
+    finishSelectionTransform();
     m_tool = tool;
     updateToolCursor();
+    update();
 }
 
 void FlatView::setGridDuration(const qint64 durationMilliseconds) {
@@ -458,6 +508,7 @@ void FlatView::setSelectedHitObjects(QVector<int> indexes) {
         return;
     }
 
+    finishSelectionTransform();
     m_selectedHitObjects = std::move(indexes);
     m_selectedHitObjectIndexes.clear();
     m_selectedHitObjectIndexes.reserve(m_selectedHitObjects.size());
@@ -965,87 +1016,258 @@ QVector<int> FlatView::selectionForClick(const int hitObjectIndex, const Qt::Key
     return {hitObjectIndex};
 }
 
-QVector<ChartNote> FlatView::hitObjectsForSelectionMove(const QPointF& position, const bool snapToGrid) const {
-    if (m_dragSelectionOriginals.isEmpty()) {
+double FlatView::hitObjectEndCap(const ChartNote& hitObject) const {
+    if (hitObject.kind == NoteKind::Tap) {
+        return kTapDurationMilliseconds;
+    }
+    if (hitObject.kind == NoteKind::Flick) {
+        const SkySpan span = flickSpan(hitObject);
+        const double width = (span.right - span.left) * groundArea().width();
+        return std::min(flickTriangleHeight(), width) * kMillisecondsPerSecond / m_pixelsPerSecond;
+    }
+    return 0.0;
+}
+
+FlatView::TransformBounds FlatView::selectionTransformBounds() const {
+    TransformBounds bounds{
+        .left = std::numeric_limits<double>::infinity(),
+        .right = -std::numeric_limits<double>::infinity(),
+        .start = std::numeric_limits<qint64>::max(),
+    };
+    for (const int index : m_selectedHitObjects) {
+        if (index < 0 || index >= m_chart.notes.size()) {
+            continue;
+        }
+
+        const ChartNote& hitObject = m_chart.notes.at(index);
+        const qint64 endTime = transformEndTime(hitObject);
+        bounds.start = std::min(bounds.start, hitObject.startMilliseconds);
+        bounds.end = std::max(bounds.end, endTime);
+        bounds.visibleEnd = std::max(bounds.visibleEnd, endTime + hitObjectEndCap(hitObject));
+        bounds.hasSky = bounds.hasSky || !isGroundHitObject(hitObject);
+        if (hitObject.kind == NoteKind::Sky) {
+            bounds.left = std::min({bounds.left, fieldLeftEdge(hitObject, true), fieldLeftEdge(hitObject, false)});
+            bounds.right = std::max({bounds.right, fieldRightEdge(hitObject, true), fieldRightEdge(hitObject, false)});
+        } else if (hitObject.kind == NoteKind::Flick) {
+            const SkySpan span = flickSpan(hitObject);
+            bounds.left = std::min(bounds.left, span.left);
+            bounds.right = std::max(bounds.right, span.right);
+            bounds.canResizeWidth = false;
+        } else {
+            const LaneSpan start = laneSpan(hitObject, hitObject.startX, hitObject.startWidth);
+            const LaneSpan end = laneSpan(hitObject, hitObject.endX, hitObject.endWidth);
+            bounds.left = std::min(bounds.left, std::min(start.left, end.left) / kFloorLaneCount);
+            bounds.right = std::max(bounds.right, std::max(start.right, end.right) / kFloorLaneCount);
+            bounds.hasGround = true;
+            bounds.canResizeWidth = false;
+        }
+    }
+    return bounds;
+}
+
+QRectF FlatView::transformRectangle(const TransformBounds& bounds) const {
+    if (bounds.left >= bounds.right) {
         return {};
     }
 
     const QRectF area = groundArea();
-    const qint64 rawTimeOffset = timeAtY(position.y()) - timeAtY(m_pressPosition.y());
-    const int laneOffset = laneAt(position) - laneAt(m_pressPosition);
-    QVector<double> skyEdges;
-    for (const ChartNote& original : m_dragSelectionOriginals) {
-        if (original.kind == NoteKind::Sky) {
-            skyEdges += {fieldLeftEdge(original, true), fieldRightEdge(original, true),
-                fieldLeftEdge(original, false), fieldRightEdge(original, false)};
-        } else if (original.kind == NoteKind::Flick) {
-            const SkySpan span = flickSpan(original);
-            skyEdges += {span.left, span.right};
-        }
-    }
-    const double coordinateOffset = snappedSkyMoveOffset(skyEdges,
-        (position.x() - m_pressPosition.x()) / area.width());
-    const qint64 firstStart = m_dragSelectionEarliestStart;
-    qint64 timeOffset = std::max(rawTimeOffset, -firstStart);
-    if (snapToGrid) {
-        const qint64 unsnappedStart = firstStart + timeOffset;
-        timeOffset = snappedTimeAtY(timeToY(unsnappedStart)) - firstStart;
-    }
-    const auto translateTime = [&](const qint64 sourceTime) {
-        return snapToGrid ? translateDivisorTime(m_timingPoints, sourceTime, firstStart, firstStart + timeOffset)
-                          : std::max<qint64>(0, sourceTime + timeOffset);
-    };
+    const double bottom = timeToY(bounds.start);
+    const double height = (bounds.visibleEnd - bounds.start) * m_pixelsPerSecond / kMillisecondsPerSecond;
+    return QRectF(area.left() + bounds.left * area.width(), bottom - height,
+        (bounds.right - bounds.left) * area.width(), height);
+}
 
-    QVector<ChartNote> hitObjects;
-    hitObjects.reserve(m_dragSelectionOriginals.size());
-    for (const ChartNote& original : m_dragSelectionOriginals) {
-        ChartNote hitObject = original;
-        hitObject.startMilliseconds = translateTime(original.startMilliseconds);
-        hitObject.endMilliseconds = std::max(hitObject.startMilliseconds, translateTime(original.endMilliseconds));
-        if (original.kind == NoteKind::Tap || original.kind == NoteKind::Flick) {
-            hitObject.endMilliseconds = hitObject.startMilliseconds;
-        }
+std::optional<Qt::Edges> FlatView::transformEdgesAt(const QPointF& position, const TransformBounds& bounds) const {
+    if (!(bounds.hasGround && canInteractGround()) && !(bounds.hasSky && canInteractSky())) {
+        return std::nullopt;
+    }
 
-        if (original.kind == NoteKind::Sky) {
-            setFieldEndpoint(
-                hitObject,
-                true,
-                fieldLeftEdge(original, true) + coordinateOffset,
-                fieldRightEdge(original, true) + coordinateOffset);
-            setFieldEndpoint(
-                hitObject,
-                false,
-                fieldLeftEdge(original, false) + coordinateOffset,
-                fieldRightEdge(original, false) + coordinateOffset);
-        } else if (original.kind == NoteKind::Flick) {
-            const SkySpan span = flickSpan(original);
-            setFlickSpan(hitObject, span.left + coordinateOffset, span.right + coordinateOffset);
-        } else {
-            const LaneSpan span = laneSpan(original, original.startX, original.startWidth);
-            const int laneCount = std::max(1, static_cast<int>(std::lround(span.right - span.left)));
-            const int firstLane = std::clamp(
-                static_cast<int>(std::lround(span.left)) + laneOffset,
-                0,
-                6 - laneCount);
-            if (laneCount == 1 && (firstLane == 0 || firstLane == 5)) {
-                hitObject.side = floorSideForLane(firstLane);
-                hitObject.startX = 0.0;
-                hitObject.endX = 0.0;
-                hitObject.startWidth = 1.0;
-                hitObject.endWidth = 1.0;
-            } else {
-                const int centralLane = std::clamp(firstLane, 1, 5 - laneCount);
-                hitObject.side = FloorSide::Central;
-                hitObject.startX = static_cast<double>(centralLane) / 4.0;
-                hitObject.endX = hitObject.startX;
-                hitObject.startWidth = static_cast<double>(laneCount) / 4.0;
-                hitObject.endWidth = hitObject.startWidth;
+    const QRectF rectangle = transformRectangle(bounds);
+    if (rectangle.isEmpty() || !groundArea().contains(position)) {
+        return std::nullopt;
+    }
+    if (bounds.canResizeWidth && bounds.end > bounds.start) {
+        for (const auto& [handle, edges] : transformCornerHandles(rectangle)) {
+            if (handle.contains(position)) {
+                return edges;
             }
         }
-        hitObjects.append(hitObject);
     }
 
+    constexpr double edgeDistance = 6.0;
+    if (!rectangle.adjusted(-edgeDistance, -edgeDistance, edgeDistance, edgeDistance).contains(position)) {
+        return std::nullopt;
+    }
+
+    const double horizontalInset = std::min(edgeDistance, rectangle.width() / 3.0);
+    const double verticalInset = std::min(edgeDistance, rectangle.height() / 3.0);
+    Qt::Edges edges;
+    if (bounds.canResizeWidth) {
+        if (position.x() <= rectangle.left() + horizontalInset) {
+            edges |= Qt::LeftEdge;
+        } else if (position.x() >= rectangle.right() - horizontalInset) {
+            edges |= Qt::RightEdge;
+        }
+    }
+    if (bounds.end > bounds.start) {
+        if (position.y() <= rectangle.top() + verticalInset) {
+            edges |= Qt::TopEdge;
+        } else if (position.y() >= rectangle.bottom() - verticalInset) {
+            edges |= Qt::BottomEdge;
+        }
+    }
+    if (!edges && !rectangle.contains(position)) {
+        return std::nullopt;
+    }
+    return edges;
+}
+
+QVector<ChartNote> FlatView::transformedSelection(const QPointF& position, const bool snapTime) const {
+    QVector<ChartNote> hitObjects = m_transformOriginals;
+    const double width = groundArea().width();
+    if (width > 0.0) {
+        transformSelectionHorizontally(hitObjects, (position.x() - m_pressPosition.x()) / width);
+    }
+    transformSelectionTime(hitObjects, timeAtY(position.y()) - timeAtY(m_pressPosition.y()), snapTime);
     return hitObjects;
+}
+
+void FlatView::transformSelectionHorizontally(QVector<ChartNote>& hitObjects, const double requestedOffset) const {
+    const Qt::Edges edges = *m_transformDragEdges;
+    const TransformBounds& bounds = m_transformBounds;
+    if (requestedOffset == 0.0 || (edges && !(edges & (Qt::LeftEdge | Qt::RightEdge)))) {
+        return;
+    }
+
+    if (bounds.hasGround) {
+        const auto toLane = [](const double coordinate) { return coordinate * kFloorLaneCount; };
+        constexpr double roundingTolerance = 1e-9;
+        int minimum = std::min(0, static_cast<int>(std::ceil(-toLane(bounds.left) - roundingTolerance)));
+        int maximum = std::max(0, static_cast<int>(std::floor(toLane(1.0 - bounds.right) + roundingTolerance)));
+        for (const ChartNote& hitObject : hitObjects) {
+            if (!isGroundHitObject(hitObject)) {
+                continue;
+            }
+            const LaneSpan start = laneSpan(hitObject, hitObject.startX, hitObject.startWidth);
+            const LaneSpan end = laneSpan(hitObject, hitObject.endX, hitObject.endWidth);
+            const int left = static_cast<int>(std::min(start.left, end.left));
+            const int right = static_cast<int>(std::max(start.right, end.right));
+            if (right - left > 1) {
+                minimum = std::max(minimum, 1 - left);
+                maximum = std::min(maximum, kFloorLaneCount - 1 - right);
+            }
+        }
+        const int lanes = std::clamp(static_cast<int>(std::lround(toLane(requestedOffset))), minimum, maximum);
+        if (lanes == 0) {
+            return;
+        }
+        const double offset = static_cast<double>(lanes) / kFloorLaneCount;
+        for (ChartNote& hitObject : hitObjects) {
+            if (isGroundHitObject(hitObject)) {
+                translateFloorHitObject(hitObject, lanes);
+            } else {
+                hitObject.startX += offset;
+                hitObject.endX += offset;
+            }
+        }
+        return;
+    }
+
+    if (!edges) {
+        const double offset = snappedSkyMoveOffset({bounds.left, bounds.right}, requestedOffset);
+        for (ChartNote& hitObject : hitObjects) {
+            hitObject.startX += offset;
+            hitObject.endX += offset;
+        }
+        return;
+    }
+
+    double minimumScale = 0.0;
+    for (const ChartNote& hitObject : hitObjects) {
+        const double width = std::min(hitObject.startWidth, hitObject.endWidth);
+        minimumScale = std::max(minimumScale, kMinimumFieldWidth / std::max(width, kMinimumFieldWidth));
+    }
+    const bool resizeLeft = edges.testFlag(Qt::LeftEdge);
+    const double width = bounds.right - bounds.left;
+    const double pivot = resizeLeft ? bounds.right : bounds.left;
+    const double moving = resizeLeft ? bounds.left : bounds.right;
+    const double minimum = resizeLeft ? std::min(0.0, moving) : pivot + width * minimumScale;
+    const double maximum = resizeLeft ? pivot - width * minimumScale : std::max(1.0, moving);
+    const double target = std::clamp(snappedSkyCoordinate(moving + requestedOffset, minimum, maximum), minimum, maximum);
+    const double scale = (target - pivot) / (moving - pivot);
+    for (ChartNote& hitObject : hitObjects) {
+        hitObject.startWidth *= scale;
+        hitObject.endWidth *= scale;
+        hitObject.startX = pivot + (hitObject.startX - pivot) * scale;
+        hitObject.endX = pivot + (hitObject.endX - pivot) * scale;
+    }
+}
+
+void FlatView::transformSelectionTime(QVector<ChartNote>& hitObjects, const qint64 requestedOffset,
+    const bool snapTime) const {
+    const Qt::Edges edges = *m_transformDragEdges;
+    const TransformBounds& bounds = m_transformBounds;
+    if (requestedOffset == 0 || (edges && !(edges & (Qt::TopEdge | Qt::BottomEdge)))) {
+        return;
+    }
+
+    const auto targetTime = [&](const double time) {
+        const qint64 target = std::max<qint64>(0, qRound64(time) + requestedOffset);
+        return snapTime ? snappedTimeAtY(timeToY(target)) : target;
+    };
+    if (!edges) {
+        const qint64 offset = targetTime(bounds.start) - bounds.start;
+        for (ChartNote& hitObject : hitObjects) {
+            hitObject.startMilliseconds += offset;
+            hitObject.endMilliseconds += offset;
+        }
+        return;
+    }
+
+    double minimumScale = 1.0 / (bounds.end - bounds.start);
+    for (const ChartNote& hitObject : hitObjects) {
+        const qint64 duration = transformEndTime(hitObject) - hitObject.startMilliseconds;
+        if (duration > 0) {
+            minimumScale = std::max(minimumScale,
+                std::min(1.0, static_cast<double>(kMinimumSustainedDurationMilliseconds) / duration));
+        }
+    }
+    double minimumSpan = 0.0;
+    for (const ChartNote& hitObject : hitObjects) {
+        const qint64 distance = transformEndTime(hitObject) - bounds.start;
+        minimumSpan = std::max(minimumSpan, distance * minimumScale + hitObjectEndCap(hitObject));
+    }
+    const bool resizeStart = edges.testFlag(Qt::BottomEdge);
+    qint64 start = bounds.start;
+    if (resizeStart) {
+        const auto latestStart = static_cast<qint64>(std::floor(bounds.visibleEnd - minimumSpan));
+        start = std::clamp(targetTime(bounds.start), qint64(0), std::max<qint64>(0, latestStart));
+    }
+    const double end = resizeStart ? bounds.visibleEnd : targetTime(bounds.visibleEnd);
+    const double span = std::max(minimumSpan, end - start);
+    double scale = std::numeric_limits<double>::infinity();
+    for (const ChartNote& hitObject : hitObjects) {
+        const qint64 distance = transformEndTime(hitObject) - bounds.start;
+        if (distance > 0) {
+            scale = std::min(scale, (span - hitObjectEndCap(hitObject)) / distance);
+        }
+    }
+    for (ChartNote& hitObject : hitObjects) {
+        hitObject.endMilliseconds = start + qRound64((transformEndTime(hitObject) - bounds.start) * scale);
+        hitObject.startMilliseconds = start + qRound64((hitObject.startMilliseconds - bounds.start) * scale);
+    }
+}
+
+void FlatView::finishSelectionTransform() {
+    if (!m_transformDragEdges) {
+        return;
+    }
+
+    m_transformDragEdges.reset();
+    m_transformIndexes.clear();
+    m_transformOriginals.clear();
+    m_dragMoved = false;
+    emit hitObjectBatchMoveFinished();
 }
 
 FlatView::FlickControl FlatView::flickControlAt(const QPointF& position) const {
@@ -1667,9 +1889,23 @@ void FlatView::updateToolCursor(const QPointF& position, const Qt::KeyboardModif
     case EditorTool::Select:
         setCursor(Qt::CrossCursor);
         break;
-    case EditorTool::Move:
-        setCursor(Qt::SizeAllCursor);
+    case EditorTool::Transform: {
+        const auto edges = m_transformDragEdges ? m_transformDragEdges
+            : transformEdgesAt(position, selectionTransformBounds());
+        if (!edges) {
+            unsetCursor();
+        } else if (!*edges) {
+            setCursor(Qt::SizeAllCursor);
+        } else if (!(*edges & (Qt::LeftEdge | Qt::RightEdge))) {
+            setCursor(Qt::SizeVerCursor);
+        } else if (!(*edges & (Qt::TopEdge | Qt::BottomEdge))) {
+            setCursor(Qt::SizeHorCursor);
+        } else {
+            const bool sameDiagonal = edges->testFlag(Qt::LeftEdge) == edges->testFlag(Qt::TopEdge);
+            setCursor(sameDiagonal ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor);
+        }
         break;
+    }
     case EditorTool::Place:
         if (m_draggingHitObject) {
             if (!m_selectionOnlyClick && (m_draggingFloorEnd || m_dragOriginal.kind == NoteKind::Hold
@@ -1725,6 +1961,7 @@ bool FlatView::event(QEvent* event) {
     if (event->type() == QEvent::WindowDeactivate || event->type() == QEvent::UngrabMouse
         || event->type() == QEvent::Hide) {
         finishDragNavigation();
+        finishSelectionTransform();
     }
     if (event->type() == QEvent::Enter || event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
         updateToolCursor();
@@ -1742,7 +1979,7 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         return;
     }
     if (event->button() == Qt::MiddleButton) {
-        if (!(event->buttons() & Qt::LeftButton) && !m_marqueeSelecting && !m_movingSelection
+        if (!(event->buttons() & Qt::LeftButton) && !m_marqueeSelecting && !m_transformDragEdges
             && !m_draggingHitObject && !m_placingHitObject) {
             beginDragNavigation(event->globalPosition());
         }
@@ -1770,17 +2007,15 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_tool == EditorTool::Move) {
+    if (m_tool == EditorTool::Transform) {
         if (event->button() != Qt::LeftButton) {
             event->ignore();
             return;
         }
 
-        const QVector<int> candidates = hitObjectsAt(event->position());
-        const auto iterator = std::find_if(candidates.cbegin(), candidates.cend(), [this](const int index) {
-            return m_selectedHitObjects.contains(index);
-        });
-        if (iterator == candidates.cend()) {
+        const TransformBounds bounds = selectionTransformBounds();
+        const auto edges = transformEdgesAt(event->position(), bounds);
+        if (!edges) {
             event->accept();
             return;
         }
@@ -1788,29 +2023,27 @@ void FlatView::mousePressEvent(QMouseEvent* event) {
         m_pressPosition = event->position();
         m_pressModifiers = event->modifiers();
         m_dragMoved = false;
-        m_movingSelection = true;
-        m_dragSelectionIndexes = m_selectedHitObjects;
-        m_dragSelectionOriginals.clear();
-        m_dragSelectionOriginals.reserve(m_dragSelectionIndexes.size());
-        m_dragSelectionEarliestStart = std::numeric_limits<qint64>::max();
-        for (const int index : m_dragSelectionIndexes) {
-            const ChartNote& hitObject = m_chart.notes.at(index);
-            m_dragSelectionOriginals.append(hitObject);
-            m_dragSelectionEarliestStart = std::min(m_dragSelectionEarliestStart, hitObject.startMilliseconds);
+        m_transformBounds = bounds;
+        if (!*edges && (m_pressModifiers & Qt::AltModifier)) {
+            QVector<ChartNote> originals;
+            originals.reserve(m_selectedHitObjects.size());
+            for (const int index : m_selectedHitObjects) {
+                if (index >= 0 && index < m_chart.notes.size()) {
+                    originals.append(m_chart.notes.at(index));
+                }
+            }
+            emit hitObjectsCopyRequested(std::move(originals));
+            m_transformBounds = selectionTransformBounds();
         }
-        if (m_pressModifiers & Qt::AltModifier) {
-            emit hitObjectsCopyRequested(m_dragSelectionOriginals);
-            m_dragSelectionIndexes = m_selectedHitObjects;
-            m_dragSelectionOriginals.clear();
-            m_dragSelectionOriginals.reserve(m_dragSelectionIndexes.size());
-            m_dragSelectionEarliestStart = std::numeric_limits<qint64>::max();
-            for (const int index : m_dragSelectionIndexes) {
-                const ChartNote& hitObject = m_chart.notes.at(index);
-                m_dragSelectionOriginals.append(hitObject);
-                m_dragSelectionEarliestStart = std::min(m_dragSelectionEarliestStart, hitObject.startMilliseconds);
+        for (const int index : m_selectedHitObjects) {
+            if (index >= 0 && index < m_chart.notes.size()) {
+                m_transformIndexes.append(index);
+                m_transformOriginals.append(m_chart.notes.at(index));
             }
         }
-        emit hitObjectBatchMoveStarted(m_dragSelectionIndexes);
+        m_transformDragEdges = edges;
+        emit hitObjectBatchMoveStarted(m_transformIndexes);
+        updateToolCursor(event->position(), event->modifiers());
         event->accept();
         return;
     }
@@ -1939,14 +2172,14 @@ void FlatView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_movingSelection) {
+    if (m_transformDragEdges) {
         if (!(event->buttons() & Qt::LeftButton)) {
             event->ignore();
             return;
         }
-        m_dragMoved = (event->position() - m_pressPosition).manhattanLength() >= kMouseDragDistance;
+        m_dragMoved = m_dragMoved || (event->position() - m_pressPosition).manhattanLength() >= kMouseDragDistance;
         if (m_dragMoved) {
-            emit hitObjectBatchMoveRequested(m_dragSelectionIndexes, hitObjectsForSelectionMove(event->position(), false));
+            emit hitObjectBatchMoveRequested(m_transformIndexes, transformedSelection(event->position(), false));
         }
         event->accept();
         return;
@@ -2029,21 +2262,17 @@ void FlatView::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_movingSelection) {
+    if (m_transformDragEdges) {
         if (event->button() != Qt::LeftButton) {
             event->ignore();
             return;
         }
 
-        if (m_dragMoved) {
-            emit hitObjectBatchMoveRequested(m_dragSelectionIndexes, hitObjectsForSelectionMove(event->position(), true));
+        if (m_dragMoved || (event->position() - m_pressPosition).manhattanLength() >= kMouseDragDistance) {
+            emit hitObjectBatchMoveRequested(m_transformIndexes, transformedSelection(event->position(), true));
         }
-        emit hitObjectBatchMoveFinished();
-        m_dragSelectionIndexes.clear();
-        m_dragSelectionOriginals.clear();
-        m_dragSelectionEarliestStart = 0;
-        m_dragMoved = false;
-        m_movingSelection = false;
+        finishSelectionTransform();
+        updateToolCursor(event->position(), event->modifiers());
         event->accept();
         return;
     }
@@ -2128,6 +2357,7 @@ void FlatView::paintGL() {
         Qt::AlignRight | Qt::AlignTop,
         QStringLiteral("%1 px/s").arg(m_pixelsPerSecond, 0, 'f', 0));
     drawSelectionRectangle(painter);
+    drawTransformRectangle(painter);
 }
 
 void FlatView::wheelEvent(QWheelEvent* event) {
@@ -2180,6 +2410,30 @@ void FlatView::drawSelectionRectangle(QPainter& painter) const {
     painter.setPen(QPen(palette::guideYellow, 1.0, Qt::DashLine));
     painter.setBrush(palette::withAlpha(palette::guideYellow, 28));
     painter.drawRect(QRectF(m_pressPosition, mapFromGlobal(QCursor::pos())).normalized());
+}
+
+void FlatView::drawTransformRectangle(QPainter& painter) const {
+    if (m_tool != EditorTool::Transform) {
+        return;
+    }
+
+    const TransformBounds bounds = selectionTransformBounds();
+    const QRectF rectangle = transformRectangle(bounds);
+    if (!rectangle.isEmpty()) {
+        painter.save();
+        painter.setClipRect(groundArea());
+        painter.setPen(QPen(palette::guideYellow, 1.5));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(rectangle);
+        if (bounds.canResizeWidth && bounds.end > bounds.start && canInteractSky()) {
+            painter.setPen(QPen(palette::white, 1.0));
+            painter.setBrush(palette::floorNoteBlue);
+            for (const TransformCornerHandle& handle : transformCornerHandles(rectangle)) {
+                painter.drawRect(handle.rectangle);
+            }
+        }
+        painter.restore();
+    }
 }
 
 void FlatView::drawWaveform(QPainter& painter, const QRectF& area) const {
@@ -2599,7 +2853,7 @@ void FlatView::rebuildFieldGroupGeometry(const int groupIndex) const {
 }
 
 bool FlatView::shouldDrawFieldControls(const int hitObjectIndex) const {
-    if (hitObjectIndex < 0 || hitObjectIndex >= m_chart.notes.size()
+    if (m_tool == EditorTool::Transform || hitObjectIndex < 0 || hitObjectIndex >= m_chart.notes.size()
         || m_chart.notes.at(hitObjectIndex).kind != NoteKind::Sky) {
         return false;
     }
@@ -2608,7 +2862,7 @@ bool FlatView::shouldDrawFieldControls(const int hitObjectIndex) const {
 }
 
 bool FlatView::shouldDrawFlickControls(const int hitObjectIndex) const {
-    if (hitObjectIndex < 0 || hitObjectIndex >= m_chart.notes.size()
+    if (m_tool == EditorTool::Transform || hitObjectIndex < 0 || hitObjectIndex >= m_chart.notes.size()
         || m_chart.notes.at(hitObjectIndex).kind != NoteKind::Flick) {
         return false;
     }

@@ -11,7 +11,7 @@ namespace infalsus::gui {
 enum class EditorTool {
     Place,
     Select,
-    Move,
+    Transform,
 };
 
 enum class FlatViewMode {

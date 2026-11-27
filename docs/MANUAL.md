@@ -20,7 +20,7 @@ The editor is arranged into resizable widgets with dividers, a toolbar on the le
 
 ### Toolbar
 
-Contains Place `1`, Select `F` and Move `V` tools, as well as 2 logarithmic volume sliders, one for music and one for hitsounds. An active tool will influence how you interact with the Flat View widget. A toolbar can be made collapsible with `Settings->Visuals-Autohide toolbar`. 
+Contains Place `1`, Select `F` and Transform `V` tools, as well as 2 logarithmic volume sliders, one for music and one for hitsounds. An active tool will influence how you interact with the Flat View widget. A toolbar can be made collapsible with `Settings->Visuals-Autohide toolbar`. 
 
 ### Flat View
 
@@ -77,4 +77,4 @@ Last placed hitObject will be selected by default, indicated by an outline for g
 
 ## Batch operations
 
-Select multiple hitObjects with Select tool by dragging, common editing commands can be used on a selection: Copy/Paste/Cut and Flip Horizontally `Control + H`/ Vertically `Control + J`. Move tool only moves the current selection in both axes, never modifies it. All operations are also available from the `Edit->` menu.
+Select multiple hitObjects with Select tool by dragging, common editing commands can be used on a selection: Copy/Paste/Cut and Flip Horizontally `Control + H`/ Vertically `Control + J`. Transform tool can move the current selection, resize ground hitOjects and flicks timewise and fields in both axis. All operations are also available from the `Edit->` menu.

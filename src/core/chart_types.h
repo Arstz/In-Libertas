@@ -9,6 +9,7 @@ inline constexpr std::uint32_t kFlickRight = 1024;
 inline constexpr std::uint32_t kFlickLeft = 4096;
 inline constexpr double kMinimumFlickWidth = 0.06;
 inline constexpr double kMinimumFieldWidth = 0.01;
+inline constexpr qint64 kMinimumSustainedDurationMilliseconds = 2;
 
 enum class NoteKind : std::uint8_t {
     Tap,

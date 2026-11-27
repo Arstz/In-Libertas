@@ -53,7 +53,7 @@ constexpr CommandDefinition kCommands[]{
     {KeyCommand::RefreshVerification, "refresh_verification", "Edit / Refresh verification", "Ctrl+Shift+A"},
     {KeyCommand::PlaceTool, "place_tool", "Tools / Place", "1"},
     {KeyCommand::SelectTool, "select_tool", "Tools / Select", "F"},
-    {KeyCommand::MoveTool, "move_tool", "Tools / Move", "V"},
+    {KeyCommand::TransformTool, "transform_tool", "Tools / Transform", "V"},
     {KeyCommand::ZoomIn, "zoom_in", "View / Zoom in", "+", true},
     {KeyCommand::ZoomInAlternate, "zoom_in_alternate", "View / Zoom in (alternate)", "=", true},
     {KeyCommand::ZoomOut, "zoom_out", "View / Zoom out", "-", true},

@@ -40,11 +40,14 @@ qt_add_executable(InLibertas WIN32
     src/core/project_document.h
     src/core/chart_document.cpp
     src/core/chart_document.h
+    src/core/ksh_import.cpp
+    src/core/ksh_import.h
     src/core/chart_types.h
     src/core/playtest_session.cpp
     src/core/playtest_session.h
     src/core/field_groups.cpp
     src/core/field_groups.h
+    src/core/field_easing.h
     src/core/field_presets.cpp
     src/core/field_presets.h
     src/core/audio_exporter.cpp

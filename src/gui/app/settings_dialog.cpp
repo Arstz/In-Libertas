@@ -296,6 +296,14 @@ void SettingsDialog::restoreKeybinds(KeyBindingRouter* keyBindings) {
 void SettingsDialog::restoreKeybinds(KeyBindingRouter* keyBindings, QSettings& settings) {
     QVector<KeyBinding> bindings = keyBindings->bindings();
     settings.beginGroup(QStringLiteral("keybinds"));
+    const QString legacyTransformKey = QStringLiteral("move_tool");
+    const QString transformKey = QStringLiteral("transform_tool");
+    if (settings.contains(legacyTransformKey)) {
+        if (!settings.contains(transformKey)) {
+            settings.setValue(transformKey, settings.value(legacyTransformKey));
+        }
+        settings.remove(legacyTransformKey);
+    }
     for (KeyBinding& binding : bindings) {
         if (settings.contains(binding.id)) {
             binding.sequence = QKeySequence::fromString(settings.value(binding.id).toString(), QKeySequence::PortableText);
